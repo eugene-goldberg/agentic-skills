@@ -28,6 +28,8 @@ export function App() {
   const [phase, setPhase] = useState("idle"); // idle | po | engineer
   const [events, setEvents] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [indexStatus, setIndexStatus] = useState({ ctx: null, graph: null });
+  const [indexRunning, setIndexRunning] = useState({ ctx: false, graph: false });
   const abortRef = useRef(null);
   const logBottomRef = useRef(null);
 
@@ -96,6 +98,25 @@ export function App() {
   const cancel = () => abortRef.current?.abort();
   const running = phase !== "idle";
 
+  const runIndex = async (kind) => {
+    if (!repo) return;
+    const key = kind === "graphify" ? "graph" : "ctx";
+    setIndexRunning((s) => ({ ...s, [key]: true }));
+    setIndexStatus((s) => ({ ...s, [key]: null }));
+    try {
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(repo)}/index/${kind}`,
+        { method: "POST" },
+      );
+      const data = await res.json();
+      setIndexStatus((s) => ({ ...s, [key]: { ...data, http: res.status } }));
+    } catch (err) {
+      setIndexStatus((s) => ({ ...s, [key]: { ok: false, error: String(err) } }));
+    } finally {
+      setIndexRunning((s) => ({ ...s, [key]: false }));
+    }
+  };
+
   return (
     <div className="page">
       <header>
@@ -118,6 +139,26 @@ export function App() {
             ))}
           </select>
         </label>
+        <div className="index-buttons">
+          <button
+            className="secondary"
+            disabled={!repo || running || indexRunning.ctx}
+            onClick={() => runIndex("claude-context")}
+            title="Index the selected repo into Milvus via @zilliz/claude-context-core (Azure embeddings)."
+          >
+            {indexRunning.ctx ? "indexing…" : "Run claude-context index"}
+          </button>
+          <IndexBadge status={indexStatus.ctx} kind="ctx" />
+          <button
+            className="secondary"
+            disabled={!repo || running || indexRunning.graph}
+            onClick={() => runIndex("graphify")}
+            title="Run `graphify update` to (re)build graphify-out/graph.json."
+          >
+            {indexRunning.graph ? "indexing…" : "Run graphify"}
+          </button>
+          <IndexBadge status={indexStatus.graph} kind="graph" />
+        </div>
       </section>
 
       <div className="two-pane">
@@ -240,6 +281,20 @@ export function App() {
     </div>
   );
 }
+
+function IndexBadge({ status, kind }) {
+  if (!status) return null;
+  if (!status.ok) {
+    return <span className="idx-badge idx-bad" title={JSON.stringify(status)}>✗ {status.error || `HTTP ${status.http}`}</span>;
+  }
+  if (kind === "ctx") {
+    const n = status.indexed_files ?? status.raw?.result?.indexedFiles;
+    const c = status.total_chunks ?? status.raw?.result?.totalChunks;
+    return <span className="idx-badge idx-ok">✓ {n ?? "?"} files, {c ?? "?"} chunks</span>;
+  }
+  return <span className="idx-badge idx-ok">✓ {status.nodes ?? "?"} nodes, {status.edges ?? "?"} edges</span>;
+}
+
 
 function EventLine({ evt }) {
   const type = evt.type || "unknown";

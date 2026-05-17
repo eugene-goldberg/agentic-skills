@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.services import backlog as backlog_svc
 from app.services.claude_agent import stream_agent_task
+from app.services.indexing import run_claude_context_index, run_graphify_update
 from app.services.git_worktree import (
     Worktree,
     create_worktree,
@@ -68,6 +69,18 @@ class ExecuteBLRequest(BaseModel):
 
 
 # ----------------------- listing -----------------------------------------
+
+@router.post("/{repo}/index/graphify")
+async def index_graphify(repo: str) -> dict:
+    repo_dir = _repo_dir(repo)
+    return await run_graphify_update(repo_dir)
+
+
+@router.post("/{repo}/index/claude-context")
+async def index_claude_context(repo: str) -> dict:
+    repo_dir = _repo_dir(repo)
+    return await run_claude_context_index(repo_dir)
+
 
 @router.get("/{repo}/backlog")
 def get_backlog(repo: str) -> dict:
