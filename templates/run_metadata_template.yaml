@@ -1,0 +1,54 @@
+# Copy this file into runs/<run_id>/metadata.yaml for each evaluation.
+
+run_id: ""
+date: ""
+status: "planned" # planned | running | scored | blocked | skipped | needs_rerun
+
+candidate:
+  queue_id: ""
+  role: "" # PO | Engineer | QA
+  source_repo: ""
+  source_url: ""
+  source_commit: ""
+  selected_skill_path: ""
+  local_skill_snapshot: ""
+  skill_sha256: ""
+
+target:
+  repo_id: ""
+  repo_url: ""
+  baseline_commit: ""
+  local_path: ""
+  brief_id: ""
+  brief_path: ""
+  brief_sha256: ""
+
+execution:
+  model: ""
+  model_settings: {}
+  tool_runtime: ""
+  invocation: ""
+  time_budget: ""
+  token_budget: ""
+  started_at: ""
+  ended_at: ""
+  human_rescue_level: null
+
+artifacts:
+  raw_logs_path: ""
+  output_artifacts_path: ""
+  diff_path: ""
+  scorecard_path: ""
+  report_path: ""
+
+verification:
+  commands: []
+  result: "" # pass | fail | not_run | blocked
+  output_path: ""
+
+outcome:
+  decision: "" # Pass | Pass With Reservations | Needs Rerun | Fail | Blocked
+  total_score: null
+  failure_mode_labels: []
+  summary: ""
+
