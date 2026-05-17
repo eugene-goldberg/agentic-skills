@@ -41,7 +41,9 @@ class AzureEmbedding extends Embedding {
     this.deployment = deployment;
     this.modelName = model || deployment;
     this.dimension = dimension || 3072;
-    this.client = new AzureOpenAI({ apiKey, endpoint, apiVersion, deployment });
+    // baseURL: null prevents OpenAI SDK from auto-picking OPENAI_BASE_URL
+    // (which may be set for a different chat provider like Moonshot).
+    this.client = new AzureOpenAI({ apiKey, endpoint, apiVersion, deployment, baseURL: null });
   }
   async detectDimension() { return this.dimension; }
   async embed(text) {
