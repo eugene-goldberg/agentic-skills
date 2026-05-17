@@ -13,3 +13,8 @@ graphify-out/
 .claude-context/
 reference-repos/*/graphify-out/semantic_cache.json
 reference-repos/*/graphify-out/cache/
+briefs/engineering-work-packets/
+briefs/qa-work-packets/
+*_api*.md
+.spike-node/node_modules/
+.spike-node/package-lock.json
