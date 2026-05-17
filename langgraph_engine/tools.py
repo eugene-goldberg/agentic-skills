@@ -59,8 +59,20 @@ def _resolve_inside(workspace: Path, path: str) -> Path:
     return p
 
 
-def make_tools(workspace: Path, *, bash_timeout: int = 600) -> list:
-    """Build the bound tool set for a given workspace root."""
+def make_tools(
+    workspace: Path,
+    *,
+    bash_timeout: int = 600,
+    reference_repo: Path | None = None,
+    target_repo: Path | None = None,
+    retrieval_log: Path | None = None,
+) -> list:
+    """Build the bound tool set for a given workspace root.
+
+    If `RETRIEVAL_ENABLED=1` in env AND a reference or target repo is provided,
+    appends graph + semantic retrieval tools. Off by default to preserve
+    existing run behavior.
+    """
 
     @tool
     def read_file(path: str, offset: int = 0, limit: int | None = None) -> dict:
@@ -236,4 +248,14 @@ def make_tools(workspace: Path, *, bash_timeout: int = 600) -> list:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
 
-    return [read_file, write_file, edit_file, list_dir, bash, copy_path, sha256_file]
+    base = [read_file, write_file, edit_file, list_dir, bash, copy_path, sha256_file]
+
+    import os
+    if os.getenv("RETRIEVAL_ENABLED") == "1" and (reference_repo or target_repo):
+        from .retrieval import make_retrieval_tools
+        base.extend(make_retrieval_tools(
+            reference_repo=reference_repo,
+            target_repo=target_repo,
+            log_path=retrieval_log,
+        ))
+    return base
