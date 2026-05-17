@@ -11,3 +11,5 @@ __pycache__/
 /tmp/
 graphify-out/
 .claude-context/
+reference-repos/*/graphify-out/semantic_cache.json
+reference-repos/*/graphify-out/cache/
