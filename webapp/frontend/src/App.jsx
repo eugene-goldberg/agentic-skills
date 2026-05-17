@@ -1,104 +1,116 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { streamPost } from "./sse.js";
 
-const EXAMPLE_TASK =
-  "Add a /version endpoint to the FastAPI app that returns the current git commit short SHA. Add a test. Commit.";
+const EXAMPLE_BRIEF = `# Project: Personal Note Taker
+
+Build a small FastAPI service that lets a single user store and search markdown notes.
+
+## Requirements
+- Notes have a title, body (markdown), created_at, updated_at.
+- POST /notes creates a note.
+- GET /notes lists all notes.
+- GET /notes/{id} returns one note.
+- PATCH /notes/{id} updates title/body.
+- DELETE /notes/{id} removes it.
+- GET /notes/search?q=... returns notes whose title or body contains the query (case-insensitive).
+- SQLite persistence, auto-create tables on startup.
+- pytest tests covering CRUD + search.`;
 
 export function App() {
   const [repos, setRepos] = useState([]);
   const [repo, setRepo] = useState("");
-  const [task, setTask] = useState(EXAMPLE_TASK);
+  const [brief, setBrief] = useState(EXAMPLE_BRIEF);
+  const [projectName, setProjectName] = useState("");
+  const [backlog, setBacklog] = useState([]);
+  const [selectedBL, setSelectedBL] = useState(null);
+  const [extraNotes, setExtraNotes] = useState("");
+
+  const [phase, setPhase] = useState("idle"); // idle | po | engineer
   const [events, setEvents] = useState([]);
-  const [running, setRunning] = useState(false);
   const [summary, setSummary] = useState(null);
   const abortRef = useRef(null);
   const logBottomRef = useRef(null);
 
+  // ---------- load repos ----------
   useEffect(() => {
     fetch("/api/tasks/repos")
       .then((r) => r.json())
-      .then((data) => {
-        setRepos(data.repos || []);
-        if (data.repos?.length) setRepo(data.repos[0].name);
-      })
-      .catch(() => setRepos([]));
+      .then((d) => {
+        setRepos(d.repos || []);
+        if (d.repos?.length) setRepo(d.repos[0].name);
+      });
   }, []);
 
+  // ---------- load backlog whenever repo changes ----------
+  const reloadBacklog = useCallback(async (r) => {
+    if (!r) return;
+    const d = await fetch(`/api/projects/${encodeURIComponent(r)}/backlog`).then((x) => x.json());
+    setBacklog(d.items || []);
+  }, []);
+  useEffect(() => {
+    reloadBacklog(repo);
+  }, [repo, reloadBacklog]);
+
+  // ---------- autoscroll ----------
   useEffect(() => {
     logBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [events.length]);
 
-  const runTask = async () => {
-    if (!repo || !task.trim() || running) return;
+  const startStream = async (url, body, role) => {
     setEvents([]);
     setSummary(null);
-    setRunning(true);
-
+    setPhase(role);
     const controller = new AbortController();
     abortRef.current = controller;
-
     try {
-      const res = await fetch("/api/tasks/run-stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task, repo }),
-        signal: controller.signal,
-      });
-      if (!res.ok || !res.body) {
-        const txt = await res.text();
-        setEvents([{ type: "_error", error: `HTTP ${res.status}: ${txt}` }]);
-        setRunning(false);
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split("\n\n");
-        buffer = frames.pop() || "";
-        for (const frame of frames) {
-          const line = frame.split("\n").find((l) => l.startsWith("data: "));
-          if (!line) continue;
-          const payload = line.slice(6);
-          try {
-            const evt = JSON.parse(payload);
-            setEvents((prev) => [...prev, evt]);
-            if (evt.type === "done") setSummary(evt);
-          } catch {
-            setEvents((prev) => [...prev, { type: "_raw", text: payload }]);
-          }
-        }
+      for await (const evt of streamPost(url, body, controller.signal)) {
+        setEvents((prev) => [...prev, evt]);
+        if (evt.type === "done") setSummary(evt);
       }
     } catch (err) {
       if (err.name !== "AbortError") {
         setEvents((prev) => [...prev, { type: "_error", error: String(err) }]);
       }
     } finally {
-      setRunning(false);
+      setPhase("idle");
       abortRef.current = null;
+      // Refresh backlog after either flow (PO may have just written it)
+      reloadBacklog(repo);
     }
   };
 
+  const decompose = () =>
+    startStream(
+      `/api/projects/${encodeURIComponent(repo)}/decompose-brief`,
+      { brief, project_name: projectName || null },
+      "po",
+    );
+
+  const executeBL = () =>
+    startStream(
+      `/api/projects/${encodeURIComponent(repo)}/execute-bl`,
+      { bl_id: selectedBL, extra_notes: extraNotes || null },
+      "engineer",
+    );
+
   const cancel = () => abortRef.current?.abort();
+  const running = phase !== "idle";
 
   return (
     <div className="page">
       <header>
         <h1>Claude Code Agent Runner</h1>
         <p className="sub">
-          Fires the <code>claude</code> CLI against an isolated git worktree, streams every
-          tool call, and verifies the agent committed.
+          PO decomposes a brief → backlog list → click any item to run the engineer agent on
+          just that BL.
         </p>
       </header>
 
-      <section className="form">
+      <section className="repo-row">
         <label>
           Repo
           <select value={repo} onChange={(e) => setRepo(e.target.value)} disabled={running}>
-            {repos.length === 0 && <option value="">— no repos found —</option>}
+            {repos.length === 0 && <option value="">— no repos in backend/repos —</option>}
             {repos.map((r) => (
               <option key={r.name} value={r.name}>
                 {r.name}
@@ -106,39 +118,116 @@ export function App() {
             ))}
           </select>
         </label>
-        <label>
-          Task
-          <textarea
-            value={task}
-            onChange={(e) => setTask(e.target.value)}
-            rows={5}
-            disabled={running}
-            placeholder="Describe a single complex task for the agent..."
-          />
-        </label>
-        <div className="actions">
-          <button onClick={runTask} disabled={running || !repo || !task.trim()}>
-            {running ? "Agent running…" : "Run agent"}
-          </button>
-          {running && <button onClick={cancel} className="secondary">Cancel</button>}
-        </div>
       </section>
+
+      <div className="two-pane">
+        <section className="brief">
+          <h2>1 · Brief → PO agent</h2>
+          <input
+            className="project-name"
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            placeholder="(optional) Project name override"
+            disabled={running}
+          />
+          <textarea
+            value={brief}
+            onChange={(e) => setBrief(e.target.value)}
+            rows={14}
+            disabled={running}
+            placeholder="Paste the full project brief here..."
+          />
+          <div className="actions">
+            <button onClick={decompose} disabled={running || !repo || brief.length < 20}>
+              {phase === "po" ? "PO decomposing…" : "Decompose brief"}
+            </button>
+            {phase === "po" && (
+              <button onClick={cancel} className="secondary">Cancel</button>
+            )}
+          </div>
+        </section>
+
+        <section className="backlog">
+          <h2>
+            2 · Backlog <span className="count">({backlog.length})</span>
+          </h2>
+          {backlog.length === 0 && (
+            <p className="empty">No backlog yet — decompose a brief first.</p>
+          )}
+          <ul className="bl-list">
+            {backlog.map((b) => (
+              <li
+                key={b.id}
+                className={`bl-row ${selectedBL === b.id ? "selected" : ""}`}
+                onClick={() => !running && setSelectedBL(b.id)}
+              >
+                <div className="bl-head">
+                  <input
+                    type="radio"
+                    name="bl"
+                    checked={selectedBL === b.id}
+                    onChange={() => setSelectedBL(b.id)}
+                    disabled={running}
+                  />
+                  <code className="bl-id">{b.id}</code>
+                  <span className="bl-title">{b.title}</span>
+                  {b.priority && <span className={`pill prio-${b.priority.toLowerCase()}`}>{b.priority}</span>}
+                </div>
+                {b.story && <p className="bl-story">{b.story}</p>}
+                {b.dependencies && b.dependencies !== "none" && (
+                  <p className="bl-deps">deps: <code>{b.dependencies}</code></p>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          {backlog.length > 0 && (
+            <>
+              <textarea
+                className="extra"
+                value={extraNotes}
+                onChange={(e) => setExtraNotes(e.target.value)}
+                rows={2}
+                disabled={running}
+                placeholder="(optional) Extra notes the engineer should consider for this BL..."
+              />
+              <div className="actions">
+                <button
+                  onClick={executeBL}
+                  disabled={running || !selectedBL}
+                >
+                  {phase === "engineer" ? `Engineer running ${selectedBL}…` : `Execute ${selectedBL || "…"}`}
+                </button>
+                {phase === "engineer" && (
+                  <button onClick={cancel} className="secondary">Cancel</button>
+                )}
+              </div>
+            </>
+          )}
+        </section>
+      </div>
 
       {summary && (
         <section className="summary">
-          <h2>✓ Done</h2>
+          <h2>✓ {summary.role === "po" ? "PO decomposition complete" : `${summary.bl_id} done`}</h2>
           <dl>
+            {summary.bl_id && (<><dt>BL</dt><dd><code>{summary.bl_id}</code></dd></>)}
             <dt>Branch</dt><dd><code>{summary.branch}</code></dd>
-            <dt>Commit</dt><dd><code>{summary.commit_sha || "(no commit)"}</code></dd>
+            <dt>Commit</dt><dd><code>{summary.commit_sha?.slice(0, 12) || "(none)"}</code></dd>
             <dt>New commits</dt><dd>{summary.new_commits}</dd>
-            <dt>Task ID</dt><dd><code>{summary.task_id}</code></dd>
+            {summary.imported_backlog_path && (
+              <><dt>Backlog imported</dt><dd><code>{summary.imported_backlog_path}</code></dd></>
+            )}
           </dl>
         </section>
       )}
 
       <section className="log">
-        <h2>Stream <span className="count">({events.length})</span></h2>
-        {events.length === 0 && !running && <p className="empty">No events yet.</p>}
+        <h2>
+          Stream <span className="count">({events.length})</span>
+          {phase !== "idle" && <span className="phase-tag">{phase}</span>}
+        </h2>
+        {events.length === 0 && phase === "idle" && <p className="empty">No events yet.</p>}
         <ul>
           {events.map((evt, i) => (
             <li key={i} className={`evt evt-${(evt.type || "unknown").replace(/[^a-z0-9_-]/gi, "_")}`}>
@@ -155,18 +244,28 @@ export function App() {
 function EventLine({ evt }) {
   const type = evt.type || "unknown";
   if (type === "_meta") {
-    return <code className="meta">[meta] {evt.phase} {evt.task_id ? `task=${evt.task_id}` : ""} {evt.branch ? `branch=${evt.branch}` : ""} {evt.exit_code != null ? `exit=${evt.exit_code}` : ""}</code>;
+    const bits = [];
+    if (evt.phase) bits.push(`phase=${evt.phase}`);
+    if (evt.task_id) bits.push(`task=${evt.task_id}`);
+    if (evt.branch) bits.push(`branch=${evt.branch}`);
+    if (evt.bl_id) bits.push(`bl=${evt.bl_id}`);
+    if (evt.role) bits.push(`role=${evt.role}`);
+    if (evt.exit_code != null) bits.push(`exit=${evt.exit_code}`);
+    if (evt.duration_s != null) bits.push(`dt=${evt.duration_s}s`);
+    return <code className="meta">[meta] {bits.join(" ")}</code>;
   }
-  if (type === "_error") {
-    return <span className="error">[error] {evt.error}</span>;
-  }
+  if (type === "_error") return <span className="error">[error] {evt.error}</span>;
   if (type === "done") {
-    return <strong>✓ done — commit {evt.commit_sha?.slice(0, 8) ?? "(none)"}</strong>;
+    return (
+      <strong>
+        ✓ done {evt.bl_id ? `${evt.bl_id} ` : ""}commit {evt.commit_sha?.slice(0, 8) ?? "(none)"}
+      </strong>
+    );
   }
   if (type === "assistant") {
     const content = evt.message?.content;
     const text = Array.isArray(content)
-      ? content.map((c) => c.text || (c.type === "tool_use" ? `→ ${c.name}` : "")).filter(Boolean).join(" ")
+      ? content.map((c) => c.text || (c.type === "tool_use" ? `→ ${c.name}(${JSON.stringify(c.input)?.slice(0, 80)})` : "")).filter(Boolean).join(" ")
       : (typeof content === "string" ? content : JSON.stringify(content));
     return <span><b>assistant</b>: {text?.slice(0, 600)}</span>;
   }
@@ -175,10 +274,10 @@ function EventLine({ evt }) {
     const text = Array.isArray(content)
       ? content.map((c) => c.content || c.text || "").filter(Boolean).join(" ")
       : JSON.stringify(content);
-    return <span className="dim"><b>tool_result</b>: {text?.slice(0, 200)}</span>;
+    return <span className="dim"><b>tool_result</b>: {String(text).slice(0, 200)}</span>;
   }
   if (type === "result") {
-    return <strong className="result">result: {evt.result?.slice(0, 600) ?? JSON.stringify(evt).slice(0, 300)}</strong>;
+    return <strong className="result">result: {String(evt.result || "").slice(0, 600)}</strong>;
   }
   if (type === "system") {
     return <code className="dim">[system] {evt.subtype || JSON.stringify(evt).slice(0, 100)}</code>;
