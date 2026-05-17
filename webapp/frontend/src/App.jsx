@@ -25,7 +25,7 @@ export function App() {
   const [selectedBL, setSelectedBL] = useState(null);
   const [extraNotes, setExtraNotes] = useState("");
 
-  const [phase, setPhase] = useState("idle"); // idle | po | engineer
+  const [phase, setPhase] = useState("idle"); // idle | po | engineer | qa | scorer
   const [events, setEvents] = useState([]);
   const [summary, setSummary] = useState(null);
   const [indexStatus, setIndexStatus] = useState({ ctx: null, graph: null });
@@ -95,6 +95,20 @@ export function App() {
       "engineer",
     );
 
+  const runQA = () =>
+    startStream(
+      `/api/projects/${encodeURIComponent(repo)}/qa-bl`,
+      { bl_id: selectedBL },
+      "qa",
+    );
+
+  const scoreBL = () =>
+    startStream(
+      `/api/projects/${encodeURIComponent(repo)}/score-bl`,
+      { bl_id: selectedBL },
+      "scorer",
+    );
+
   const cancel = () => abortRef.current?.abort();
   const running = phase !== "idle";
 
@@ -158,6 +172,24 @@ export function App() {
             {indexRunning.graph ? "indexing…" : "Run graphify"}
           </button>
           <IndexBadge status={indexStatus.graph} kind="graph" />
+          <div className="bl-action-buttons">
+            <button
+              className="secondary"
+              disabled={!repo || !selectedBL || running}
+              onClick={runQA}
+              title={selectedBL ? `Run the QA agent against ${selectedBL}` : "Select a BL first"}
+            >
+              {phase === "qa" ? `QA running ${selectedBL}…` : `Run QA${selectedBL ? ` (${selectedBL})` : ""}`}
+            </button>
+            <button
+              className="secondary"
+              disabled={!repo || !selectedBL || running}
+              onClick={scoreBL}
+              title={selectedBL ? `Score ${selectedBL} against the rubric` : "Select a BL first"}
+            >
+              {phase === "scorer" ? `Scoring ${selectedBL}…` : `Score${selectedBL ? ` ${selectedBL}` : " Current BL"}`}
+            </button>
+          </div>
         </div>
       </section>
 

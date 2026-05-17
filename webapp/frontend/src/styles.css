@@ -30,6 +30,8 @@ section h2 .phase-tag { background: var(--accent-soft); color: var(--accent); pa
 .repo-row select { padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; }
 .index-buttons { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .index-buttons button { padding: 6px 12px; font-size: 13px; }
+.bl-action-buttons { display: flex; align-items: center; gap: 10px; padding-left: 12px; border-left: 1px solid var(--border); margin-left: 4px; flex-wrap: wrap; }
+.bl-action-buttons button { padding: 6px 12px; font-size: 13px; }
 .idx-badge { font-size: 12px; padding: 2px 8px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .idx-ok { background: #e3f4e8; color: var(--ok); }
 .idx-bad { background: #fde2e1; color: var(--error); cursor: help; }

@@ -26,7 +26,12 @@ from app.services.git_worktree import (
     has_new_commits,
     remove_worktree,
 )
-from app.services.prompts import build_engineer_prompt, build_po_prompt
+from app.services.prompts import (
+    build_engineer_prompt,
+    build_po_prompt,
+    build_qa_prompt,
+    build_score_prompt,
+)
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -66,6 +71,29 @@ class ExecuteBLRequest(BaseModel):
     extra_notes: str | None = None
     timeout_seconds: int = Field(2400, ge=60, le=7200)
     keep_worktree: bool = False
+
+
+class BLActionRequest(BaseModel):
+    """Shared shape for QA-on-BL and Score-BL."""
+    bl_id: str = Field(..., pattern=r"^BL-\d{4}$")
+    timeout_seconds: int = Field(1800, ge=60, le=7200)
+
+
+# Rubric is shared across all repos and lives at the workspace root.
+RUBRIC_PATH = Path(__file__).resolve().parents[4] / "rubrics" / "production_grade_scorecard.md"
+
+
+def _read_rubric() -> str:
+    if RUBRIC_PATH.is_file():
+        return RUBRIC_PATH.read_text(encoding="utf-8")
+    return (
+        "# Rubric not found at runtime — score 0–5 per dimension on:\n"
+        "Core (10): Brief comprehension, Scope control, Correctness, Verification quality, "
+        "Security and privacy, Data integrity, Maintainability, Integration quality, "
+        "Production readiness, Autonomy.\n"
+        "Engineer role (5): Implementation completeness, Architectural fit, Test compatibility, "
+        "Debugging behavior, Dependency discipline.\n"
+    )
 
 
 # ----------------------- listing -----------------------------------------
@@ -249,4 +277,86 @@ async def execute_bl(repo: str, req: ExecuteBLRequest):
         gen(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ----------------------- QA / Score on a single BL ---------------------
+
+def _stream_role_on_bl(
+    repo_dir,
+    bl_id,
+    role,
+    prompt_builder,
+    timeout,
+    extra_builder_args=None,
+):
+    bf = backlog_svc.find_backlog(repo_dir)
+    if bf is None:
+        raise HTTPException(status_code=400, detail="no BACKLOG.md found")
+    section = backlog_svc.extract_section(bf.read_text(encoding="utf-8"), bl_id)
+    if section is None:
+        raise HTTPException(status_code=404, detail=f"{bl_id} not in backlog")
+
+    prompt = prompt_builder(bl_id, section, **(extra_builder_args or {}))
+
+    async def gen():
+        wt = None
+        try:
+            wt = await create_worktree(repo_dir)
+            yield _sse({
+                "type": "_meta",
+                "phase": "worktree_ready",
+                "task_id": wt.task_id,
+                "branch": wt.branch,
+                "bl_id": bl_id,
+                "role": role,
+            })
+            async for event in stream_agent_task(prompt, wt.path, timeout_seconds=timeout):
+                yield _sse(event)
+            commit_sha = await get_commit_sha(wt)
+            new_commits = await has_new_commits(wt, base_ref="HEAD~1")
+            yield _sse({
+                "type": "done",
+                "role": role,
+                "bl_id": bl_id,
+                "task_id": wt.task_id,
+                "branch": wt.branch,
+                "commit_sha": commit_sha,
+                "new_commits": new_commits,
+            })
+        except Exception as exc:
+            yield _sse({"type": "_error", "error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            if wt is not None:
+                try:
+                    await remove_worktree(repo_dir, wt)
+                    yield _sse({"type": "_meta", "phase": "worktree_removed"})
+                except Exception as exc:
+                    yield _sse({"type": "_error", "error": f"cleanup: {exc}"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/{repo}/qa-bl")
+async def qa_bl(repo: str, req: BLActionRequest):
+    repo_dir = _repo_dir(repo)
+    return _stream_role_on_bl(
+        repo_dir, req.bl_id, role="qa",
+        prompt_builder=build_qa_prompt,
+        timeout=req.timeout_seconds,
+    )
+
+
+@router.post("/{repo}/score-bl")
+async def score_bl(repo: str, req: BLActionRequest):
+    repo_dir = _repo_dir(repo)
+    return _stream_role_on_bl(
+        repo_dir, req.bl_id, role="scorer",
+        prompt_builder=build_score_prompt,
+        timeout=req.timeout_seconds,
+        extra_builder_args={"rubric_text": _read_rubric()},
     )
