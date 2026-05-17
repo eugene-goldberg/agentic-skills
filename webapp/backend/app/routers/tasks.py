@@ -29,7 +29,7 @@ from app.services.git_worktree import (
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
-REPOS_ROOT = Path(os.environ.get("AGENT_REPOS_ROOT", Path(__file__).resolve().parents[3] / "repos")).resolve()
+REPOS_ROOT = Path(os.environ.get("AGENT_REPOS_ROOT", Path(__file__).resolve().parents[2] / "repos")).resolve()
 
 
 class TaskRequest(BaseModel):

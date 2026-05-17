@@ -32,17 +32,21 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 REPOS_ROOT = Path(
     os.environ.get(
         "AGENT_REPOS_ROOT",
-        Path(__file__).resolve().parents[3] / "repos",
+        Path(__file__).resolve().parents[2] / "repos",
     )
 ).resolve()
 
 
 def _repo_dir(repo: str) -> Path:
-    p = (REPOS_ROOT / repo).resolve()
+    # Reject '..' or absolute-path tricks by requiring `repo` to be a direct
+    # child entry of REPOS_ROOT. Symlinks are intentionally allowed so users
+    # can expose existing repos without copying them.
+    entry = REPOS_ROOT / repo
+    if entry.parent.resolve() != REPOS_ROOT:
+        raise HTTPException(status_code=400, detail="repo name not allowed")
+    p = entry.resolve()
     if not p.is_dir() or not (p / ".git").exists():
         raise HTTPException(status_code=404, detail=f"repo {repo!r} not found")
-    if REPOS_ROOT not in p.parents and p != REPOS_ROOT:
-        raise HTTPException(status_code=400, detail="repo path escapes root")
     return p
 
 
