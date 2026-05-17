@@ -31,6 +31,16 @@ The shorter `webapp/README.md` is a quick-start; `PROJECT_STATE.md` is the deep 
 - `skills_with_graphs` — Phase 0–4 retrieval-layer plan and implementation, A/B harness
 - `webapp` — everything in `webapp/`; current working branch for that subproject
 
+## Auto-memory
+
+Memory files live in this repo at `.claude/memory/`, symlinked from `~/.claude/projects/<encoded-path>/memory` so Claude Code's auto-memory system finds them at the canonical location. After a fresh clone (or if the symlink ever breaks), run:
+
+```bash
+scripts/setup_memory_symlink.sh
+```
+
+The script is idempotent and refuses to clobber a real directory at the target.
+
 ## Conventions worth honoring
 
 - Never commit `.env*` files (gitignored).
