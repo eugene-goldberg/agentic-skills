@@ -29,14 +29,52 @@ from typing import Any
 DEFAULT_NODE_DIR = Path(__file__).resolve().parents[2] / ".spike-node"
 BRIDGE_SCRIPT_NAME = "bridge.js"
 BRIDGE_SCRIPT = """\
-import { Context, OpenAIEmbedding, MilvusVectorDatabase } from '@zilliz/claude-context-core';
+import { Context, OpenAIEmbedding, MilvusVectorDatabase, Embedding } from '@zilliz/claude-context-core';
+import { AzureOpenAI, OpenAI } from 'openai';
 
 const cmd = JSON.parse(process.argv[2]);
 
-const embedding = new OpenAIEmbedding({
-  apiKey: process.env.OPENAI_API_KEY,
-  model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small',
-});
+class AzureEmbedding extends Embedding {
+  constructor({ apiKey, endpoint, apiVersion, deployment, model, dimension }) {
+    super();
+    this.maxTokens = 8191;
+    this.deployment = deployment;
+    this.modelName = model || deployment;
+    this.dimension = dimension || 3072;
+    this.client = new AzureOpenAI({ apiKey, endpoint, apiVersion, deployment });
+  }
+  async detectDimension() { return this.dimension; }
+  async embed(text) {
+    const t = this.preprocessText(text);
+    const r = await this.client.embeddings.create({ model: this.deployment, input: t });
+    return { vector: r.data[0].embedding, dimension: r.data[0].embedding.length };
+  }
+  async embedBatch(texts) {
+    const ts = this.preprocessTexts(texts);
+    const r = await this.client.embeddings.create({ model: this.deployment, input: ts });
+    return r.data.map(d => ({ vector: d.embedding, dimension: d.embedding.length }));
+  }
+  getDimension() { return this.dimension; }
+  getProvider() { return 'AzureOpenAI'; }
+}
+
+let embedding;
+if (process.env.EMBEDDING_PROVIDER === 'AzureOpenAI') {
+  embedding = new AzureEmbedding({
+    apiKey: process.env.AZURE_OPENAI_API_KEY,
+    endpoint: process.env.AZURE_OPENAI_ENDPOINT,
+    apiVersion: process.env.AZURE_OPENAI_API_VERSION || '2024-12-01-preview',
+    deployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
+    model: process.env.EMBEDDING_MODEL,
+    dimension: parseInt(process.env.EMBEDDING_DIMENSION || '3072', 10),
+  });
+} else {
+  embedding = new OpenAIEmbedding({
+    apiKey: process.env.OPENAI_API_KEY,
+    model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small',
+  });
+}
+
 const vectorDatabase = new MilvusVectorDatabase({
   address: process.env.MILVUS_ADDRESS,
   token: process.env.MILVUS_TOKEN || '',
