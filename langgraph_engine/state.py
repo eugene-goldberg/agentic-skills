@@ -34,6 +34,7 @@ class GraphState(TypedDict, total=False):
     project_name: str
     workspace_root: str           # absolute path to the agentic-skills workspace
     target_repo_path: str         # absolute path; PO + Engineer + QA all act here
+    reference_repo_path: str      # optional curated reference repo for retrieval layer
     project_brief_path: str
     po_skill_source_path: str
     eng_skill_source_path: str

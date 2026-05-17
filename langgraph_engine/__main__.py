@@ -36,6 +36,7 @@ def main() -> int:
     run.add_argument("--eng-skill", required=True, help="Path to the Engineer SKILLS.md file.")
     run.add_argument("--qa-skill", required=True, help="Path to the QA SKILLS.md file.")
     run.add_argument("--env", default=None, help="Optional path to a .env file (defaults to workspace/.env).")
+    run.add_argument("--reference-repo", default=None, help="Optional path to a curated reference repo for the retrieval layer. Activates retrieval tools when RETRIEVAL_ENABLED=1.")
 
     args = parser.parse_args()
 
@@ -62,6 +63,11 @@ def main() -> int:
             "eng_skill_source_path": str(Path(args.eng_skill).resolve()),
             "qa_skill_source_path": str(Path(args.qa_skill).resolve()),
         }
+        if args.reference_repo:
+            initial_state["reference_repo_path"] = str(Path(args.reference_repo).resolve())
+            import os
+            print(f"Retrieval reference repo: {initial_state['reference_repo_path']}")
+            print(f"RETRIEVAL_ENABLED={os.getenv('RETRIEVAL_ENABLED','0')}")
         result = graph.invoke(initial_state, config={"recursion_limit": 1000})
 
         # Summary

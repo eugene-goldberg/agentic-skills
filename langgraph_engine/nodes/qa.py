@@ -237,7 +237,14 @@ def run_qa_agent(state: GraphState, cfg: AzureOpenAIConfig) -> GraphState:
     )
 
     llm = build_llm(cfg)
-    tools = make_tools(workspace, bash_timeout=900)
+    ref = state.get("reference_repo_path")
+    tools = make_tools(
+        workspace,
+        bash_timeout=900,
+        reference_repo=Path(ref).resolve() if ref else None,
+        target_repo=target,
+        retrieval_log=run_dir / "raw_logs" / "retrieval.jsonl",
+    )
     result = run_agent(
         llm=llm,
         tools=tools,

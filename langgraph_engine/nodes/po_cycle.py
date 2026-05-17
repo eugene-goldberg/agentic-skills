@@ -81,7 +81,12 @@ def po_cycle(state: GraphState, cfg: AzureOpenAIConfig) -> GraphState:
     )
 
     llm = build_llm(cfg)
-    tools = make_tools(workspace)
+    ref = state.get("reference_repo_path")
+    tools = make_tools(
+        workspace,
+        reference_repo=Path(ref).resolve() if ref else None,
+        retrieval_log=run_dir / "raw_logs" / "retrieval.jsonl",
+    )
     result = run_agent(
         llm=llm,
         tools=tools,
