@@ -1,0 +1,47 @@
+:root {
+  --fg: #1a1a1a;
+  --bg: #fafafa;
+  --muted: #6b6b6b;
+  --accent: #2d62ff;
+  --error: #c0392b;
+  --ok: #1f8a3a;
+  --card: #ffffff;
+  --border: #e3e3e3;
+  --code-bg: #f3f3f3;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+}
+
+body { margin: 0; background: var(--bg); color: var(--fg); }
+.page { max-width: 960px; margin: 0 auto; padding: 32px 24px 80px; }
+header h1 { margin: 0 0 4px; font-size: 26px; }
+header .sub { color: var(--muted); margin: 0 0 28px; }
+header code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+
+section { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; }
+section h2 { margin: 0 0 12px; font-size: 16px; }
+section h2 .count { color: var(--muted); font-weight: normal; }
+
+.form label { display: block; margin-bottom: 12px; font-weight: 600; }
+.form select, .form textarea { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: 14px; font-weight: normal; background: var(--card); color: var(--fg); }
+.form textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; min-height: 100px; }
+.actions { display: flex; gap: 10px; }
+button { background: var(--accent); color: white; border: none; padding: 9px 18px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; }
+button:disabled { background: #999; cursor: not-allowed; }
+button.secondary { background: white; color: var(--fg); border: 1px solid var(--border); }
+
+.summary dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
+.summary dt { color: var(--muted); }
+.summary dd { margin: 0; }
+
+.log ul { list-style: none; padding: 0; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.log .empty { color: var(--muted); font-style: italic; }
+.log li { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; word-break: break-word; }
+.log li:last-child { border-bottom: none; }
+.evt-_meta code.meta { color: var(--muted); }
+.evt-_error .error, .evt-_error { color: var(--error); }
+.evt-done strong { color: var(--ok); }
+.evt-assistant b { color: var(--accent); }
+.evt-user .dim, .evt-system .dim { color: var(--muted); }
+.evt-result strong.result { color: var(--ok); }
+code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }

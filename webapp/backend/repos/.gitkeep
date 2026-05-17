@@ -1,0 +1,4 @@
+Place target git repos here (one subdirectory per repo).
+The FastAPI app scans this directory and exposes each repo to the React UI.
+
+Override location with AGENT_REPOS_ROOT env var.
