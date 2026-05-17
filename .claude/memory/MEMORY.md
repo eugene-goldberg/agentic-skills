@@ -1,0 +1,8 @@
+- [Project layout](project_layout.md) — two top-level subprojects on three branches; what lives where
+- [Doc pointers](doc_pointers.md) — CLAUDE.md, PROJECT_STATE.md, the rubric file
+- [Azure OpenAI access](azure_openai.md) — resource, deployments, env file routing
+- [Local Milvus assumption](local_milvus.md) — claude-context indexing depends on it
+- [User uses corporate Claude Code](user_corporate_claude.md) — no ANTHROPIC_API_KEY available
+- [Honest verification when asked](feedback_honest_verification.md) — user pushes back on overclaims
+- [Subprocess-Option-A preference](feedback_subprocess_option_a.md) — Python subprocess, no TS SDK
+- [Worktree-isolated agent runs](pattern_worktree_isolation.md) — every agent invocation runs in its own git worktree
