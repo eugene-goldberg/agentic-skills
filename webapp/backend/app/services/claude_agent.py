@@ -7,6 +7,20 @@ Implements Option A from the integration design:
 - prompt enforces a final `git commit` + JSON summary on the agent
 
 Caller wraps each yielded event into an SSE frame.
+
+## Auth
+
+The subprocess inherits the parent process environment (HOME, USER, PATH, all
+claude-related vars) via `env={**os.environ, ...}` below. That means whichever
+way you already authenticate `claude` from a terminal works here unchanged:
+
+- `claude /login` (OAuth, incl. company SSO): credentials live in `~/.claude/`
+  and are picked up automatically — NO `ANTHROPIC_API_KEY` required.
+- `ANTHROPIC_API_KEY` env var: exported in the shell that launches uvicorn.
+- `CLAUDE_CODE_USE_BEDROCK=1` / `CLAUDE_CODE_USE_VERTEX=1`: with the relevant
+  cloud provider env vars set, claude routes through your corporate proxy.
+
+If `claude` works in your terminal, it works here.
 """
 from __future__ import annotations
 

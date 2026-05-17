@@ -37,10 +37,22 @@ npm run dev
 
 Open http://localhost:5173.
 
-## Required env
+## Required setup
 
-- `ANTHROPIC_API_KEY` — for the `claude` CLI.
-- `claude` must be on `$PATH` (install via `npm i -g @anthropic-ai/claude-code`).
+The backend invokes the `claude` CLI as a subprocess, inheriting your shell
+environment. Auth modes — pick whichever matches how you already use Claude
+Code from a terminal:
+
+| You sign in to Claude Code with… | What the webapp needs |
+|---|---|
+| `claude /login` (personal or company OAuth — most common) | Nothing extra. Subprocess inherits `HOME` and reads `~/.claude/` credentials your existing session created. |
+| `ANTHROPIC_API_KEY` env var | Export it in the shell that launches `uvicorn`. |
+| Corporate Bedrock proxy | `export CLAUDE_CODE_USE_BEDROCK=1` plus the relevant AWS env. |
+| Corporate Vertex proxy | `export CLAUDE_CODE_USE_VERTEX=1` plus GCP env. |
+
+In all cases the `claude` binary itself must be on `$PATH`. Confirm with
+`which claude` and `claude --version`. If you already run agent tasks from
+your terminal, you are good.
 
 ## Repo layout
 
