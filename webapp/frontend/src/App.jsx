@@ -161,6 +161,21 @@ export function App() {
         </div>
       </section>
 
+      <section className={`progress-bar-section ${indexRunning.ctx || indexRunning.graph ? "active" : "inactive"}`}>
+        <div className="progress-label">
+          {indexRunning.ctx && indexRunning.graph
+            ? "Indexing claude-context + graphify…"
+            : indexRunning.ctx
+            ? "Indexing claude-context…"
+            : indexRunning.graph
+            ? "Refreshing graphify graph…"
+            : "Idle"}
+        </div>
+        <div className="progress-track" aria-hidden={!(indexRunning.ctx || indexRunning.graph)}>
+          <div className="progress-bar" />
+        </div>
+      </section>
+
       <div className="two-pane">
         <section className="brief">
           <h2>1 · Brief → PO agent</h2>
