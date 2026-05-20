@@ -37,9 +37,9 @@ Source: `_brownfield/SPRINT_PLAN_C1.md` (PO-authored). Committed scope:
 | BL | Title | Status |
 |---|---|---|
 | BL-0001 | Workspace data model + migration | **DONE — Pass 92/100** |
-| BL-0002 | WorkspaceMember model + role enum | next |
-| BL-0003 | Workspace CRUD API | pending |
-| BL-0005 | Membership dep + 404 privacy invariant | pending |
+| BL-0002 | WorkspaceMember model + role enum | **DONE — Pass 93/100** |
+| BL-0003 | Workspace CRUD API | **DONE — Pass 94/100** |
+| BL-0005 | Membership dep + 404 privacy invariant | next |
 | BL-0007 | Project model + CRUD API | pending |
 | BL-0011 (partial) | Frontend Workspaces nav + list/create | pending |
 
@@ -59,9 +59,36 @@ Deferred to Sprint 2+: BL-0004 (invitations), BL-0006 (member removal), BL-0008/
 
 Scorer notes: 2 points docked because engineer left adversarial/boundary tests for QA to write; 2 points docked because `eng_patterns.md` / `qa_impact.md` were lost to the original gitignore (now fixed for future BLs).
 
+### BL-0002 — WorkspaceMember model + WorkspaceRole enum
+
+| Role | Verdict | Commit | Notes |
+|---|---|---|---|
+| PO | doctrine_ok | (carried from BL-0001 sprint plan) | per-BL artifacts from Sprint 1 |
+| Engineer | doctrine_ok | `18e8ca6` | WorkspaceMember model + WorkspaceRole enum; doctrine passed first try |
+| QA | **PASS** | `fbd48bf` | 8 tests added, 0 regressions |
+| Scorer | **Pass 93/100** | `1ccb351` | brownfield rubric |
+
+Both Engineer and QA gates inconclusive (Docker compose gap) → force-merged via `merge-branch?skip_gate=true`.
+
+### BL-0003 — Workspace CRUD API
+
+| Role | Verdict | Commit | Notes |
+|---|---|---|---|
+| Engineer | doctrine_ok | `c6ff799` | CRUD at `/api/v1/workspaces`; doctrine passed first try |
+| QA | **PASS** | `22a1a31` | 10 tests added, 0 regressions |
+| Scorer | **Pass 94/100** | `dd132e5` | brownfield rubric |
+
+Both gates inconclusive → force-merged.
+
 ## Known gaps / open issues
 
-1. **Regression gate is currently always inconclusive.** Docker Compose v2.22+ `develop:` key in `compose.override.yml` is rejected by local Docker Engine 24.0.6, so `docker compose exec backend pytest` exits 15. Each Engineer/QA cycle currently force-merged via `POST /merge-branch` with `skip_gate=true`. Fix path: upgrade Docker Desktop, or add a `disable_regression_gate` repo_config flag, or run pytest in a host venv after `docker compose up -d db`.
+1. ~~**Regression gate is currently always inconclusive.**~~ **RESOLVED 2026-05-20** (target commit `a8a2f3d`). Root cause was actually two-layered:
+   (a) `compose.override.yml` uses Docker Compose v2.22+ `develop:` key that local Engine 24.0.6 / Compose v2.21.0 rejects, breaking *every* compose subcommand including `exec`.
+   (b) Even with that fixed, the prior `docker compose exec -T backend pytest -q` test_cmd required a long-running stack AND the worktree's compose project name to match it — neither holds under the disposable-worktree gate model. So a Compose upgrade alone would have fixed nothing operationally.
+
+   Fix: in target's `.agentic-skills.json`, replaced test_cmd with `sh -c 'docker network inspect traefik-public >/dev/null 2>&1 || docker network create traefik-public; docker compose -f compose.yml run --rm -v "$PWD/backend/tests:/app/backend/tests:ro" backend pytest -q tests'`. Skips the broken override file, creates the external network idempotently, bind-mounts tests (upstream Dockerfile excludes them by design), and uses ephemeral `run --rm` so each worktree gets its own throwaway compose project.
+
+   Bonus: getting the gate operational *immediately surfaced* a real BL-0002 production bug — `b2c3d4e5f6a7_add_workspace_member_table.py` was double-creating the `workspacerole` PG enum (`sa.Enum.create(checkfirst=True)` then `op.create_table` with a column-bound Enum that re-fires `CREATE TYPE` without checkfirst). Fixed by dropping the explicit `.create()` and letting the column-bound Enum auto-create. Also fixed brittle QA test `test_alembic_revision_chain_is_linear` that hardcoded the BL-0001 head SHA. All 117 tests now pass.
 2. **Engineer routinely under-tests.** For BL-0001 the engineer shipped 9 happy-path/relationship tests; QA had to add 9 adversarial/characterization. Score reflects it. If BL-0002 / BL-0003 repeat the pattern, tighten `ENG_COMPLETION_PROTOCOL` with an explicit characterization-test minimum.
 3. **Cold-start latency on retrieval.** Each fresh MCP-server process pays ~85 s on the first `semantic_search` call (no-op auto-index handshake). Acceptable for now; if it becomes a bottleneck, add a fast pre-check in `SemanticRegistry.search` that uses pymilvus directly to detect a populated collection.
 
