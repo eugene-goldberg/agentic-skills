@@ -39,8 +39,8 @@ Source: `_brownfield/SPRINT_PLAN_C1.md` (PO-authored). Committed scope:
 | BL-0001 | Workspace data model + migration | **DONE — Pass 92/100** |
 | BL-0002 | WorkspaceMember model + role enum | **DONE — Pass 93/100** |
 | BL-0003 | Workspace CRUD API | **DONE — Pass 94/100** |
-| BL-0005 | Membership dep + 404 privacy invariant | next |
-| BL-0007 | Project model + CRUD API | pending |
+| BL-0005 | Membership dep + 404 privacy invariant | **DONE — Pass 96/100** |
+| BL-0007 | Project model + CRUD API | next |
 | BL-0011 (partial) | Frontend Workspaces nav + list/create | pending |
 
 Deferred to Sprint 2+: BL-0004 (invitations), BL-0006 (member removal), BL-0008/BL-0009 (Tasks + assignment), BL-0010 (Comments), BL-0012, BL-0013.
@@ -79,6 +79,17 @@ Both Engineer and QA gates inconclusive (Docker compose gap) → force-merged vi
 | Scorer | **Pass 94/100** | `dd132e5` | brownfield rubric |
 
 Both gates inconclusive → force-merged.
+
+### BL-0005 — Membership dep + 404 privacy invariant (REQ-0002)
+
+| Role | Verdict | Commit | Notes |
+|---|---|---|---|
+| Engineer | doctrine_ok | `2b37950` | central `get_workspace_member` dep enforcing 404-for-non-members; gate **GREEN** (pre 117 → post 128) after gate hardening |
+| (merge) | clean non-FF | `ccadd36` | manual merge — agent branch diverged from `agentic-skills-work` via the gate-hardening commit `4725d7d` |
+| QA | **PASS** | `2c231db` | 7 tests added, 0 regressions, **gate green, AUTO-MERGED** (first BL without `skip_gate`) |
+| Scorer | **Pass 96/100** | `2914437` | brownfield rubric — highest score in Sprint 1 |
+
+First BL to merge through a passing regression gate. The gate caught a false-positive on the engineer first try (stale `backend:latest` docker image across pre/post runs); hardened test_cmd with `--build` + always-clean-up `docker compose down -v` (commit `4725d7d`).
 
 ## Known gaps / open issues
 
