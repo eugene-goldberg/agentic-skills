@@ -40,8 +40,8 @@ Source: `_brownfield/SPRINT_PLAN_C1.md` (PO-authored). Committed scope:
 | BL-0002 | WorkspaceMember model + role enum | **DONE — Pass 93/100** |
 | BL-0003 | Workspace CRUD API | **DONE — Pass 94/100** |
 | BL-0005 | Membership dep + 404 privacy invariant | **DONE — Pass 96/100** |
-| BL-0007 | Project model + CRUD API | next |
-| BL-0011 (partial) | Frontend Workspaces nav + list/create | pending |
+| BL-0007 | Project model + CRUD API | **DONE — Pass-W/R 92/100** |
+| BL-0011 (partial) | Frontend Workspaces nav + list/create | next |
 
 Deferred to Sprint 2+: BL-0004 (invitations), BL-0006 (member removal), BL-0008/BL-0009 (Tasks + assignment), BL-0010 (Comments), BL-0012, BL-0013.
 
@@ -90,6 +90,22 @@ Both gates inconclusive → force-merged.
 | Scorer | **Pass 96/100** | `2914437` | brownfield rubric — highest score in Sprint 1 |
 
 First BL to merge through a passing regression gate. The gate caught a false-positive on the engineer first try (stale `backend:latest` docker image across pre/post runs); hardened test_cmd with `--build` + always-clean-up `docker compose down -v` (commit `4725d7d`).
+
+### BL-0007 — Project model + workspace-scoped CRUD API (REQ-0003)
+
+| Role | Verdict | Commit | Notes |
+|---|---|---|---|
+| Engineer v1 | **discarded** | `3466dba` → reverted | Anthropic 529 storm aborted code generation; only doctrine doc committed; doctrine validator passed (artifact present) but real code was missing. Whole BL-0007 chain (eng + qa + scorer 18/100 Fail) reset to BL-0005 tip. |
+| (infra) | doctrine fix | `webapp/...doctrine_validator.py` | Validator now also requires a non-empty source-code diff vs `agent_branch` before declaring engineer doctrine_ok. Closes the docs-only-commit gap. |
+| (target) | brittle test fix | `b9010d9` | `test_alembic_chain_remains_single_head` hardcoded BL-0002 head SHA; replaced with `len(heads)==1`. Same antipattern as BL-0001's QA test (a8a2f3d). |
+| Engineer v2 | doctrine_ok (after 2x 529 retries) | `9123e5b` | Real code: Project SQLModel + alembic `c3d4e5f6a7b8` + routes scoped via `get_workspace_member` + 15 tests. Gate **green** but surfaced 1 engineer-authored test failure (`test_delete_project` session-isolation bug). |
+| (merge) | non-FF | `5237aea` | Same divergence pattern as BL-0005 (brittle-test fix landed on agentic-skills-work first). |
+| QA | **PASS-W/R**, auto-merged | `85b277f` | 10 adversarial tests added (privacy parity, cross-workspace mutate 404, HTTP cascade); fixed engineer's `test_delete_project` with `db.expunge_all()`. Gate green, 160/160 passing. *Mid-run uvicorn crash* surfaced but QA had already committed; recovered via merge-branch endpoint. |
+| Scorer | **Pass-W/R 92/100** | `246deef` | Reservation likely for engineer's session-isolation defect. |
+
+Operational learnings:
+- API overload (529 storm) + doctrine-validator gap = docs-only commit slipped through. Validator now hardened.
+- Uvicorn died mid-QA-stream (silent crash, no traceback in log). QA agent commits to its worktree branch *before* the SSE done event, so work is recoverable via direct merge-branch endpoint after restart. Worth noting as a workflow property.
 
 ## Known gaps / open issues
 

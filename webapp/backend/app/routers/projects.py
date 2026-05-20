@@ -369,7 +369,7 @@ async def execute_bl(repo: str, req: ExecuteBLRequest):
                 yield _sse(event)
             # ─── Doctrine pre-merge validator (brownfield) ───
             MAX_FIX_RETRIES = 2
-            validation = doctrine_svc.validate_engineer(wt.path, req.bl_id)
+            validation = doctrine_svc.validate_engineer(wt.path, req.bl_id, base_ref=cfg.agent_branch)
             attempt = 0
             while not validation["ok"] and attempt < MAX_FIX_RETRIES:
                 attempt += 1
@@ -391,7 +391,7 @@ async def execute_bl(repo: str, req: ExecuteBLRequest):
                     **_retrieval_kwargs(wt, role="engineer", bl_id=req.bl_id, trace=trace),
                 ):
                     yield _sse(event)
-                validation = doctrine_svc.validate_engineer(wt.path, req.bl_id)
+                validation = doctrine_svc.validate_engineer(wt.path, req.bl_id, base_ref=cfg.agent_branch)
             yield _sse({
                 "type": "_meta",
                 "phase": "doctrine_check",

@@ -27,6 +27,7 @@ All validators return a dict:
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 from app.services import backlog as backlog_svc
@@ -94,11 +95,50 @@ def validate_po(repo_root: Path) -> dict:
     return _finalize("po", acc)
 
 
-def validate_engineer(repo_root: Path, bl_id: str) -> dict:
+def validate_engineer(repo_root: Path, bl_id: str, base_ref: str | None = None) -> dict:
+    """Engineer doctrine: artifact AND a non-empty source-code diff vs base_ref.
+
+    Without the source-diff check, an engineer run that committed only the
+    doctrine doc (e.g. after an API-overload retry storm) would slip through
+    a green regression gate trivially — zero code change implies zero
+    regressions. The diff guard refuses to declare engineer-doctrine OK
+    unless at least one non-artifact, non-pure-doc file changed.
+    """
     art = pick_artifact_dir(repo_root)
     acc = {"missing": [], "empty": [], "dangling_refs": []}
     _check(repo_root, f"{art}/{bl_id}/eng_patterns.md", acc)
+
+    if base_ref:
+        changed = _changed_files(repo_root, base_ref)
+        # Source-y files = anything outside the artifact dir that isn't pure markdown.
+        # We deliberately don't enumerate "code extensions" because brownfield targets
+        # vary wildly (Python, TS, Go, etc.) — exclusion is the safer floor.
+        code_files = [
+            f for f in changed
+            if not f.startswith(f"{art}/")
+            and not f.startswith(".agile-v/")
+            and not f.endswith(".md")
+        ]
+        if not code_files:
+            acc["missing"].append(
+                f"<source code change for {bl_id}; commit changed only docs/artifacts: "
+                f"{', '.join(changed[:5]) or '(no files)'}>"
+            )
     return _finalize("engineer", acc)
+
+
+def _changed_files(repo_root: Path, base_ref: str) -> list[str]:
+    """Return files changed between base_ref and HEAD in the given worktree. Best-effort."""
+    try:
+        r = subprocess.run(
+            ["git", "diff", "--name-only", f"{base_ref}...HEAD"],
+            cwd=repo_root, capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return []
+        return [line.strip() for line in r.stdout.splitlines() if line.strip()]
+    except (OSError, subprocess.TimeoutExpired):
+        return []
 
 
 def validate_qa(repo_root: Path, bl_id: str) -> dict:
@@ -131,7 +171,7 @@ The webapp's pre-merge validator has REJECTED the commit. You are now being re-i
 
 1. Re-read the original prompt's doctrine + contract blocks. The required content of each artifact is defined there in detail.
 2. Use retrieval tools (`mcp__retrieval__semantic_search`, `mcp__retrieval__graph_summary`, `mcp__retrieval__graph_neighbors`) to ground the content in the actual target codebase — not just from memory.
-3. Write each missing/empty file with substantive content (≥120 characters; ideally the structure the doctrine specified).
+3. Write each missing/empty file with substantive content (≥120 characters; ideally the structure the doctrine specified). If the validator flagged "<source code change …>" as missing, you MUST also write the actual implementation source code (e.g. the SQLModel class, FastAPI route, dep, alembic migration, tests) — the artifact doc alone is not the deliverable.
 4. `git add -A` and `git commit --amend --no-edit` so the artifacts join the existing commit (do NOT create a separate commit).
 5. Print ONLY the same final JSON shape as your previous run, with the same `commit_sha` (it will change after --amend, use the new sha).
 
