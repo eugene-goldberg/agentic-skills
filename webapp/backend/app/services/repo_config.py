@@ -1,0 +1,118 @@
+"""Per-target-repo configuration for the webapp.
+
+Each brownfield target repo may carry an `.agentic-skills.json` at its
+root that tells the webapp:
+
+- `agent_branch`  — the branch off which all agent worktrees should be
+  created, AND the branch into which Engineer / QA fast-forward on success.
+  Default: "agentic-skills-work" if it exists, else "main".
+- `main_ref`      — name of the pristine upstream branch (default "main").
+  Used by the regression gate to compute a pre-merge baseline.
+- `test_cmd`      — optional override for the regression-gate test command
+  (otherwise auto-detected by brownfield.detect_test_command).
+- `doctrine`      — optional explicit override ("brownfield"/"greenfield").
+  Normally derived from target_status() at run time; this lets you force a
+  family.
+
+Greenfield repos that lack the file get sensible defaults: branch="main",
+no doctrine override.
+"""
+from __future__ import annotations
+
+import json
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+
+
+CONFIG_FILENAME = ".agentic-skills.json"
+DEFAULT_AGENT_BRANCH = "agentic-skills-work"
+DEFAULT_MAIN_REF = "main"
+
+
+@dataclass
+class RepoConfig:
+    repo_root: Path
+    agent_branch: str
+    main_ref: str
+    test_cmd: list[str] | None  # None = auto-detect via brownfield.detect_test_command
+    doctrine: str | None        # None = derive from target_status
+    source: str                 # "file" | "default"
+
+    def to_dict(self) -> dict:
+        return {
+            "agent_branch": self.agent_branch,
+            "main_ref": self.main_ref,
+            "test_cmd": self.test_cmd,
+            "doctrine": self.doctrine,
+            "source": self.source,
+        }
+
+
+def _git_branch_exists(repo_root: Path, branch: str) -> bool:
+    """Cheap check — returns True if `branch` is a valid ref in the repo."""
+    if not shutil.which("git"):
+        return False
+    import subprocess
+    code = subprocess.call(
+        ["git", "rev-parse", "--verify", "--quiet", branch],
+        cwd=str(repo_root),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return code == 0
+
+
+def load(repo_root: Path) -> RepoConfig:
+    """Load .agentic-skills.json from the repo root, falling back to defaults.
+
+    Behavior when the file is absent:
+    - agent_branch = "agentic-skills-work" IF that branch exists in the repo,
+      otherwise "main" (preserves backward compatibility for repos that have
+      never been bootstrapped).
+    - main_ref = "main" (or whatever the default branch is named locally).
+    """
+    config_path = repo_root / CONFIG_FILENAME
+    if config_path.exists():
+        try:
+            data = json.loads(config_path.read_text())
+            agent_branch = data.get("agent_branch") or DEFAULT_AGENT_BRANCH
+            main_ref = data.get("main_ref") or DEFAULT_MAIN_REF
+            test_cmd = data.get("test_cmd")
+            doctrine = data.get("doctrine")
+            return RepoConfig(
+                repo_root=repo_root,
+                agent_branch=agent_branch,
+                main_ref=main_ref,
+                test_cmd=list(test_cmd) if isinstance(test_cmd, list) else None,
+                doctrine=doctrine,
+                source="file",
+            )
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # Default path: prefer agentic-skills-work if it already exists; else main.
+    branch = DEFAULT_AGENT_BRANCH if _git_branch_exists(repo_root, DEFAULT_AGENT_BRANCH) else DEFAULT_MAIN_REF
+    return RepoConfig(
+        repo_root=repo_root,
+        agent_branch=branch,
+        main_ref=DEFAULT_MAIN_REF,
+        test_cmd=None,
+        doctrine=None,
+        source="default",
+    )
+
+
+def write(repo_root: Path, *, agent_branch: str = DEFAULT_AGENT_BRANCH, main_ref: str = DEFAULT_MAIN_REF, test_cmd: list[str] | None = None, doctrine: str | None = None) -> Path:
+    """Write a fresh .agentic-skills.json. Used when bootstrapping a target."""
+    config_path = repo_root / CONFIG_FILENAME
+    payload = {
+        "agent_branch": agent_branch,
+        "main_ref": main_ref,
+    }
+    if test_cmd:
+        payload["test_cmd"] = test_cmd
+    if doctrine:
+        payload["doctrine"] = doctrine
+    config_path.write_text(json.dumps(payload, indent=2) + "\n")
+    return config_path

@@ -275,3 +275,83 @@ mkdir webapp/backend/repos/fresh && cd webapp/backend/repos/fresh && git init -b
 ```
 
 That's it. Refresh the browser, the repo appears in the dropdown.
+
+---
+
+## 14. Brownfield mode (branch `brownfield-production` only)
+
+This branch adds an entire alternate doctrine track. The webapp now auto-selects between *greenfield* and *brownfield* prompt families based on `target_status()`. New / changed modules:
+
+| File | Purpose |
+|---|---|
+| `backend/app/services/prompts_brownfield.py` | Brownfield builders for PO / Engineer / QA / Scorer. **Each loads the SKILLS.md file verbatim** from `skills/brownfield/brownfield-production-incremental-<role>/SKILLS.md` as the binding doctrine block, with a small "WEBAPP CONTRACT" wrapper (artifact paths, completion JSON shape). |
+| `backend/app/services/prompts.py` | `select_family(target_status_result)` dispatcher + `build_po / build_engineer / build_qa / build_score` wrappers that route greenfield ↔ brownfield. |
+| `backend/app/services/brownfield.py` | `classify_target()`, `pick_artifact_dir()`, `detect_test_command()`, rubric path map. |
+| `backend/app/services/repo_config.py` | Loads `.agentic-skills.json` from the target repo root: `agent_branch`, `main_ref`, `test_cmd`, `doctrine` overrides. Default `agent_branch="agentic-skills-work"`, `main_ref="main"`. |
+| `backend/app/services/git_worktree.py` | `create_worktree(base_ref=...)` so forks come off the configured agent branch; `fast_forward_target()` (was `fast_forward_main`) merges into the configured target ref and checks out the right ref first. |
+| `backend/app/services/regression_gate.py` | Differential pre/post pytest in disposable worktrees; reports `kind=green / regressed / inconclusive / error / skipped`. Auto-detects `test_cmd` or reads override from config. |
+| `backend/app/services/doctrine_validator.py` | Hard pre-merge artifact validator + `build_fix_prompt(role, validation)`. Validates: PO → CODEBASE_CONTEXT.md + every BL's `_brownfield/<BL>/codebase_context.md` + SPRINT_PLAN_C1.md; Engineer → `_brownfield/<BL>/eng_patterns.md`; QA → `_brownfield/<BL>/qa_impact.md` + `.agile-v/qa/<BL>.md`. |
+| `rubrics/production_grade_scorecard_brownfield.md` | Sidecar rubric — adds Pattern Fidelity, Regression Coverage, Characterization Tests, Invariant Preservation, Blast Radius (5×0–5 = 25). Single brownfield-axis score ≤2 forces Fail. |
+| `frontend/src/App.jsx` | Surfaces doctrine, regression-gate verdict, regressions list, and `Review & merge` / `Force merge` buttons in the done card; new `[gate]` line types in the SSE stream renderer. |
+
+### Endpoints added
+
+| Method | Path | Body | Notes |
+|---|---|---|---|
+| POST | `/api/projects/{repo}/merge-branch` | `{branch, skip_gate}` | Manual review path — re-runs the gate then merges, or skips the gate. |
+| GET | `/api/projects/{repo}/branches` | – | Lists `agent/*` branches not yet merged into the configured `agent_branch`. |
+
+### Brownfield artifact directory
+
+Agents write into a top-level `_brownfield/` at the target repo root:
+
+```
+_brownfield/
+  _codebase_context/CODEBASE_CONTEXT.md     # PO whole-system context
+  SPRINT_PLAN_C1.md                          # PO sprint plan
+  <BL-id>/
+    codebase_context.md                      # PO per-BL context
+    eng_patterns.md                          # Engineer pattern-match summary
+    qa_impact.md                             # QA impact analysis
+```
+
+**Important:** do NOT add `_brownfield/` to the brownfield repo's `.gitignore`. The agent branch is the boundary that keeps these out of upstream `master`; gitignoring silently drops artifacts from `git add -A` and breaks the role hand-off chain.
+
+### Per-target config
+
+`.agentic-skills.json` at the target repo root. Example (for full-stack-fastapi-template, which uses Docker for tests and `master` as default):
+
+```json
+{
+  "agent_branch": "agentic-skills-work",
+  "main_ref": "master",
+  "doctrine": "brownfield",
+  "test_cmd": ["docker", "compose", "exec", "-T", "backend", "pytest", "-q"]
+}
+```
+
+### Doctrine validation + retry
+
+After every agent run's first commit, the validator checks the worktree for required artifacts. If missing/too-small:
+
+1. SSE: `_meta phase=doctrine_check kind=incomplete attempt=N missing=[...]`
+2. Same agent re-invoked in same worktree with `build_fix_prompt(role, validation)`.
+3. Up to **`MAX_FIX_RETRIES = 2`**.
+4. If still incomplete: `kind=give_up`, copy-back (PO) / fast-forward (Engineer/QA) **refused**. UI shows "Review & merge".
+
+### Embedding stack on this branch
+
+Local Ollama (homebrew) serving `bge-m3` at `127.0.0.1:11434`. `webapp/.env` is autoloaded first:
+
+```
+EMBEDDING_PROVIDER=Ollama
+OLLAMA_HOST=http://127.0.0.1:11434
+EMBEDDING_MODEL=bge-m3
+EMBEDDING_DIMENSION=1024
+```
+
+The chat env files (`.env.kimi`, `.env.gpt54`) are no longer used by the webapp on this branch — `claude` CLI handles all LLM via corporate OAuth.
+
+### Current target
+
+`full-stack-fastapi-template` (cloned to `~/dev/ai-projects/brownfield-targets/full-stack-fastapi-template`, symlinked into `webapp/backend/repos/`). BL-0001 cycle complete; see `BROWNFIELD_PROGRESS.md` at the repo root for current scorecard, commit shas, and next BLs.

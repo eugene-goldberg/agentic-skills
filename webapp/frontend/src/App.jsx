@@ -30,6 +30,10 @@ export function App() {
   const [summary, setSummary] = useState(null);
   const [indexStatus, setIndexStatus] = useState({ ctx: null, graph: null });
   const [indexRunning, setIndexRunning] = useState({ ctx: false, graph: false });
+  const [traces, setTraces] = useState([]);
+  const [selectedTraceId, setSelectedTraceId] = useState(null);
+  const [traceDetail, setTraceDetail] = useState(null);
+  const [traceDetailLoading, setTraceDetailLoading] = useState(false);
   const abortRef = useRef(null);
   const logBottomRef = useRef(null);
 
@@ -52,6 +56,41 @@ export function App() {
   useEffect(() => {
     reloadBacklog(repo);
   }, [repo, reloadBacklog]);
+
+  // ---------- traces ----------
+  const traceIdFromDir = (dir) => (dir ? dir.split("/").pop() : null);
+  const reloadTraces = useCallback(async (r) => {
+    if (!r) {
+      setTraces([]);
+      return;
+    }
+    try {
+      const d = await fetch(`/api/projects/${encodeURIComponent(r)}/traces?limit=100`).then((x) => x.json());
+      setTraces(d.traces || []);
+    } catch {
+      setTraces([]);
+    }
+  }, []);
+  useEffect(() => {
+    reloadTraces(repo);
+    setSelectedTraceId(null);
+    setTraceDetail(null);
+  }, [repo, reloadTraces]);
+
+  const openTrace = async (id) => {
+    if (!repo || !id) return;
+    setSelectedTraceId(id);
+    setTraceDetail(null);
+    setTraceDetailLoading(true);
+    try {
+      const d = await fetch(`/api/projects/${encodeURIComponent(repo)}/traces/${encodeURIComponent(id)}`).then((x) => x.json());
+      setTraceDetail(d);
+    } catch (err) {
+      setTraceDetail({ _error: String(err) });
+    } finally {
+      setTraceDetailLoading(false);
+    }
+  };
 
   // ---------- autoscroll ----------
   useEffect(() => {
@@ -78,6 +117,7 @@ export function App() {
       abortRef.current = null;
       // Refresh backlog after either flow (PO may have just written it)
       reloadBacklog(repo);
+      reloadTraces(repo);
     }
   };
 
@@ -306,9 +346,108 @@ export function App() {
             {summary.imported_backlog_path && (
               <><dt>Backlog imported</dt><dd><code>{summary.imported_backlog_path}</code></dd></>
             )}
+            {summary.agent_branch && (
+              <><dt>Agent branch</dt><dd><code>{summary.agent_branch}</code></dd></>
+            )}
+            {summary.gate_kind && (
+              <>
+                <dt>Regression gate</dt>
+                <dd>
+                  {summary.gate_kind === "green" && <span style={{color: "var(--ok)"}}>✓ green — no regressions</span>}
+                  {summary.gate_kind === "regressed" && (
+                    <span style={{color: "var(--error)"}}>✗ regressions: {(summary.regressions || []).slice(0, 3).join(", ")}{(summary.regressions || []).length > 3 ? ` (+${(summary.regressions || []).length - 3} more)` : ""}</span>
+                  )}
+                  {summary.gate_kind === "skipped" && <span className="dim">— (greenfield)</span>}
+                  {summary.gate_kind === "error" && <span style={{color: "var(--warn)"}}>! gate error</span>}
+                </dd>
+              </>
+            )}
+            {summary.merged_to_target !== undefined && (
+              <>
+                <dt>Merged to target</dt>
+                <dd>
+                  {summary.merged_to_target
+                    ? <span style={{color: "var(--ok)"}}>✓ yes</span>
+                    : (summary.gate_kind === "regressed" || summary.gate_kind === "error")
+                      ? <ReviewMergeButton repo={repo} branch={summary.branch} onDone={() => { reloadBacklog(repo); reloadTraces(repo); }} />
+                      : <span className="dim">— (no new commits)</span>}
+                </dd>
+              </>
+            )}
+            {summary.merged_to_main !== undefined && summary.merged_to_target === undefined && (
+              <>
+                <dt>Merged to main</dt>
+                <dd>
+                  {summary.merged_to_main
+                    ? <span style={{color: "var(--ok)"}}>✓ yes</span>
+                    : <span style={{color: "var(--warn)"}}>✗ {summary.merge_error || "no"}</span>}
+                </dd>
+              </>
+            )}
           </dl>
         </section>
       )}
+
+      <section className="traces">
+        <h2>
+          Traces <span className="count">({traces.length})</span>
+          <button
+            className="secondary inline-refresh"
+            onClick={() => reloadTraces(repo)}
+            disabled={!repo}
+            title="Reload trace list"
+          >↻</button>
+        </h2>
+        {traces.length === 0 && <p className="empty">No traces yet — every agent run records one.</p>}
+        {traces.length > 0 && (
+          <div className="trace-grid">
+            <ul className="trace-list">
+              {traces.map((t) => {
+                const id = traceIdFromDir(t.trace_dir || t._dir);
+                const dur = t.duration_s != null ? `${t.duration_s.toFixed(1)}s` : "…";
+                const started = t.started_at?.replace("T", " ").slice(0, 19);
+                return (
+                  <li
+                    key={id}
+                    className={`trace-row ${selectedTraceId === id ? "selected" : ""}`}
+                    onClick={() => openTrace(id)}
+                  >
+                    <div className="trace-head">
+                      <span className={`pill role-${t.role}`}>{t.role}</span>
+                      {t.bl_id && <code className="bl-id">{t.bl_id}</code>}
+                      <span className="trace-time">{started}</span>
+                      <span className="trace-dur">{dur}</span>
+                    </div>
+                    <div className="trace-meta">
+                      <span>events {t.n_events ?? "?"}</span>
+                      <span>tools {t.n_tool_use ?? "?"}</span>
+                      <span>retrieval {t.n_retrieval_calls ?? 0}</span>
+                      {t.done?.commit_sha && (
+                        <span>commit <code>{t.done.commit_sha.slice(0, 8)}</code></span>
+                      )}
+                      {t.done?.verdict && (
+                        <span className={`pill verdict-${String(t.done.verdict).toLowerCase().replace(/[^a-z]/g, "_")}`}>
+                          {t.done.verdict}
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="trace-detail">
+              {!selectedTraceId && <p className="empty">Select a trace to see details.</p>}
+              {selectedTraceId && traceDetailLoading && <p className="empty">Loading…</p>}
+              {selectedTraceId && traceDetail?._error && (
+                <p className="error">[error] {traceDetail._error}</p>
+              )}
+              {selectedTraceId && traceDetail && !traceDetail._error && (
+                <TraceDetailView detail={traceDetail} />
+              )}
+            </div>
+          </div>
+        )}
+      </section>
 
       <section className="log">
         <h2>
@@ -343,9 +482,151 @@ function IndexBadge({ status, kind }) {
 }
 
 
+function ReviewMergeButton({ repo, branch, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const run = async (skip_gate) => {
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/projects/${encodeURIComponent(repo)}/merge-branch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branch, skip_gate }),
+      }).then((x) => x.json());
+      setResult(r);
+      if (r?.merge?.ok) onDone?.();
+    } catch (err) {
+      setResult({ error: String(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (result?.merge?.ok) {
+    return <span style={{ color: "var(--ok)" }}>✓ merged after review ({result.merge.merged_sha?.slice(0, 8)})</span>;
+  }
+  return (
+    <span>
+      <button className="secondary tiny" disabled={busy} onClick={() => run(false)}>
+        {busy ? "Re-gating…" : "Review & merge (re-run gate)"}
+      </button>
+      <button className="secondary tiny" style={{ marginLeft: 6 }} disabled={busy} onClick={() => run(true)}>
+        Force merge (skip gate)
+      </button>
+      {result?.gate && !result.merge && (
+        <div style={{ fontSize: 11, color: "var(--warn)", marginTop: 4 }}>
+          gate {result.gate.kind}: {result.gate.reason}
+        </div>
+      )}
+    </span>
+  );
+}
+
+
+function TraceDetailView({ detail }) {
+  const { meta, stream, retrieval } = detail;
+  const [tab, setTab] = useState("stream");
+  const [promptOpen, setPromptOpen] = useState(false);
+  return (
+    <div className="trace-detail-view">
+      <div className="trace-detail-meta">
+        <div className="row">
+          <span className={`pill role-${meta.role}`}>{meta.role}</span>
+          {meta.bl_id && <code className="bl-id">{meta.bl_id}</code>}
+          <span>task <code>{meta.task_id}</code></span>
+          <span>started {meta.started_at?.replace("T", " ").slice(0, 19)}</span>
+          <span>{meta.duration_s != null ? `${meta.duration_s.toFixed(2)}s` : "…"}</span>
+        </div>
+        <div className="row dim">
+          <span>events {meta.n_events}</span>
+          <span>tool_use {meta.n_tool_use}</span>
+          <span>tool_result {meta.n_tool_result}</span>
+          <span>retrieval {meta.n_retrieval_calls ?? 0}</span>
+          {meta.done?.commit_sha && <span>commit <code>{meta.done.commit_sha.slice(0, 12)}</code></span>}
+          {meta.done?.branch && <span>branch <code>{meta.done.branch}</code></span>}
+          {meta.final_result_frame?.total_cost_usd != null && (
+            <span>cost ${Number(meta.final_result_frame.total_cost_usd).toFixed(4)}</span>
+          )}
+        </div>
+        <button className="secondary tiny" onClick={() => setPromptOpen((v) => !v)}>
+          {promptOpen ? "Hide prompt" : "Show prompt"}
+        </button>
+        {promptOpen && (
+          <pre className="prompt-pre">{meta.prompt || "(no prompt captured)"}</pre>
+        )}
+      </div>
+      <div className="trace-tabs">
+        <button
+          className={tab === "stream" ? "tab active" : "tab"}
+          onClick={() => setTab("stream")}
+        >Stream ({stream?.length ?? 0})</button>
+        <button
+          className={tab === "retrieval" ? "tab active" : "tab"}
+          onClick={() => setTab("retrieval")}
+        >Retrieval ({retrieval?.length ?? 0})</button>
+        <button
+          className={tab === "raw" ? "tab active" : "tab"}
+          onClick={() => setTab("raw")}
+        >Raw meta</button>
+      </div>
+      {tab === "stream" && (
+        <ul className="trace-stream">
+          {(stream || []).map((evt, i) => (
+            <li key={i} className={`evt evt-${(evt.type || "unknown").replace(/[^a-z0-9_-]/gi, "_")}`}>
+              {evt._ts && <span className="ts dim">{evt._ts.slice(11, 19)} </span>}
+              <EventLine evt={evt} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {tab === "retrieval" && (
+        <ul className="trace-retrieval">
+          {(retrieval || []).length === 0 && <li className="empty">No retrieval calls in this run.</li>}
+          {(retrieval || []).map((r, i) => (
+            <li key={i} className="evt">
+              <span className="ts dim">{r.ts?.slice(11, 19)} </span>
+              <b>{r.tool}</b>
+              {r.query && <> · query=<code>{String(r.query).slice(0, 80)}</code></>}
+              {r.symbol && <> · symbol=<code>{r.symbol}</code></>}
+              {r.path && <> · path=<code>{r.path}</code></>}
+              {r.source && <> · source={r.source}</>}
+              {r.n_hits != null && <> · hits={r.n_hits}</>}
+              {r.n != null && <> · n={r.n}</>}
+              {r.error && <span className="error"> · error: {r.error}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {tab === "raw" && (
+        <pre className="trace-raw">{JSON.stringify(meta, null, 2)}</pre>
+      )}
+    </div>
+  );
+}
+
+
 function EventLine({ evt }) {
   const type = evt.type || "unknown";
   if (type === "_meta") {
+    if (evt.phase === "regression_gate") {
+      const cls = evt.kind === "green" ? "ok"
+                : evt.kind === "regressed" ? "bad"
+                : evt.kind === "skipped" ? "dim"
+                : "warn";
+      const pre = evt.pre ? `pre ${evt.pre.n_passed}p/${evt.pre.n_failed}f` : "";
+      const post = evt.post ? `post ${evt.post.n_passed}p/${evt.post.n_failed}f` : "";
+      const regs = evt.regressions?.length ? ` regressions=${evt.regressions.length}` : "";
+      return (
+        <code className={`meta gate-${cls}`}>
+          [gate] {evt.kind} · {pre} → {post}{regs} · {evt.reason || ""}
+        </code>
+      );
+    }
+    if (evt.phase === "awaiting_review") {
+      return <code className="meta gate-warn">[gate] awaiting review — {evt.reason}</code>;
+    }
+    if (evt.phase === "merge_to_target") {
+      return <code className={`meta gate-${evt.ok ? "ok" : "warn"}`}>[merge] {evt.kind} → {evt.target_ref} · {evt.merged_sha?.slice(0, 8) || evt.error}</code>;
+    }
     const bits = [];
     if (evt.phase) bits.push(`phase=${evt.phase}`);
     if (evt.task_id) bits.push(`task=${evt.task_id}`);

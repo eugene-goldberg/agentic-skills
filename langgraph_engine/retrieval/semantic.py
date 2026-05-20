@@ -60,8 +60,58 @@ class AzureEmbedding extends Embedding {
   getProvider() { return 'AzureOpenAI'; }
 }
 
+class OllamaEmbedding extends Embedding {
+  constructor({ host, model, dimension }) {
+    super();
+    this.host = (host || 'http://localhost:11434').replace(/\/+$/, '');
+    this.modelName = model || 'bge-m3';
+    this.dimension = dimension || 1024;
+    this.maxTokens = 8192;
+  }
+  async detectDimension() { return this.dimension; }
+  getDimension() { return this.dimension; }
+  getProvider() { return 'Ollama'; }
+  async _embedOne(text) {
+    const r = await fetch(`${this.host}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: this.modelName, input: text }),
+    });
+    if (!r.ok) throw new Error(`Ollama /api/embed HTTP ${r.status}`);
+    const j = await r.json();
+    const v = (j.embeddings && j.embeddings[0]) || j.embedding;
+    if (!v) throw new Error(`Ollama returned no embedding: ${JSON.stringify(j).slice(0,200)}`);
+    return { vector: v, dimension: v.length };
+  }
+  async embed(text) {
+    const t = this.preprocessText(text);
+    return this._embedOne(t);
+  }
+  async embedBatch(texts) {
+    const ts = this.preprocessTexts(texts);
+    // Ollama /api/embed accepts an array via "input"
+    const r = await fetch(`${this.host}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: this.modelName, input: ts }),
+    });
+    if (!r.ok) throw new Error(`Ollama /api/embed HTTP ${r.status}`);
+    const j = await r.json();
+    const arr = j.embeddings || [];
+    if (!arr.length) throw new Error(`Ollama returned no embeddings`);
+    return arr.map(v => ({ vector: v, dimension: v.length }));
+  }
+}
+
 let embedding;
-if (process.env.EMBEDDING_PROVIDER === 'AzureOpenAI') {
+const provider = (process.env.EMBEDDING_PROVIDER || '').toLowerCase();
+if (provider === 'ollama') {
+  embedding = new OllamaEmbedding({
+    host: process.env.OLLAMA_HOST,
+    model: process.env.EMBEDDING_MODEL || 'bge-m3',
+    dimension: parseInt(process.env.EMBEDDING_DIMENSION || '1024', 10),
+  });
+} else if (provider === 'azureopenai') {
   embedding = new AzureEmbedding({
     apiKey: process.env.AZURE_OPENAI_API_KEY,
     endpoint: process.env.AZURE_OPENAI_ENDPOINT,
@@ -89,6 +139,25 @@ try {
     result = await context.indexCodebase(cmd.repo, null, cmd.force === true);
   } else if (cmd.op === 'search') {
     result = await context.semanticSearch(cmd.repo, cmd.query, cmd.k || 5);
+  } else if (cmd.op === 'has_index') {
+    // Fast check: does the Milvus collection for this repo already have
+    // rows? Used by SemanticRegistry to skip re-indexing across MCP-server
+    // restarts when the index is already populated. Avoids the 120s
+    // indexCodebase no-op penalty.
+    const collectionName = context.getCollectionName(cmd.repo);
+    let count = 0;
+    let exists = false;
+    try {
+      exists = await vectorDatabase.hasCollection(collectionName);
+      if (exists) {
+        try {
+          count = await vectorDatabase.query(collectionName, '', ['id'], 1).then(r => (r && r.length) ? 1 : 0);
+        } catch (_) { count = exists ? 1 : 0; }
+      }
+    } catch (_) {
+      exists = false;
+    }
+    result = { collection: collectionName, exists, has_rows: count > 0 };
   } else {
     throw new Error('unknown op: ' + cmd.op);
   }
@@ -106,16 +175,37 @@ def _ensure_bridge(node_dir: Path) -> Path:
     return bridge
 
 
-def _run_bridge(node_dir: Path, command: dict) -> dict:
+def _run_bridge(node_dir: Path, command: dict, *, timeout: int | None = None) -> dict:
+    """Spawn the Node bridge synchronously, with a hard wall-clock timeout.
+
+    Defaults match the `webapp` branch baseline that the operator confirmed
+    works reliably for indexing + search. Azure embedding latency varies a
+    lot (~5s when warm, ~30s after a sustained burst); the subprocess
+    timeout has to exceed the OpenAI SDK's internal request timeout (which
+    claude-context-core wraps as 'Request timed out.') AND leave headroom
+    for Node startup. Tight per-op timeouts would convert slow-but-working
+    Azure responses into hard failures, which is what we saw on this branch
+    before this fix.
+    """
     bridge = _ensure_bridge(node_dir)
-    proc = subprocess.run(
-        ["node", str(bridge), json.dumps(command)],
-        cwd=node_dir,
-        capture_output=True,
-        text=True,
-        timeout=600,
-        env={**os.environ},
-    )
+    if timeout is None:
+        timeout = 900 if command.get("op") == "index" else 600
+    try:
+        proc = subprocess.run(
+            ["node", str(bridge), json.dumps(command)],
+            cwd=node_dir,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env={**os.environ},
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "error": f"node bridge timed out after {timeout}s during op={command.get('op')!r}",
+            "timeout": True,
+            "stderr": (exc.stderr or b"").decode(errors="replace")[-400:] if isinstance(exc.stderr, (bytes, bytearray)) else (exc.stderr or "")[-400:],
+        }
     out = proc.stdout.strip()
     if not out:
         return {"ok": False, "error": f"empty stdout; stderr={proc.stderr[-400:]}"}
@@ -126,12 +216,17 @@ def _run_bridge(node_dir: Path, command: dict) -> dict:
 
 
 class SemanticRegistry:
-    """Tracks which repos have been indexed during this run."""
+    """Tracks which repos have been indexed during this run.
+
+    Records failed-index attempts too — so a slow first index does not put us
+    in a loop of re-indexing on every subsequent search call.
+    """
 
     def __init__(self, node_dir: Path | None = None):
         self.node_dir = node_dir or DEFAULT_NODE_DIR
         self._paths: dict[str, Path] = {}
         self._indexed: set[str] = set()
+        self._index_failed: dict[str, dict] = {}
 
     def register(self, name: str, repo_root: Path) -> None:
         self._paths[name] = repo_root
@@ -140,12 +235,27 @@ class SemanticRegistry:
         repo = self._paths[name]
         if name in self._indexed and not force:
             return {"ok": True, "cached": True}
+        if name in self._index_failed and not force:
+            return {**self._index_failed[name], "cached_failure": True}
         r = _run_bridge(self.node_dir, {"op": "index", "repo": str(repo), "force": force})
         if r.get("ok"):
             self._indexed.add(name)
+            self._index_failed.pop(name, None)
+        else:
+            self._index_failed[name] = r
         return r
 
     def search(self, name: str, query: str, k: int = 5) -> dict:
+        """Search the indexed collection. Falls back to indexing if needed.
+
+        Restores the `webapp` branch behavior: on first call for a given
+        name in this process, attempt an `op=index` (force=false). If the
+        collection already exists in Milvus, `indexCodebase` is a quick
+        manifest-load no-op; if it doesn't, we trigger a full indexing run.
+        Either way, the search that follows is against a populated
+        collection. Subsequent calls in the same process skip this thanks
+        to the `_indexed` cache.
+        """
         repo = self._paths[name]
         if name not in self._indexed:
             idx = self.index(name)

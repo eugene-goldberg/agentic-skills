@@ -9,6 +9,39 @@ so the UI can confirm success.
 from __future__ import annotations
 
 
+RETRIEVAL_HINT = """\
+## Retrieval tools (MCP)
+You have access to 5 retrieval tools that query a *reference* repo of curated
+good patterns and the *target* repo you are currently working in:
+
+- `mcp__retrieval__target_status()` — INSTANT (<100ms) scan of the target repo.
+  Returns `{kind: "greenfield"|"brownfield", source_file_count, languages,
+  has_pyproject, has_tests, top_source_files: [...]}`. Use this to classify
+  the project before reaching for the slower tools.
+- `mcp__retrieval__semantic_search(query, k=5, source="reference"|"target")`
+  Hybrid semantic+keyword search; returns file + line range + snippet. The
+  FIRST call against a given source may take ~10s to warm up indexing. Each
+  subsequent call is <2s. Treat any `{ok:false, error:"...timeout..."}` as a
+  hard signal to stop calling `semantic_search` against that source and use
+  graph_* or what you already have.
+- `mcp__retrieval__graph_neighbors(symbol, depth=1, source=...)`
+  Callers / callees / contains edges for a symbol.
+- `mcp__retrieval__graph_find_similar(symbol, k=5, source=...)`
+  Structurally similar entities (Jaccard over shared call targets).
+- `mcp__retrieval__graph_summary(path, source=...)`
+  Entities and their call targets in a given file.
+
+Rules:
+- ALWAYS call `target_status` once before any other retrieval tool.
+- If `kind="greenfield"`, NEVER call `semantic_search` or `graph_*` with
+  `source="target"` — they will return empty after a wasted call.
+- A per-task budget of 30 retrieval calls is enforced.
+- Do NOT retry the same query after a timeout or `{ok:false}` — switch tools
+  or proceed with what you have.
+"""
+
+
+
 PO_COMPLETION_PROTOCOL = """\
 ## Required Completion Steps
 After decomposition is complete:
@@ -35,6 +68,51 @@ After decomposition is complete:
 """
 
 
+ENG_DISCOVERY_PROTOCOL = """\
+## Mandatory discovery phase (run BEFORE writing or editing any code)
+
+Skipping this step yields lower-quality code and is enforced by the scorer.
+Follow the protocol literally:
+
+1. **Classify the target — call exactly one tool.**
+
+       mcp__retrieval__target_status()
+
+   Returns instantly (<100ms). Note `kind`, `source_file_count`, `languages`,
+   `top_source_files`. Use these to choose your search strategy below.
+
+2. **Reference-pattern lookup (ALWAYS, ≥2 calls).** This BL is one slice of a
+   larger system. Find the closest analog in the reference repo before
+   designing your solution:
+   - `mcp__retrieval__semantic_search(query="<the capability this BL adds, phrased as a code problem>", source="reference", k=5)`
+   - For the most relevant hit, follow up with one of:
+     - `mcp__retrieval__graph_summary(path="<file from hit>", source="reference")`
+       to see what symbols live in that file and what they call.
+     - `mcp__retrieval__graph_neighbors(symbol="<key function from hit>", source="reference", depth=1)`
+       to see callers, callees, and what types/helpers it depends on.
+   If `semantic_search` returns `{ok:false}` or a timeout once, switch to
+   `graph_summary`/`graph_neighbors` directly on a plausible file — do NOT
+   retry the same query.
+
+3. **Target-codebase lookup — ONLY if step 1 returned `kind="brownfield"`
+   (≥2 calls).** Before adding new code, find what already exists and what
+   you must integrate with:
+   - `mcp__retrieval__semantic_search(query="<existing capability you'll plug into>", source="target", k=5)`
+   - `mcp__retrieval__graph_neighbors(symbol="<the function or class you'll modify or call>", source="target", depth=2)`
+   - For files you intend to edit: `mcp__retrieval__graph_summary(path="<file>", source="target")` to confirm what's there.
+   If step 1 returned `kind="greenfield"`, SKIP this step entirely; target
+   tools will short-circuit with `empty=true` but each call costs a turn.
+
+4. **Cite findings in the commit body.** Your commit message body MUST
+   include a short `Patterns:` block listing the reference files (with
+   line ranges when you have them) you used as a template, and — for
+   brownfield — a `Integration points:` block listing target symbols/files
+   the new code calls into or extends.
+
+5. The per-task retrieval budget is 30 calls; aim for 4–8 in step 2+3, not 30.
+"""
+
+
 ENG_COMPLETION_PROTOCOL = """\
 ## Required Completion Steps
 After the work is complete:
@@ -45,6 +123,51 @@ After the work is complete:
    `<bl_id>: <short description>` plus a body explaining what changed and why.
 5. Print ONLY this JSON as your final assistant output (no extra prose):
    {"status":"complete","bl_id":"<BL-XXXX>","commit_sha":"<full sha>","files_changed":<n>,"summary":"<brief>"}
+"""
+
+
+PO_DISCOVERY_PROTOCOL = """\
+## Mandatory discovery phase (run BEFORE writing the backlog)
+
+Your acceptance criteria will be much better if they are grounded in real
+code rather than only the brief. Follow this discovery protocol literally:
+
+1. **Classify the project — call ONE tool.** Issue exactly one call:
+
+       mcp__retrieval__target_status()
+
+   This is instant (<100ms). It returns `{kind, source_file_count,
+   languages, has_pyproject, has_tests, top_source_files}`. Do NOT use
+   `semantic_search` or bash heuristics for classification — they are slower
+   and less reliable. Trust the returned `kind`.
+
+2. **Reference-repo grounding (always, ≥2 calls).** Issue at least **2**
+   retrieval calls against `source="reference"` to surface concrete patterns
+   the engineer will later be told to emulate. Examples:
+   - `mcp__retrieval__semantic_search(query="<domain pattern from the brief>", source="reference", k=5)`
+   - `mcp__retrieval__graph_summary(path="<promising file from the first hit>", source="reference")`
+   Pick queries that mirror the main capabilities the brief asks for (auth,
+   CRUD, search, pagination, validation, persistence, etc.). If the first
+   `semantic_search` returns `{ok:false}` or a timeout, switch to
+   `graph_summary`/`graph_neighbors` on a likely file — do NOT retry the same
+   query.
+
+3. **Brownfield target probe — ONLY if step 1 returned `kind="brownfield"`.**
+   Issue at least **2** retrieval calls against `source="target"`:
+   - `mcp__retrieval__semantic_search(query="<capability from brief>", source="target")`
+   - `mcp__retrieval__graph_summary(path="<key file>", source="target")` or
+     `mcp__retrieval__graph_neighbors(symbol="<key symbol>", source="target")`
+   If step 1 returned `kind="greenfield"`, **skip this entire step**. The
+   target tools will return `empty=true` immediately, but every skipped call
+   still costs you a turn.
+
+4. **Cite findings.** In the BACKLOG.md you will write, include a short
+   `## Brief comprehension notes` section at the top that records:
+   - whether the project is greenfield or brownfield (from step 1)
+   - 2–5 bullets summarizing the patterns or existing-code findings you used
+   - file:line references for the reference patterns each BL borrows from
+
+5. The retrieval budget is 30 calls; stay well under it.
 """
 
 
@@ -64,7 +187,11 @@ def build_po_prompt(brief: str, project_name: str | None = None) -> str:
 - Every item has explicit, testable acceptance criteria — no vague language.
 - Order items so dependencies are satisfied by earlier items.
 - Use BL-0001, BL-0002, ... ids.
-- Do not ask clarifying questions. Make reasonable decisions and document them in the brief comprehension notes if any.
+- Do not ask clarifying questions. Make reasonable decisions and document them in the brief comprehension notes.
+
+{RETRIEVAL_HINT}
+
+{PO_DISCOVERY_PROTOCOL}
 
 {PO_COMPLETION_PROTOCOL}
 """
@@ -104,6 +231,10 @@ def build_engineer_prompt(bl_id: str, bl_section: str, repo_summary: str = "") -
 - Stay within scope. Do NOT touch other backlog items.
 - Do not ask clarifying questions; make reasonable decisions.
 
+{RETRIEVAL_HINT}
+
+{ENG_DISCOVERY_PROTOCOL}
+
 {ENG_COMPLETION_PROTOCOL}
 """
 
@@ -131,6 +262,8 @@ def build_qa_prompt(bl_id: str, bl_section: str) -> str:
   * PASS = all acceptance criteria covered, all tests green.
   * PASS-W/R = acceptance met but with minor reservations (cite them).
   * FAIL = at least one acceptance criterion uncovered or broken.
+
+{RETRIEVAL_HINT}
 
 {QA_COMPLETION_PROTOCOL}
 """
@@ -187,3 +320,50 @@ Be honest. Cite specific files / line ranges / commits as evidence. A perfect 75
 
 {SCORE_COMPLETION_PROTOCOL}
 """
+
+
+# ──────────────────────────── Doctrine dispatcher ────────────────────────
+# Selects greenfield vs brownfield prompt builders based on `target_status()`
+# output. Called by routers/projects.py once per agent run.
+
+from pathlib import Path as _Path
+from app.services import prompts_brownfield as _bf
+from app.services.brownfield import pick_artifact_dir as _pick_dir, RUBRIC_PATHS as _RUBRIC_PATHS
+
+
+def select_family(target_status_result: dict | None) -> str:
+    """Return 'brownfield' or 'greenfield' based on target_status output.
+
+    `target_status_result` is the dict returned by mcp_servers.retrieval_server
+    target_status, or None if classification could not be performed (treat as
+    greenfield to keep the existing notes-app demo behavior).
+    """
+    if not isinstance(target_status_result, dict):
+        return "greenfield"
+    return "brownfield" if target_status_result.get("kind") == "brownfield" else "greenfield"
+
+
+def build_po(family: str, brief: str, project_name: str | None, repo_root: _Path) -> str:
+    if family == "brownfield":
+        return _bf.build_po_prompt_brownfield(brief, project_name, artifact_dir=_pick_dir(repo_root))
+    return build_po_prompt(brief, project_name)
+
+
+def build_engineer(family: str, bl_id: str, bl_section: str, repo_root: _Path, repo_summary: str = "") -> str:
+    if family == "brownfield":
+        return _bf.build_engineer_prompt_brownfield(bl_id, bl_section, repo_summary, artifact_dir=_pick_dir(repo_root))
+    return build_engineer_prompt(bl_id, bl_section, repo_summary)
+
+
+def build_qa(family: str, bl_id: str, bl_section: str, repo_root: _Path) -> str:
+    if family == "brownfield":
+        return _bf.build_qa_prompt_brownfield(bl_id, bl_section, artifact_dir=_pick_dir(repo_root))
+    return build_qa_prompt(bl_id, bl_section)
+
+
+def build_score(family: str, bl_id: str, bl_section: str, repo_root: _Path) -> str:
+    rubric_path = _RUBRIC_PATHS[family]
+    rubric_text = rubric_path.read_text(encoding="utf-8") if rubric_path.exists() else ""
+    if family == "brownfield":
+        return _bf.build_score_prompt_brownfield(bl_id, bl_section, rubric_text, artifact_dir=_pick_dir(repo_root))
+    return build_score_prompt(bl_id, bl_section, rubric_text)

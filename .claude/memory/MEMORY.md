@@ -1,7 +1,12 @@
 - [Project layout](project_layout.md) — two top-level subprojects on three branches; what lives where
 - [Doc pointers](doc_pointers.md) — CLAUDE.md, PROJECT_STATE.md, the rubric file
-- [Azure OpenAI access](azure_openai.md) — resource, deployments, env file routing
+- [Brownfield-production branch](brownfield_production_branch.md) — current working branch, target repo, last-known status
+- [Embedding stack: Ollama bge-m3](embedding_stack_ollama.md) — local Ollama replaces Azure for embeddings on this branch
+- [Azure OpenAI access](azure_openai.md) — older Azure setup, still used by legacy harness
 - [Local Milvus assumption](local_milvus.md) — claude-context indexing depends on it
+- [`.agentic-skills.json` convention](agentic_skills_json_convention.md) — per-target-repo config: agent_branch, main_ref, doctrine, test_cmd
+- [Doctrine validator pattern](doctrine_validator_pattern.md) — hard pre-merge enforcement of artifact paths
+- [Brownfield known gotchas](brownfield_known_gotchas.md) — gitignore, regression-gate Docker, engineer characterization gap
 - [User uses corporate Claude Code](user_corporate_claude.md) — no ANTHROPIC_API_KEY available
 - [Honest verification when asked](feedback_honest_verification.md) — user pushes back on overclaims
 - [Subprocess-Option-A preference](feedback_subprocess_option_a.md) — Python subprocess, no TS SDK

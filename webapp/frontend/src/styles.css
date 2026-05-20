@@ -101,3 +101,43 @@ button.secondary { background: white; color: var(--fg); border: 1px solid var(--
 .evt-user .dim, .evt-system .dim { color: var(--muted); }
 .evt-result strong.result { color: var(--ok); }
 code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+
+/* ---------------- Traces ---------------- */
+.traces h2 .inline-refresh { margin-left: 8px; padding: 1px 8px; font-size: 12px; }
+.trace-grid { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 16px; }
+.trace-list { list-style: none; padding: 0; margin: 0; max-height: 480px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
+.trace-row { padding: 8px 10px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.trace-row:last-child { border-bottom: none; }
+.trace-row:hover { background: var(--accent-soft); }
+.trace-row.selected { background: var(--accent-soft); border-left: 3px solid var(--accent); padding-left: 7px; }
+.trace-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.trace-head .trace-time { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
+.trace-head .trace-dur { margin-left: auto; color: var(--muted); font-size: 11px; }
+.trace-meta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.trace-meta code { font-size: 10px; }
+.pill.role-po { background: #e7f0ff; color: #2455c8; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+.pill.role-engineer { background: #e6f7ec; color: #1f8a3a; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+.pill.role-qa { background: #fff4e0; color: #b16a00; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+.pill.role-scorer { background: #f3e6ff; color: #6a2dc7; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+.pill.verdict-pass { background: #e6f7ec; color: var(--ok); padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+.pill.verdict-pass_w_r { background: #fff4e0; color: var(--warn); padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+.pill.verdict-fail { background: #fde7e3; color: var(--error); padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+
+.trace-detail { border: 1px solid var(--border); border-radius: 6px; padding: 12px; min-height: 240px; max-height: 600px; overflow: auto; }
+.trace-detail-meta .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 12px; margin-bottom: 4px; }
+.trace-detail-meta .row.dim { color: var(--muted); }
+.trace-detail-meta .tiny { margin-top: 6px; font-size: 11px; padding: 2px 8px; }
+.prompt-pre { background: var(--code-bg); padding: 8px; border-radius: 4px; font-size: 11px; max-height: 220px; overflow: auto; white-space: pre-wrap; }
+.trace-tabs { display: flex; gap: 6px; margin: 10px 0 8px; border-bottom: 1px solid var(--border); }
+.trace-tabs .tab { background: none; border: none; padding: 6px 10px; cursor: pointer; font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent; }
+.trace-tabs .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.trace-stream, .trace-retrieval { list-style: none; padding: 0; margin: 0; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.5; }
+.trace-stream li, .trace-retrieval li { padding: 2px 0; border-bottom: 1px dotted var(--border); }
+.trace-stream .ts, .trace-retrieval .ts { color: var(--muted); }
+.trace-raw { background: var(--code-bg); padding: 10px; border-radius: 4px; font-size: 11px; max-height: 400px; overflow: auto; }
+
+/* ---------------- Regression gate ---------------- */
+.gate-ok { color: var(--ok); }
+.gate-bad { color: var(--error); }
+.gate-warn { color: var(--warn); }
+.secondary.tiny { font-size: 11px; padding: 2px 8px; }
