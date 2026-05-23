@@ -336,28 +336,28 @@ These are deeper than Tier A. Numbered by severity (HIGH first within tier).
 
 ## Tracking checklist (update as fixes land)
 
-- [ ] A1 — non-FF auto-rebase
-- [ ] A2 — QA doctrine failure surfaced
-- [ ] A3 — Milvus auto-restart preflight
-- [ ] A4 — score-only convenience path
-- [ ] A5 — truthful `bl.done outcome`
-- [ ] A6 — reader dumps full event on failure
-- [ ] A7 — disk-persisted state
-- [ ] B1 — kill subprocess on cancellation
-- [ ] B2 — per-repo concurrency lock
-- [ ] B3 — bridge.js writes graphify to shared cache (not worktree)
-- [ ] B4 — AppV2 renders new event fields
-- [ ] B5 — per-subprocess idle timeout
-- [ ] B7 — `.gitignore` preflight check (moot if B3 lands)
-- [ ] B9 — `/run-brief` idempotency (bundles with B2)
-- [ ] B12 — `partial_resume` cross-check git log
-- [ ] B14 — harness SHA in trace meta
-- [ ] B15 — auto-archive traces on sprint_complete
-- [ ] B16 — document `/decompose-brief` as plan-only path
-- [ ] B17 — UI Stop end-to-end (subsumed by B1)
-- [ ] B18 — operational logs out of `/tmp/`
+- [x] A1 — non-FF auto-rebase — `ad7a335`
+- [x] A2 — QA doctrine failure surfaced — `6a1a40c`
+- [x] A3 — Milvus auto-restart preflight — `cbc2966`
+- [x] A4 — score-only convenience path — `20c5476` (+ RECOVERY.md)
+- [x] A5 — truthful `bl.done outcome` — `4fcd430`
+- [x] A6 — reader dumps full event on failure — `5e652ce`
+- [x] A7 — disk-persisted state — `a0deed3`
+- [x] B1 — kill subprocess on cancellation — `b0b3914`
+- [x] B2 — per-repo concurrency lock — `fe0a83b`
+- [x] B3 — graphify writes to shared cache (not worktree) — `0bf3afb` (+ target `418ed91`)
+- [x] B4 — AppV2 renders new event fields — `c73a2ad`
+- [x] B5 — per-subprocess idle timeout — `ed80bec`
+- [x] B7 — `.gitignore` preflight check (closed by B3 + target gitignore fix)
+- [x] B9 — `/run-brief` idempotency — `4960c17`
+- [x] B12 — `partial_resume` cross-check git log — `4305870`
+- [x] B14 — harness SHA in trace meta — `7fce71b`
+- [x] B15 — auto-archive traces on sprint_complete/aborted — `01bb5b4`
+- [x] B16 — document `/decompose-brief` as plan-only path — covered in RECOVERY.md (`20c5476`)
+- [x] B17 — UI Stop end-to-end (subsumed by B1) — `b0b3914`
+- [x] B18 — operational logs out of `/tmp/` — `7919029`
 - [ ] B6 — engineer re-spawn on QA findings (deferred)
-- [ ] B8 — graphify content-addressed cache (deferred)
+- [ ] B8 — graphify cache reuse beyond path move (deferred)
 - [ ] B10 — cost telemetry aggregation (deferred — ABL-0013)
 - [ ] B11 — parallel BL execution (deferred — ABL-0011)
 - [ ] B13 — Triage agent (deferred — ABL-0002)
