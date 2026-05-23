@@ -8,8 +8,12 @@ Layered on top of the existing /api/tasks stream service:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -823,6 +827,39 @@ async def score_bl(repo: str, req: BLActionRequest):
 
 
 # ----------------------- ABL-0001 Orchestrator ------------------------
+#
+# B2 concurrency safeguard: only one /run-brief allowed per repo at a time.
+#
+# Hard assumption: this process runs as a single uvicorn worker. asyncio.Lock
+# is a coroutine-level primitive — it does NOT cross process boundaries. If
+# you set WEB_CONCURRENCY>1 or run multiple uvicorn instances against the
+# same target repo, two `/run-brief` calls can land on different workers and
+# stomp each other. The startup warning below makes this loud.
+_RUN_LOCKS: dict[str, asyncio.Lock] = {}
+_RUN_META: dict[str, dict] = {}  # repo → {run_id, started_at, current_bl, brief_hash}
+
+_workers_str = os.environ.get("WEB_CONCURRENCY", "") or "1"
+try:
+    _workers_count = int(_workers_str)
+except ValueError:
+    _workers_count = 1
+if _workers_count > 1:
+    print(
+        f"[run-brief] WARNING: WEB_CONCURRENCY={_workers_count}; "
+        f"the per-repo concurrency lock only protects within ONE worker. "
+        f"Set WEB_CONCURRENCY=1 for the /run-brief endpoint to be safe.",
+        flush=True,
+    )
+
+
+def _get_run_lock(repo: str) -> asyncio.Lock:
+    """Return the process-local asyncio.Lock for this repo, creating on demand."""
+    lock = _RUN_LOCKS.get(repo)
+    if lock is None:
+        lock = asyncio.Lock()
+        _RUN_LOCKS[repo] = lock
+    return lock
+
 
 class RunBriefRequest(BaseModel):
     brief: str = Field(..., min_length=20)
@@ -849,6 +886,26 @@ async def run_brief(repo: str, req: RunBriefRequest):
     """
     repo_dir = _repo_dir(repo)
 
+    # B2: refuse concurrent run for same repo. Sync `locked()` + acquire are
+    # atomic from a coroutine perspective (no await between them).
+    lock = _get_run_lock(repo)
+    if lock.locked():
+        existing = dict(_RUN_META.get(repo) or {})
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "run-in-progress",
+                "repo": repo,
+                **existing,
+            },
+        )
+    await lock.acquire()
+    run_id = f"run-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
+    _RUN_META[repo] = {
+        "run_id": run_id,
+        "started_at": time.time(),
+    }
+
     def _rk_builder(wt: Worktree, role: str, bl_id: str | None, trace: TraceWriter | None) -> dict:
         # Reuses the same preflight + path conventions as the per-role endpoints.
         return _retrieval_kwargs(wt, role=role, bl_id=bl_id, trace=trace)
@@ -867,12 +924,24 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 stop_on_failure=req.stop_on_failure,
                 stop_on_qa_doctrine_failure=req.stop_on_qa_doctrine_failure,
             ):
+                # Track current_bl from bl.start so 409 responses can name it.
+                if event.get("phase") == "orchestrator.bl.start":
+                    meta = _RUN_META.get(repo)
+                    if meta is not None:
+                        meta["current_bl"] = event.get("bl_id")
                 yield _sse(event)
         except RetrievalUnavailable as e:
             yield _sse({"type": "_meta", "phase": "orchestrator.aborted",
                        "reason": f"retrieval unavailable: {e}"})
         except Exception as exc:  # noqa: BLE001
             yield _sse({"type": "_error", "error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            # B2: release lock + clear meta on every exit path (success, abort,
+            # consumer disconnect). asyncio.Lock dies with the process anyway,
+            # so a kill -9 self-clears.
+            _RUN_META.pop(repo, None)
+            if lock.locked():
+                lock.release()
 
     return StreamingResponse(
         gen(),
