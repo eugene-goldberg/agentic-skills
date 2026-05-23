@@ -33,6 +33,7 @@ Read these in full before any action. They are the project's governance docs and
 | 5 | **`DESIGN_SHORTCOMINGS.md`** | Audit ledger of 25 anomalies + design weaknesses observed during Sprints 1, 2, 3. Tier A (7 known anomalies with clear fixes) + Tier B (18 deeper design shortcomings). Each entry: evidence, root cause, proposed fix, effort estimate, risk. Decision matrix at the bottom. **Read every entry.** |
 | 6 | **`IMPLEMENTATION_PLAN.md`** | The spec for the work you are about to execute. 12 sections, 8 sequenced batches. Per-item: goal, files touched, exact change, risk, mitigation, test, rollback. **This is the contract.** |
 | 7 | **`IMPLEMENTATION_TRACKER.md`** | The live checklist. **Only this file changes as you work.** Update it as each item lands. |
+| 8 | **`ARCHITECTURE_INVARIANTS.md`** | The seven structural rules that govern every component. New shortcomings classify against an invariant FIRST; per-instance patches second. Sprint-4 surfaced A8 (R9 enforcement gap) + A9-candidate (gate subprocess pgroup leak) — both sibling-class violations made visible by this lens. |
 
 ## 3. Current state (what's true RIGHT NOW)
 
