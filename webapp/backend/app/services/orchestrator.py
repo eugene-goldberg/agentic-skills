@@ -56,6 +56,33 @@ def _evt(phase: str, **kwargs) -> dict:
     return e
 
 
+def _qa_commit_landed(repo_dir: Path, bl_id: str, agent_branch: str) -> bool:
+    """B12: confirm a `qa(<bl>...)` commit on agent_branch actually touches
+    .agile-v/qa/<bl>.md.
+
+    Sprint 2/3 partial_resume relied solely on file existence — a half-written
+    QA file from a crashed run would silently bypass real QA. Cross-checking
+    git log catches that case. Returns False on any subprocess error so the
+    safer path (run QA) wins.
+    """
+    import subprocess as _subproc
+    qa_rel = f".agile-v/qa/{bl_id}.md"
+    try:
+        out = _subproc.run(
+            ["git", "-C", str(repo_dir), "log", agent_branch, "--format=%s", "--", qa_rel],
+            capture_output=True, text=True, timeout=5.0, check=False,
+        )
+    except (_subproc.SubprocessError, OSError):
+        return False
+    if out.returncode != 0:
+        return False
+    for subject in (out.stdout or "").splitlines():
+        s = subject.strip()
+        if s.startswith(f"qa({bl_id}") or s.startswith("qa(") and bl_id in s:
+            return True
+    return False
+
+
 def _archive_traces_since(repo_name: str, started_at: datetime, run_id: str) -> int:
     """B15: move trace dirs created during this orchestrator run into
     traces_archive/<run_id>/, keeping the live traces dir clean.
@@ -532,15 +559,33 @@ async def run_brief(
             # still be missing (resume-after-crash). Only short-circuit if the QA
             # report is also already on the branch — otherwise fall through and
             # run QA against the existing engineer work.
+            #
+            # B12: file-existence alone is NOT enough. A QA crash mid-write or
+            # a stale file from a prior aborted run would silently skip real
+            # QA. Additionally require a `qa(<bl>...)` commit on the agent
+            # branch touching the file.
             qa_report = repo_dir / ".agile-v" / "qa" / f"{bl_id}.md"
+            cfg = repo_config_svc.load(repo_dir)
+            qa_committed = _qa_commit_landed(repo_dir, bl_id, cfg.agent_branch)
             if eng_outcome and eng_outcome.get("no_op"):
-                if qa_report.exists():
+                if qa_report.exists() and qa_committed:
                     summary["bls"].append(per_bl)
                     yield _evt("bl.done", bl_id=bl_id, outcome="no_op")
                     continue
-                # Engineer no_op but QA artifacts missing — partial-resume path.
-                yield _evt("partial_resume", bl_id=bl_id,
-                           reason="engineer no_op but .agile-v/qa/<bl>.md missing — running QA on current branch")
+                # Engineer no_op but QA report missing OR uncommitted —
+                # partial-resume path. Reason string distinguishes the cases.
+                if qa_report.exists() and not qa_committed:
+                    reason = (
+                        f"engineer no_op; .agile-v/qa/{bl_id}.md exists but no "
+                        f"qa(...) commit on {cfg.agent_branch} touches it — "
+                        f"running QA on current branch (B12 cross-check)"
+                    )
+                else:
+                    reason = (
+                        f"engineer no_op but .agile-v/qa/{bl_id}.md missing — "
+                        f"running QA on current branch"
+                    )
+                yield _evt("partial_resume", bl_id=bl_id, reason=reason)
                 # Skip reindex (engineer added nothing new) + skip merged check.
                 # Fall through directly to QA below.
             elif not (eng_outcome and eng_outcome.get("merged")):
