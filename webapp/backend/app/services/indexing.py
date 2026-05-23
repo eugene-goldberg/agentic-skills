@@ -38,25 +38,75 @@ async def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None,
     return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
 
 
+def _graphify_cache_dir(repo_path: Path) -> Path:
+    """B3: shared content-addressed cache outside the worktree. Mirror of the
+    helper in langgraph_engine/retrieval/graph.py — duplicated rather than
+    cross-imported to keep webapp/ standalone (per CLAUDE.md subproject
+    boundary)."""
+    import hashlib
+    key = hashlib.sha256(str(repo_path.resolve()).encode("utf-8")).hexdigest()[:16]
+    base = Path.home() / ".cache" / "agentic-skills" / "graphify"
+    base.mkdir(parents=True, exist_ok=True)
+    cache = base / key
+    cache.mkdir(parents=True, exist_ok=True)
+    return cache
+
+
+def _ensure_graphify_symlink(repo_path: Path) -> Path:
+    """B3: pre-create cache + symlink `<repo>/graphify-out` to it.
+
+    graphify CLI has no --out flag; writes to `<arg>/graphify-out/`. Symlinking
+    keeps the worktree clean (one symlink, not 178 AST files) AND preserves
+    graphify's incremental cache across reindex calls.
+    """
+    cache = _graphify_cache_dir(repo_path)
+    out = repo_path / "graphify-out"
+    if out.is_symlink():
+        if out.resolve() != cache.resolve():
+            out.unlink()
+            out.symlink_to(cache)
+    elif out.exists():
+        # Legacy dir from pre-B3 run — promote contents into cache, replace
+        # with symlink.
+        for item in out.iterdir():
+            dst = cache / item.name
+            if dst.exists():
+                continue
+            shutil.move(str(item), str(dst))
+        shutil.rmtree(out, ignore_errors=True)
+        out.symlink_to(cache)
+    else:
+        out.symlink_to(cache)
+    return cache
+
+
 async def run_graphify_update(repo_path: Path) -> dict:
     """`graphify update <repo> --no-cluster` — fast tree-sitter extraction.
 
-    Produces `<repo>/graphify-out/graph.json`.
+    B3: output is redirected via a `<repo>/graphify-out` symlink to
+    `~/.cache/agentic-skills/graphify/<sha256(repo)[:16]>/`. The worktree
+    only ever contains a single symlink; the actual cache lives outside
+    so `git add -A` in agent flows can no longer sweep AST files into
+    QA commits.
     """
     if not shutil.which("graphify"):
         return {"ok": False, "error": "graphify CLI not on PATH (pip install graphifyy)"}
+    cache_dir = _ensure_graphify_symlink(repo_path)
     code, stdout, stderr = await _run(
         ["graphify", "update", str(repo_path), "--no-cluster"],
         cwd=repo_path,
     )
-    graph_path = repo_path / "graphify-out" / "graph.json"
+    # Canonical read path is the cache dir (the symlink resolves there too,
+    # but consumers should not depend on the symlink being present).
+    graph_path = cache_dir / "graph.json"
     summary = {"ok": code == 0, "stdout_tail": stdout.strip().splitlines()[-10:], "stderr_tail": stderr.strip().splitlines()[-5:]}
     if graph_path.exists():
         try:
             g = json.loads(graph_path.read_text())
             summary["nodes"] = len(g.get("nodes", []))
             summary["edges"] = len(g.get("links", []) or g.get("edges", []))
-            summary["graph_path"] = str(graph_path.relative_to(repo_path))
+            summary["graph_path"] = str(graph_path)
+            summary["cache_dir"] = str(cache_dir)
         except Exception as exc:  # noqa: BLE001
             summary["parse_error"] = str(exc)
     if code != 0:

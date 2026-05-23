@@ -120,12 +120,68 @@ class Graph:
         return [{"score": round(s, 3), "label": n.get("label"), "file": n.get("source_file"), "id": n["id"]} for s, n in scored[:k]]
 
 
+def _graphify_cache_dir(repo_root: Path) -> Path:
+    """B3: shared content-addressed cache outside the worktree.
+
+    Keyed by sha256 of the absolute repo path (first 16 hex chars). Each
+    worktree gets its own cache slot — orphan caches from removed worktrees
+    accumulate harmlessly under ~/.cache/agentic-skills/graphify/; operator
+    can `rm -rf` the dir whenever they want a clean rebuild.
+    """
+    import hashlib
+    key = hashlib.sha256(str(repo_root.resolve()).encode("utf-8")).hexdigest()[:16]
+    base = Path.home() / ".cache" / "agentic-skills" / "graphify"
+    base.mkdir(parents=True, exist_ok=True)
+    cache = base / key
+    cache.mkdir(parents=True, exist_ok=True)
+    return cache
+
+
+def _ensure_graphify_symlink(repo_root: Path) -> Path:
+    """B3: pre-create the shared cache + symlink `<repo>/graphify-out` to it.
+
+    The graphify CLI insists on writing to `<arg>/graphify-out/` (no --out
+    flag). Symlinking that path to a shared cache directory:
+      1) keeps the worktree's tree clean (just a single symlink, not 178 AST
+         cache files that swept into Sprint 2 QA commits via `git add -A`)
+      2) preserves graphify's incremental cache (same dir across reindex
+         calls on the same worktree)
+      3) is gitignore-protected anyway (`graphify-out/` skip in the
+         target's .gitignore — belt + suspenders)
+
+    Returns the cache dir.
+    """
+    cache = _graphify_cache_dir(repo_root)
+    out = repo_root / "graphify-out"
+    if out.is_symlink():
+        # Existing symlink — replace if it points elsewhere.
+        if out.resolve() != cache.resolve():
+            out.unlink()
+            out.symlink_to(cache)
+    elif out.exists():
+        # Legacy directory from a pre-B3 run; promote its contents into the
+        # cache (best-effort), then replace with a symlink.
+        import shutil
+        for item in out.iterdir():
+            dst = cache / item.name
+            if dst.exists():
+                continue  # cache wins
+            shutil.move(str(item), str(dst))
+        shutil.rmtree(out, ignore_errors=True)
+        out.symlink_to(cache)
+    else:
+        out.symlink_to(cache)
+    return cache
+
+
 def ensure_indexed(repo_root: Path, *, force: bool = False) -> Path:
-    """Run `graphify update` if graph.json is missing/stale. Returns graph.json path."""
-    graph_path = repo_root / "graphify-out" / "graph.json"
+    """Run `graphify update` if graph.json is missing/stale. Returns graph.json
+    path (canonical cache location, not the symlink).
+    """
+    cache_dir = _ensure_graphify_symlink(repo_root)
+    graph_path = cache_dir / "graph.json"
     if graph_path.exists() and not force:
         return graph_path
-    repo_root.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["graphify", "update", str(repo_root), "--no-cluster"],
         check=True,
