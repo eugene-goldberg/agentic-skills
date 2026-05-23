@@ -15,7 +15,7 @@ These must all pass before Batch 1 starts:
 | Check | Command | Required result |
 |---|---|---|
 | No orchestrator running | `pgrep -f run_orchestrator.py \|\| echo none` | `none` |
-| No live agent claude subprocesses | `ps -ef \| grep -E "claude.*stream-json" \| grep -v claude-mem \| grep -v grep \| wc -l` | `0` |
+| No live agent claude subprocesses | `ps -eo pid,ppid,command \| grep -E "claude.*stream-json" \| grep -v grep \| while read pid ppid rest; do pcmd=$(ps -o command= -p "$ppid" 2>/dev/null); case "$pcmd" in *claude-mem*\|*worker-service.cjs*) ;; *) echo "$pid";; esac; done \| wc -l` (filters claude-mem daemon's children by PPID) | `0` |
 | Uvicorn alive | `lsof -i :8000 -sTCP:LISTEN \| tail -1` | port listener present |
 | No leftover worktrees | `cd target && git worktree list \| wc -l` | `1` (main only) |
 | Milvus healthy | `docker ps --filter name=milvus --format '{{.Status}}'` | `Up … (healthy)` |

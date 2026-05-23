@@ -165,9 +165,15 @@ git worktree prune
 git branch | grep "agent/" | xargs -I {} git branch -D {} 2>/dev/null
 ```
 
-**Check no live claude agent subprocesses (excluding claude-mem daemon):**
+**Check no live claude agent subprocesses (excluding claude-mem daemon AND its spawned children):**
 ```bash
-ps -ef | grep -E "claude.*stream-json" | grep -v grep | grep -v claude-mem | wc -l
+# claude-mem's worker-service.cjs daemon spawns child `claude` processes whose own
+# argv does NOT contain "claude-mem" — they slip past a flat grep -v. Filter by
+# parent-process argv instead.
+ps -eo pid,ppid,command | grep -E "claude.*stream-json" | grep -v grep | while read pid ppid rest; do
+  parent_cmd=$(ps -o command= -p "$ppid" 2>/dev/null)
+  case "$parent_cmd" in *claude-mem*|*worker-service.cjs*) ;; *) echo "$pid $ppid $rest" ;; esac
+done | wc -l
 ```
 
 **Get current v3 HEAD:**
