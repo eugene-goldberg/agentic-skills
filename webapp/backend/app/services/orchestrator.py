@@ -21,6 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -51,6 +54,47 @@ def _evt(phase: str, **kwargs) -> dict:
     e = {"type": "_meta", "phase": f"orchestrator.{phase}"}
     e.update(kwargs)
     return e
+
+
+def _archive_traces_since(repo_name: str, started_at: datetime, run_id: str) -> int:
+    """B15: move trace dirs created during this orchestrator run into
+    traces_archive/<run_id>/, keeping the live traces dir clean.
+
+    Only moves dirs whose meta.json carries `finished_at` — skips any trace
+    whose writer is still mid-write, eliminating race risk against subprocess
+    cleanup. Called from a finally block so it fires on both `sprint_complete`
+    and any `orchestrator.aborted` exit path.
+    """
+    from app.services import traces as traces_mod  # avoid circular at import
+
+    src_root = traces_mod.TRACES_ROOT / traces_mod._slug(repo_name)
+    if not src_root.exists():
+        return 0
+    archive_root = traces_mod.BACKEND_DIR / "traces_archive" / run_id
+    started_str = started_at.strftime("%Y%m%dT%H%M%SZ")
+    moved = 0
+    for child in src_root.iterdir():
+        if not child.is_dir():
+            continue
+        # Trace dir name pattern: <YYYYMMDDTHHMMSSZ>-<role>[-<bl>]-<task_id>
+        ts = child.name.split("-", 1)[0]
+        if len(ts) != 16 or ts < started_str:
+            continue
+        meta = child / "meta.json"
+        try:
+            data = json.loads(meta.read_text())
+        except (OSError, ValueError):
+            continue
+        if "finished_at" not in data:
+            continue  # writer still active — leave in place
+        archive_root.mkdir(parents=True, exist_ok=True)
+        dst = archive_root / child.name
+        try:
+            shutil.move(str(child), str(dst))
+            moved += 1
+        except OSError:
+            pass
+    return moved
 
 
 def _tag(event: dict, step: str, bl_id: str | None = None) -> dict:
@@ -423,114 +467,128 @@ async def run_brief(
         "bls": [],  # [{bl_id, engineer:{merged,no_op}, qa:{merged}, scorer:{doctrine_ok}}]
     }
 
-    yield _evt("start", brief_chars=len(brief), project_name=project_name)
+    # B15: tag this run for trace archival on exit (any path: complete or aborted).
+    run_started_at = datetime.now(timezone.utc)
+    run_id = f"run-{run_started_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
 
-    # ── Step 2-3: initial indexing ─────────────────────────────────────────
-    async for e in _run_indexers(repo_dir, "index_initial"):
-        yield e
+    yield _evt("start", brief_chars=len(brief), project_name=project_name, run_id=run_id)
 
-    # ── Step 4: PO ─────────────────────────────────────────────────────────
-    po_ok = True
-    if not skip_po:
-        yield _evt("po.start")
-        async for e in _po_flow(repo_dir, repo_name, brief, project_name,
-                                timeout_per_role, retrieval_kwargs_builder):
-            if "_orchestrator_outcome" in e:
-                summary["po"] = e
-                po_ok = e.get("doctrine_ok", False)
-                continue
+    try:
+        # ── Step 2-3: initial indexing ─────────────────────────────────────────
+        async for e in _run_indexers(repo_dir, "index_initial"):
             yield e
-        yield _evt("po.done", ok=po_ok)
-        if not po_ok and stop_on_failure:
-            yield _evt("aborted", reason="PO doctrine failed")
-            return
 
-    # ── Step 4 cont: parse backlog ─────────────────────────────────────────
-    bf = backlog_svc.find_backlog(repo_dir)
-    if bf is None:
-        yield _evt("aborted", reason="no BACKLOG.md found after PO phase")
-        return
-    items = backlog_svc.parse_file(bf)
-    ordered = _dep_order(items)
-    if max_bls is not None:
-        ordered = ordered[:max_bls]
-    yield _evt("backlog_parsed", count=len(ordered),
-               bls=[{"id": it.id, "title": it.title,
-                     "deps": str(it.meta.get("dependencies") or "")} for it in ordered])
-
-    # ── Step 5: per-BL loop ────────────────────────────────────────────────
-    for it in ordered:
-        bl_id = it.id
-        per_bl = {"bl_id": bl_id, "title": it.title}
-        yield _evt("bl.start", bl_id=bl_id, title=it.title)
-
-        # Engineer
-        yield _evt("engineer.start", bl_id=bl_id)
-        eng_outcome = None
-        async for e in _engineer_flow(repo_dir, repo_name, bl_id,
-                                       timeout_per_role, retrieval_kwargs_builder):
-            if "_orchestrator_outcome" in e:
-                eng_outcome = e
-                continue
-            yield e
-        per_bl["engineer"] = eng_outcome or {"merged": False}
-        yield _evt("engineer.done", **(eng_outcome or {"bl_id": bl_id}))
-        # R11 no_op: engineer detected work already in codebase. But QA may
-        # still be missing (resume-after-crash). Only short-circuit if the QA
-        # report is also already on the branch — otherwise fall through and
-        # run QA against the existing engineer work.
-        qa_report = repo_dir / ".agile-v" / "qa" / f"{bl_id}.md"
-        if eng_outcome and eng_outcome.get("no_op"):
-            if qa_report.exists():
-                summary["bls"].append(per_bl)
-                yield _evt("bl.done", bl_id=bl_id, outcome="no_op")
-                continue
-            # Engineer no_op but QA artifacts missing — partial-resume path.
-            yield _evt("partial_resume", bl_id=bl_id,
-                       reason="engineer no_op but .agile-v/qa/<bl>.md missing — running QA on current branch")
-            # Skip reindex (engineer added nothing new) + skip merged check.
-            # Fall through directly to QA below.
-        elif not (eng_outcome and eng_outcome.get("merged")):
-            summary["bls"].append(per_bl)
-            yield _evt("bl.done", bl_id=bl_id, outcome="engineer_unmerged")
-            if stop_on_failure:
-                yield _evt("aborted", reason=f"engineer did not merge {bl_id}")
+        # ── Step 4: PO ─────────────────────────────────────────────────────────
+        po_ok = True
+        if not skip_po:
+            yield _evt("po.start")
+            async for e in _po_flow(repo_dir, repo_name, brief, project_name,
+                                    timeout_per_role, retrieval_kwargs_builder):
+                if "_orchestrator_outcome" in e:
+                    summary["po"] = e
+                    po_ok = e.get("doctrine_ok", False)
+                    continue
+                yield e
+            yield _evt("po.done", ok=po_ok)
+            if not po_ok and stop_on_failure:
+                yield _evt("aborted", reason="PO doctrine failed")
                 return
-            continue
-        else:
-            # Reindex post-engineer (only when engineer actually committed)
-            async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}"):
+
+        # ── Step 4 cont: parse backlog ─────────────────────────────────────────
+        bf = backlog_svc.find_backlog(repo_dir)
+        if bf is None:
+            yield _evt("aborted", reason="no BACKLOG.md found after PO phase")
+            return
+        items = backlog_svc.parse_file(bf)
+        ordered = _dep_order(items)
+        if max_bls is not None:
+            ordered = ordered[:max_bls]
+        yield _evt("backlog_parsed", count=len(ordered),
+                   bls=[{"id": it.id, "title": it.title,
+                         "deps": str(it.meta.get("dependencies") or "")} for it in ordered])
+
+        # ── Step 5: per-BL loop ────────────────────────────────────────────────
+        for it in ordered:
+            bl_id = it.id
+            per_bl = {"bl_id": bl_id, "title": it.title}
+            yield _evt("bl.start", bl_id=bl_id, title=it.title)
+
+            # Engineer
+            yield _evt("engineer.start", bl_id=bl_id)
+            eng_outcome = None
+            async for e in _engineer_flow(repo_dir, repo_name, bl_id,
+                                           timeout_per_role, retrieval_kwargs_builder):
+                if "_orchestrator_outcome" in e:
+                    eng_outcome = e
+                    continue
+                yield e
+            per_bl["engineer"] = eng_outcome or {"merged": False}
+            yield _evt("engineer.done", **(eng_outcome or {"bl_id": bl_id}))
+            # R11 no_op: engineer detected work already in codebase. But QA may
+            # still be missing (resume-after-crash). Only short-circuit if the QA
+            # report is also already on the branch — otherwise fall through and
+            # run QA against the existing engineer work.
+            qa_report = repo_dir / ".agile-v" / "qa" / f"{bl_id}.md"
+            if eng_outcome and eng_outcome.get("no_op"):
+                if qa_report.exists():
+                    summary["bls"].append(per_bl)
+                    yield _evt("bl.done", bl_id=bl_id, outcome="no_op")
+                    continue
+                # Engineer no_op but QA artifacts missing — partial-resume path.
+                yield _evt("partial_resume", bl_id=bl_id,
+                           reason="engineer no_op but .agile-v/qa/<bl>.md missing — running QA on current branch")
+                # Skip reindex (engineer added nothing new) + skip merged check.
+                # Fall through directly to QA below.
+            elif not (eng_outcome and eng_outcome.get("merged")):
+                summary["bls"].append(per_bl)
+                yield _evt("bl.done", bl_id=bl_id, outcome="engineer_unmerged")
+                if stop_on_failure:
+                    yield _evt("aborted", reason=f"engineer did not merge {bl_id}")
+                    return
+                continue
+            else:
+                # Reindex post-engineer (only when engineer actually committed)
+                async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}"):
+                    yield e
+
+            # QA
+            yield _evt("qa.start", bl_id=bl_id)
+            qa_outcome = None
+            async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "qa",
+                                                timeout_per_role, retrieval_kwargs_builder):
+                if "_orchestrator_outcome" in e:
+                    qa_outcome = e
+                    continue
+                yield e
+            per_bl["qa"] = qa_outcome or {"merged": False}
+            yield _evt("qa.done", **(qa_outcome or {"bl_id": bl_id}))
+
+            # Reindex post-QA (QA may add characterization tests)
+            async for e in _run_indexers(repo_dir, f"reindex_after_qa.{bl_id}"):
                 yield e
 
-        # QA
-        yield _evt("qa.start", bl_id=bl_id)
-        qa_outcome = None
-        async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "qa",
-                                            timeout_per_role, retrieval_kwargs_builder):
-            if "_orchestrator_outcome" in e:
-                qa_outcome = e
-                continue
-            yield e
-        per_bl["qa"] = qa_outcome or {"merged": False}
-        yield _evt("qa.done", **(qa_outcome or {"bl_id": bl_id}))
+            # Scorer
+            yield _evt("scorer.start", bl_id=bl_id)
+            score_outcome = None
+            async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "scorer",
+                                                timeout_per_role, retrieval_kwargs_builder):
+                if "_orchestrator_outcome" in e:
+                    score_outcome = e
+                    continue
+                yield e
+            per_bl["scorer"] = score_outcome or {}
+            yield _evt("scorer.done", **(score_outcome or {"bl_id": bl_id}))
 
-        # Reindex post-QA (QA may add characterization tests)
-        async for e in _run_indexers(repo_dir, f"reindex_after_qa.{bl_id}"):
-            yield e
+            summary["bls"].append(per_bl)
+            yield _evt("bl.done", bl_id=bl_id, outcome="merged")
 
-        # Scorer
-        yield _evt("scorer.start", bl_id=bl_id)
-        score_outcome = None
-        async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "scorer",
-                                            timeout_per_role, retrieval_kwargs_builder):
-            if "_orchestrator_outcome" in e:
-                score_outcome = e
-                continue
-            yield e
-        per_bl["scorer"] = score_outcome or {}
-        yield _evt("scorer.done", **(score_outcome or {"bl_id": bl_id}))
-
-        summary["bls"].append(per_bl)
-        yield _evt("bl.done", bl_id=bl_id, outcome="merged")
-
-    yield _evt("sprint_complete", summary=summary)
+        yield _evt("sprint_complete", summary=summary)
+    finally:
+        # B15: archive any traces this run produced (clean exit OR aborted OR
+        # consumer disconnect). Silently best-effort — yielding from an async
+        # generator's finally during aclose() is illegal (PEP 525), so we
+        # never try; operators inspect traces_archive/<run_id>/ directly.
+        try:
+            _archive_traces_since(repo_name, run_started_at, run_id)
+        except Exception:
+            pass
