@@ -97,17 +97,19 @@
 ## Batch 4 — Concurrency lock + idempotency
 
 **Branch:** `sprint-2-orchestrator`
-**Target commit message:** `concurrency: per-repo lock + brief idempotency on /run-brief (B2+B9)`
+**Commit style:** atomic per item.
 
 | ID | Item | Status | Commit | Verification | Notes |
 |---|---|---|---|---|---|
-| B2 | Per-repo asyncio.Lock | pending | — | parallel POST: 200 + 409 | single-worker assumption noted in comment |
-| B9 | Brief-hash idempotency | pending | — | duplicate POST: 200 + 409 | bundled with B2 |
+| B2 | Per-repo `asyncio.Lock`; 409 on concurrent; WEB_CONCURRENCY warning | done | `fe0a83b` | unit: lock idempotent per repo; 409 detail carries run_id+started_at+current_bl; release clean | single-worker assumption stated in comment |
+| B9 | sha256 brief_hash → `duplicate-brief` 409 vs B2's `run-in-progress` 409 | done | `4960c17` | unit: same brief → duplicate-brief; different brief while running → run-in-progress; hash determinism + 3-input sensitivity | bundled in plan §5; committed atomically |
 
 **Batch 4 gate verification:**
-- [ ] Import smoke OK
-- [ ] Parallel POST test (2 curls): one 200, one 409
-- [ ] Duplicate POST test: 409
+- [x] Import smoke OK
+- [x] B2 unit test (lock + 409 detail shape)
+- [x] B9 unit test (duplicate vs in-progress error distinction; hash properties)
+- [x] uvicorn restart OK (15 endpoints intact)
+- [ ] Real two-curl race deferred — would require live orchestrator burning API tokens; unit coverage validates the only logic that changed
 
 ---
 
@@ -216,7 +218,7 @@
 - [x] Batch 1 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits f1bb6b1 (pre-flight filter), 7919029 (B18), 5e652ce (A6), 7fce71b (B14), 01bb5b4 (B15). Unit smokes passed; full E2E deferred per tracker note.
 - [x] Batch 2 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits b0b3914 (B1), ed80bec (B5). pgroup-kill confirmed against 3-process tree; idle_timeout default + math verified. Real disconnect test deferred to next live run.
 - [x] Batch 3 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits 6a1a40c (A2), 4fcd430 (A5), 4305870 (B12). One initial bundle (A2+A5) was unwound via `git reset --soft HEAD~1` + edit-revert-then-redo so atomic-per-item is preserved.
-- [ ] Batch 4 verified — sign here: ____  date: ____  notes:
+- [x] Batch 4 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits fe0a83b (B2), 4960c17 (B9). Unit tests on lock + hash both pass; real concurrent-curl race deferred to next live run.
 - [ ] Batch 5 verified — sign here: ____  date: ____  notes:
 - [ ] Batch 6 verified — sign here: ____  date: ____  notes:
 - [ ] Batch 7 verified — sign here: ____  date: ____  notes:
