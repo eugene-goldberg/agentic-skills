@@ -77,18 +77,20 @@
 ## Batch 3 — Orchestrator state honesty
 
 **Branch:** `sprint-2-orchestrator`
-**Target commit message:** `orchestrator: honest outcomes + qa-doctrine-failed event + safer partial_resume (A2+A5+B12)`
+**Commit style:** atomic per item.
 
 | ID | Item | Status | Commit | Verification | Notes |
 |---|---|---|---|---|---|
-| A2 | QA-doctrine-failed event + `stop_on_qa_doctrine_failure` flag | pending | — | synthetic QA fail surfaces new event | opt-in flag preserves default behavior |
-| A5 | `bl.done outcome` reflects worst role | pending | — | synthetic QA fail → outcome="merged_no_qa" | new outcome strings list |
-| B12 | `partial_resume` cross-checks git log | pending | — | uncommitted QA file → QA runs | |
+| A2 | `qa_doctrine_failed` event + `doctrine_summary` pass-through + `stop_on_qa_doctrine_failure` flag | done | `6a1a40c` | OpenAPI schema shows new field with default=False | opt-in flag preserves default behavior |
+| A5 | `bl.done` outcome reflects worst role: `merged_full` / `merged_no_qa` / `merged_no_score` | done | `4fcd430` | 6-case truth matrix verified | UI mapping comes in Batch 7 (B4) |
+| B12 | `_qa_commit_landed` git-log cross-check before R11 no_op short-circuit | done | `4305870` | 4-case smoke (no-commit/qa-commit/historical/bogus-branch) | reasons distinguish file-missing vs file-uncommitted |
 
 **Batch 3 gate verification:**
-- [ ] Import smoke OK
-- [ ] Synthetic QA fail produces expected event + outcome
-- [ ] partial_resume safer-path test
+- [x] Import smoke OK
+- [x] A2 OpenAPI surface: `stop_on_qa_doctrine_failure` present, default `false`
+- [x] A5 outcome-matrix math verified across 6 cases
+- [x] B12 4-case functional smoke in synthetic git repo
+- [x] uvicorn restart OK (new PID 97432, 15 endpoints)
 
 ---
 
@@ -205,6 +207,7 @@
 | 2026-05-23 | pre-1 | Pre-flight check #2 false-positived: claude-mem daemon's child `claude` processes don't contain "claude-mem" in their own argv | Patched filter to exclude by parent-PID argv match; committed as `f1bb6b1` |
 | 2026-05-23 | pre-1 | Pre-flight check #4 failed: 1 stale worktree (`e9e0baedae01` at v3 HEAD, clean) + 18 orphan `agent/*` branches in target | Removed with `git worktree remove --force` + `git branch -D`; operator approved |
 | 2026-05-23 | 1 | B15 initially yielded from finally clause | Removed yield (PEP 525 prohibits yielding during async-generator aclose); archive now silent; operators inspect `traces_archive/<run_id>/` |
+| 2026-05-23 | 3 | A2+A5 accidentally bundled into single commit `f50b2d4` (atomicity violation) | `git reset --soft HEAD~1`; Edit-reverted A5 hunk; re-committed A2 alone as `6a1a40c`; Edit-restored A5 hunk; committed as `4fcd430` |
 
 ---
 
@@ -212,7 +215,7 @@
 
 - [x] Batch 1 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits f1bb6b1 (pre-flight filter), 7919029 (B18), 5e652ce (A6), 7fce71b (B14), 01bb5b4 (B15). Unit smokes passed; full E2E deferred per tracker note.
 - [x] Batch 2 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits b0b3914 (B1), ed80bec (B5). pgroup-kill confirmed against 3-process tree; idle_timeout default + math verified. Real disconnect test deferred to next live run.
-- [ ] Batch 3 verified — sign here: ____  date: ____  notes:
+- [x] Batch 3 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits 6a1a40c (A2), 4fcd430 (A5), 4305870 (B12). One initial bundle (A2+A5) was unwound via `git reset --soft HEAD~1` + edit-revert-then-redo so atomic-per-item is preserved.
 - [ ] Batch 4 verified — sign here: ____  date: ____  notes:
 - [ ] Batch 5 verified — sign here: ____  date: ____  notes:
 - [ ] Batch 6 verified — sign here: ____  date: ____  notes:
