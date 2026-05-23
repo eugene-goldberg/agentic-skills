@@ -9,6 +9,7 @@ Layered on top of the existing /api/tasks stream service:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import time
@@ -861,6 +862,18 @@ def _get_run_lock(repo: str) -> asyncio.Lock:
     return lock
 
 
+def _brief_hash(brief: str, project_name: str, repo: str) -> str:
+    """B9: stable identity for a brief submission. sha256 over the inputs that
+    determine what work the run will do — used to detect duplicate POSTs."""
+    h = hashlib.sha256()
+    h.update(repo.encode("utf-8"))
+    h.update(b"\x00")
+    h.update(project_name.encode("utf-8"))
+    h.update(b"\x00")
+    h.update(brief.encode("utf-8"))
+    return h.hexdigest()
+
+
 class RunBriefRequest(BaseModel):
     brief: str = Field(..., min_length=20)
     project_name: str | None = None
@@ -886,17 +899,33 @@ async def run_brief(repo: str, req: RunBriefRequest):
     """
     repo_dir = _repo_dir(repo)
 
+    # B9: stable identity for THIS submission. Lets B2's 409 distinguish a
+    # duplicate (same brief resubmitted) from a contention (different brief
+    # while one is running) and gives operators a way to dedupe retries.
+    project_name = req.project_name or repo
+    brief_hash = _brief_hash(req.brief, project_name, repo)
+
     # B2: refuse concurrent run for same repo. Sync `locked()` + acquire are
     # atomic from a coroutine perspective (no await between them).
     lock = _get_run_lock(repo)
+    existing_meta = dict(_RUN_META.get(repo) or {})
+    if existing_meta.get("brief_hash") == brief_hash and lock.locked():
+        # Exact same brief is already running → idempotent 409.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "duplicate-brief",
+                "repo": repo,
+                **existing_meta,
+            },
+        )
     if lock.locked():
-        existing = dict(_RUN_META.get(repo) or {})
         raise HTTPException(
             status_code=409,
             detail={
                 "error": "run-in-progress",
                 "repo": repo,
-                **existing,
+                **existing_meta,
             },
         )
     await lock.acquire()
@@ -904,6 +933,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
     _RUN_META[repo] = {
         "run_id": run_id,
         "started_at": time.time(),
+        "brief_hash": brief_hash,
     }
 
     def _rk_builder(wt: Worktree, role: str, bl_id: str | None, trace: TraceWriter | None) -> dict:
@@ -916,7 +946,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 repo_dir=repo_dir,
                 repo_name=repo,
                 brief=req.brief,
-                project_name=req.project_name or repo,
+                project_name=project_name,
                 retrieval_kwargs_builder=_rk_builder,
                 timeout_per_role=req.timeout_per_role,
                 max_bls=req.max_bls,
