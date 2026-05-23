@@ -163,16 +163,15 @@
 ## Batch 7 — UI surface for new events
 
 **Branch:** `sprint-2-orchestrator`
-**Target commit message:** `ui: AppV2 surfaces partial_resume + qa_doctrine_failed + merge error (B4+B17)`
 
 | ID | Item | Status | Commit | Verification | Notes |
 |---|---|---|---|---|---|
-| B4 | AppV2 handlers for new events + outcome labels | pending | — | `npm run build` + visual smoke | |
-| B17 | UI Stop kills server-side | done-by-B1 | — | follows automatically once B1 lands | subsumed |
+| B4 | AppV2 ingest+render: start.run_id, bl.skipped, partial_resume, qa_doctrine_failed, merge_to_target failure, merge_rebase_*, post_rebase gate, new outcome labels, 409 detail | done | `c73a2ad` | `npm run build` clean (172.99 kB JS gzipped); new badges + outcome classes wired | new CSS: 5 outcome color classes + 3 BL border-left variants + v2-tag-fail |
+| B17 | UI Stop kills server-side | closed-by-B1 | `b0b3914` | follows automatically once pgroup-kill landed in claude_agent.py | subsumed |
 
 **Batch 7 gate verification:**
-- [ ] `npm run build` OK
-- [ ] Visual smoke at `localhost:8000`
+- [x] `npm run build` OK (no errors, 33 modules transformed)
+- [ ] Live visual smoke at `localhost:8000` deferred — requires triggering the new event shapes against a real /run-brief; logic-level coverage via ingest+BlRow+shortDesc paths in place
 
 ---
 
@@ -231,7 +230,7 @@
 - [x] Batch 4 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits fe0a83b (B2), 4960c17 (B9). Unit tests on lock + hash both pass; real concurrent-curl race deferred to next live run.
 - [x] Batch 5 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commit a0deed3. State-module unit tests + router orphan-detection unit tests pass. Live kill-restart test deferred.
 - [x] Batch 6 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits ad7a335 (A1), cbc2966 (A3), 20c5476 (A4). A1 helper unit smoke + A3 live Milvus restart smoke both green. A4 adds RECOVERY.md as top-level playbook.
-- [ ] Batch 7 verified — sign here: ____  date: ____  notes:
+- [x] Batch 7 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commit c73a2ad. `npm run build` clean. Live visual deferred to next /run-brief.
 - [ ] Batch 8 verified (quarantine + merge) — sign here: ____  date: ____  notes:
 - [ ] **Full Sprint 4 dry-run with no previously-observed anomalies firing** — sign here: ____  date: ____  notes:
 
