@@ -937,6 +937,10 @@ class RunBriefRequest(BaseModel):
     # aborts the sprint (instead of silently being marked merged_no_qa
     # and the loop continuing). Default False preserves prior behavior.
     stop_on_qa_doctrine_failure: bool = False
+    # A4: skip BLs until this id, then resume. Convenience for backfilling a
+    # specific BL after a mid-sprint scorer/qa abort (e.g. Sprint 3 BL-0002
+    # had no scorer because the orchestrator died during reindex).
+    start_bl: str | None = None
 
 
 @router.post("/{repo}/run-brief")
@@ -1041,6 +1045,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 # state file, trace archive dir, and 409 detail all line up.
                 run_id=run_id,
                 brief_hash=brief_hash,
+                start_bl=req.start_bl,
             ):
                 # Track current_bl from bl.start so 409 responses can name it.
                 if event.get("phase") == "orchestrator.bl.start":

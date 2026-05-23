@@ -580,6 +580,7 @@ async def run_brief(
     stop_on_qa_doctrine_failure: bool = False,
     run_id: str | None = None,
     brief_hash: str | None = None,
+    start_bl: str | None = None,
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -664,8 +665,20 @@ async def run_brief(
         _checkpoint(current_bl=None)  # A7: first checkpoint after PO+parse
 
         # ── Step 5: per-BL loop ────────────────────────────────────────────────
+        # A4: when `start_bl` is set, skip BLs in dep order until we reach it.
+        # Convenience for backfilling a specific BL after a mid-sprint abort
+        # (e.g. Sprint 3 BL-0002 had no scorer because the orchestrator died
+        # mid-reindex). Operator passes start_bl="BL-0002" + skip_po=true to
+        # resume the scorer for that BL onward.
+        _reached_start_bl = start_bl is None
         for it in ordered:
             bl_id = it.id
+            if not _reached_start_bl:
+                if bl_id == start_bl:
+                    _reached_start_bl = True
+                else:
+                    yield _evt("bl.skipped", bl_id=bl_id, reason=f"before start_bl={start_bl}")
+                    continue
             per_bl = {"bl_id": bl_id, "title": it.title}
             yield _evt("bl.start", bl_id=bl_id, title=it.title)
             _checkpoint(current_bl=bl_id)  # A7: mark which BL is in flight
