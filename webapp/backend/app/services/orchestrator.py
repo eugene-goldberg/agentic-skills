@@ -405,7 +405,10 @@ async def _qa_or_scorer_flow(
                 yield _tag({"type": "_meta", "phase": "awaiting_review",
                             "reason": gate.get("reason")}, role, bl_id)
         yield {"_orchestrator_outcome": True, "role": role, "bl_id": bl_id,
-               "merged": merged, "doctrine_ok": validation["ok"]}
+               "merged": merged, "doctrine_ok": validation["ok"],
+               # A2: surface doctrine summary so the per-BL loop can emit
+               # qa_doctrine_failed with diagnostic detail.
+               "doctrine_summary": validation.get("summary")}
     finally:
         if trace is not None:
             trace.close()
@@ -454,6 +457,7 @@ async def run_brief(
     max_bls: int | None = None,
     skip_po: bool = False,
     stop_on_failure: bool = True,
+    stop_on_qa_doctrine_failure: bool = False,
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -562,6 +566,25 @@ async def run_brief(
                 yield e
             per_bl["qa"] = qa_outcome or {"merged": False}
             yield _evt("qa.done", **(qa_outcome or {"bl_id": bl_id}))
+
+            # A2: QA gave up on doctrine after 2 retries → surface as a
+            # distinct failure event (the prior code silently swallowed this
+            # and labeled the BL "merged"). Default behavior is to continue;
+            # opt-in via stop_on_qa_doctrine_failure aborts the sprint.
+            qa_doc_ok = bool(qa_outcome and qa_outcome.get("doctrine_ok"))
+            qa_merged = bool(qa_outcome and qa_outcome.get("merged"))
+            if not qa_doc_ok and not qa_merged:
+                yield _evt(
+                    "qa_doctrine_failed",
+                    bl_id=bl_id,
+                    summary=(qa_outcome or {}).get("doctrine_summary"),
+                )
+                if stop_on_qa_doctrine_failure:
+                    summary["bls"].append(per_bl)
+                    yield _evt("bl.done", bl_id=bl_id, outcome="merged_no_qa")
+                    yield _evt("aborted",
+                               reason=f"QA doctrine failed for {bl_id} (stop_on_qa_doctrine_failure)")
+                    return
 
             # Reindex post-QA (QA may add characterization tests)
             async for e in _run_indexers(repo_dir, f"reindex_after_qa.{bl_id}"):

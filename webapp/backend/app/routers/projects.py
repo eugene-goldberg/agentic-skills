@@ -831,6 +831,10 @@ class RunBriefRequest(BaseModel):
     max_bls: int | None = Field(None, ge=1, le=50)
     skip_po: bool = False
     stop_on_failure: bool = True
+    # A2: when True, a BL whose QA gives up on doctrine after 2 retries
+    # aborts the sprint (instead of silently being marked merged_no_qa
+    # and the loop continuing). Default False preserves prior behavior.
+    stop_on_qa_doctrine_failure: bool = False
 
 
 @router.post("/{repo}/run-brief")
@@ -861,6 +865,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 max_bls=req.max_bls,
                 skip_po=req.skip_po,
                 stop_on_failure=req.stop_on_failure,
+                stop_on_qa_doctrine_failure=req.stop_on_qa_doctrine_failure,
             ):
                 yield _sse(event)
         except RetrievalUnavailable as e:
