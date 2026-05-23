@@ -28,10 +28,44 @@ import asyncio
 import json
 import os
 import shutil
+import signal
 import sys
 import tempfile
 from pathlib import Path
 from typing import AsyncIterator
+
+
+async def _kill_pgroup(proc: asyncio.subprocess.Process, grace_seconds: float = 10.0) -> None:
+    """B1: terminate the subprocess AND its descendants via the process group.
+
+    `proc.kill()` only signals the immediate child, leaking any MCP servers
+    or shell helpers it spawned. We spawn claude with `preexec_fn=os.setsid`
+    so the whole tree shares a process group; this helper signals that pgroup.
+    Best-effort — never raises.
+    """
+    if proc.returncode is not None:
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=grace_seconds)
+        return
+    except asyncio.TimeoutError:
+        pass
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        pass
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]  # webapp/backend/
 RETRIEVAL_SERVER_MODULE = "mcp_servers.retrieval_server"
@@ -229,6 +263,10 @@ async def stream_agent_task(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        # B1: spawn in a new session/process-group so we can pgroup-kill the
+        # whole subtree (claude + MCP servers + any shell helpers) on cleanup
+        # rather than leaking children when SSE disconnects.
+        start_new_session=True,
     )
 
     async def _drain_stderr() -> None:
@@ -260,7 +298,7 @@ async def stream_agent_task(
                         timeout=timeout_seconds,
                     )
                 except asyncio.TimeoutError:
-                    proc.kill()
+                    await _kill_pgroup(proc)
                     evt = {"type": "_error", "error": f"agent timed out after {timeout_seconds}s"}
                     if trace is not None:
                         trace.write_event(evt)
@@ -303,7 +341,7 @@ async def stream_agent_task(
                 yield evt
 
                 if budget_exceeded:
-                    proc.kill()
+                    await _kill_pgroup(proc)
                     bud_evt = {
                         "type": "_meta",
                         "phase": "retrieval",
@@ -322,7 +360,7 @@ async def stream_agent_task(
                     return
 
                 if pregrounding_violated:
-                    proc.kill()
+                    await _kill_pgroup(proc)
                     viol_evt = {
                         "type": "_meta",
                         "phase": "pre_grounding_violation",
@@ -340,8 +378,17 @@ async def stream_agent_task(
                     yield viol_evt
                     return
         finally:
-            await proc.wait()
-            stderr_task.cancel()
+            # B1: if proc is still alive when we hit finally (cancelled,
+            # GeneratorExit, exception), pgroup-kill before waiting so the
+            # subsequent reap never blocks indefinitely.
+            if proc.returncode is None:
+                await _kill_pgroup(proc)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
+            if not stderr_task.done():
+                stderr_task.cancel()
             duration = loop.time() - start
             exit_evt = {
                 "type": "_meta",
@@ -351,14 +398,25 @@ async def stream_agent_task(
             }
             if trace is not None:
                 trace.write_event(exit_evt)
-            yield exit_evt
+            # On GeneratorExit (consumer disconnect), yielding raises — the
+            # trace already captured the exit, so skip silently.
+            try:
+                yield exit_evt
+            except GeneratorExit:
+                pass
     except Exception as exc:  # noqa: BLE001
-        proc.kill()
+        await _kill_pgroup(proc)
         err_evt = {"type": "_error", "error": f"{type(exc).__name__}: {exc}"}
         if trace is not None:
             trace.write_event(err_evt)
         yield err_evt
     finally:
+        # B1: guarantee no orphan subprocess on any exit path — including
+        # consumer-cancelled (SSE disconnect → GeneratorExit) and unhandled
+        # exceptions. _kill_pgroup is a no-op if proc has already exited.
+        await _kill_pgroup(proc)
+        if stderr_task is not None and not stderr_task.done():
+            stderr_task.cancel()
         if mcp_config_path is not None:
             try:
                 mcp_config_path.unlink()
