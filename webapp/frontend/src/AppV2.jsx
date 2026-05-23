@@ -95,7 +95,7 @@ export function AppV2() {
     if (phase.startsWith("orchestrator.")) {
       const key = phase.slice("orchestrator.".length);
       if (key === "start") {
-        setStage("preflight", { status: "done" });
+        setStage("preflight", { status: "done", detail: { run_id: evt.run_id } });
         return;
       }
       if (key === "index_initial.start") { setStage("index_initial", { status: "running" }); return; }
@@ -111,7 +111,39 @@ export function AppV2() {
         return;
       }
       if (key === "bl.start") { upsertBl(blId, { status: "running", title: evt.title }); return; }
-      if (key === "bl.done") { upsertBl(blId, { status: "done", outcome: evt.outcome }); return; }
+      // B4: bl.done outcome may be merged_full / merged_no_qa / merged_no_score /
+      // no_op / engineer_unmerged / merged (legacy). All flow into b.outcome
+      // for the badge; BlRow color-codes via outcomeClass below.
+      if (key === "bl.done") {
+        const failed = ["engineer_unmerged"].includes(evt.outcome);
+        const warned = ["merged_no_qa", "merged_no_score"].includes(evt.outcome);
+        upsertBl(blId, {
+          status: failed ? "failed" : (warned ? "warned" : "done"),
+          outcome: evt.outcome,
+        });
+        return;
+      }
+      // A4: backfill-mode skip — BL was passed-over because start_bl pointed elsewhere.
+      if (key === "bl.skipped") {
+        upsertBl(blId, { status: "skipped", outcome: "skipped", skip_reason: evt.reason });
+        return;
+      }
+      // B12: partial_resume — engineer no_op but QA missing/uncommitted; record
+      // the reason on the BL row so operator sees the resume path was taken.
+      if (key === "partial_resume") {
+        upsertBl(blId, { partial_resume: true, partial_resume_reason: evt.reason });
+        return;
+      }
+      // A2: QA gave up on doctrine — distinct from "qa.done failed" because
+      // the doctrine validator's `summary` carries diagnostic detail.
+      if (key === "qa_doctrine_failed") {
+        setBlStep(blId, "qa", {
+          status: "failed",
+          doctrine_failed: true,
+          doctrine_summary: evt.summary,
+        });
+        return;
+      }
       if (key.startsWith("engineer.")) {
         const sub = key.slice("engineer.".length);
         if (sub === "start") setBlStep(blId, "engineer", { status: "running" });
@@ -154,16 +186,40 @@ export function AppV2() {
 
     // per-role events carrying orchestrator_step + bl_id are reflected as detail
     if (step && blId) {
+      const stepKey = step === "qa" ? "qa" : (step === "scorer" ? "scorer" : "engineer");
       // Surface short status from interesting per-role phases
       if (phase === "regression_gate") {
-        setBlStep(blId, step === "qa" ? "qa" : "engineer",
-                  { gate_kind: evt.kind, gate_ok: evt.ok });
+        // A1: regression_gate may carry post_rebase=true (gate re-ran on the
+        // freshly-rebased SHA); show it as a distinct badge.
+        setBlStep(blId, stepKey, {
+          gate_kind: evt.kind,
+          gate_ok: evt.ok,
+          ...(evt.post_rebase ? { gate_post_rebase: true } : {}),
+        });
       }
-      if (phase === "merge_to_target" && evt.ok) {
-        // already captured at done
+      // B4: surface merge_to_target failures with their kind + error so the
+      // detail rail can show WHY a merge failed (non_ff, error, post-rebase
+      // gate failure, etc.).
+      if (phase === "merge_to_target" && !evt.ok) {
+        setBlStep(blId, stepKey, {
+          merge_failed: true,
+          merge_kind: evt.kind,
+          merge_error: evt.error,
+        });
+      }
+      // A1: the three rebase-recovery phases — render as a small badge cluster
+      // on the relevant step so the operator can see the auto-rebase ran.
+      if (phase === "merge_rebase_attempt") {
+        setBlStep(blId, stepKey, { rebase_attempt: true });
+      }
+      if (phase === "merge_rebase_succeeded") {
+        setBlStep(blId, stepKey, { rebase_succeeded: true });
+      }
+      if (phase === "merge_rebase_failed") {
+        setBlStep(blId, stepKey, { rebase_failed: true, rebase_error: evt.error });
       }
       if (phase === "awaiting_review") {
-        setBlStep(blId, step, { awaiting: true, reason: evt.reason });
+        setBlStep(blId, stepKey, { awaiting: true, reason: evt.reason });
       }
     }
   }
@@ -187,7 +243,20 @@ export function AppV2() {
         ingest(evt);
       }
     } catch (e) {
-      ingest({ type: "_error", error: e.message || String(e), phase: "orchestrator.aborted" });
+      // B2/B9/A7: the router returns HTTP 409 with structured detail for
+      // run-in-progress, duplicate-brief, and orphaned-run-detected. Surface
+      // the detail to the detail rail instead of just the bare string.
+      const detail = e && e.body && e.body.detail;
+      if (detail && typeof detail === "object") {
+        ingest({
+          type: "_meta",
+          phase: "orchestrator.aborted",
+          reason: detail.error || "409",
+          detail,
+        });
+      } else {
+        ingest({ type: "_error", error: e.message || String(e), phase: "orchestrator.aborted" });
+      }
     } finally {
       setRunning(false);
       abortRef.current = null;
@@ -285,11 +354,25 @@ function StageRow({ k, st, onClick }) {
 
 function BlRow({ b, onClick }) {
   const steps = ["engineer", "reindex_e", "qa", "reindex_q", "scorer"];
+  // B4: outcome→visual-class map for the truthful outcome labels from A5.
+  const outcomeClass = (() => {
+    switch (b.outcome) {
+      case "merged_full":    return "v2-outcome-ok";
+      case "merged":         return "v2-outcome-ok"; // legacy
+      case "no_op":          return "v2-outcome-noop";
+      case "merged_no_qa":   return "v2-outcome-warn";
+      case "merged_no_score":return "v2-outcome-warn";
+      case "engineer_unmerged": return "v2-outcome-fail";
+      case "skipped":        return "v2-outcome-skipped";
+      default:               return "";
+    }
+  })();
   return (
     <div className={`v2-bl v2-${b.status || "pending"}`}>
       <div className="v2-bl-head" onClick={() => onClick("")}>
         <strong>{b.id}</strong> <span className="v2-bl-title">{b.title}</span>
-        <span className="v2-bl-outcome">{b.outcome || b.status || "pending"}</span>
+        <span className={`v2-bl-outcome ${outcomeClass}`}>{b.outcome || b.status || "pending"}</span>
+        {b.partial_resume ? <span className="v2-tag-sm" title={b.partial_resume_reason}>resume</span> : null}
       </div>
       <div className="v2-bl-steps">
         {steps.map((s) => {
@@ -299,8 +382,14 @@ function BlRow({ b, onClick }) {
               <span className="v2-dot v2-dot-sm" />
               <span>{s}</span>
               {st.gate_kind ? <span className="v2-tag-sm">{st.gate_kind}</span> : null}
+              {st.gate_post_rebase ? <span className="v2-tag-sm" title="gate re-ran after auto-rebase">post-rebase</span> : null}
               {st.no_op ? <span className="v2-tag-sm">no-op</span> : null}
               {st.awaiting ? <span className="v2-tag-sm">awaiting</span> : null}
+              {st.doctrine_failed ? <span className="v2-tag-sm v2-tag-fail" title={st.doctrine_summary || ""}>doctrine-fail</span> : null}
+              {st.rebase_attempt && !st.rebase_succeeded && !st.rebase_failed ? <span className="v2-tag-sm">rebasing</span> : null}
+              {st.rebase_succeeded ? <span className="v2-tag-sm">rebased</span> : null}
+              {st.rebase_failed ? <span className="v2-tag-sm v2-tag-fail" title={st.rebase_error || ""}>rebase-fail</span> : null}
+              {st.merge_failed ? <span className="v2-tag-sm v2-tag-fail" title={st.merge_error || ""}>{st.merge_kind || "merge-fail"}</span> : null}
             </div>
           );
         })}
@@ -310,10 +399,19 @@ function BlRow({ b, onClick }) {
 }
 
 function shortDesc(e) {
-  if (e.type === "_error") return e.error;
+  if (e.type === "_error") return `${e.kind ? e.kind + ": " : ""}${e.error}`;
+  if (e.phase === "orchestrator.start") return e.run_id || "";
   if (e.phase === "orchestrator.backlog_parsed") return `${e.count} BLs`;
-  if (e.phase === "regression_gate") return `gate=${e.kind} ok=${e.ok}`;
-  if (e.phase === "merge_to_target") return `merged=${e.ok}`;
+  if (e.phase === "orchestrator.bl.done") return `outcome=${e.outcome}`;
+  if (e.phase === "orchestrator.bl.skipped") return e.reason || "";
+  if (e.phase === "orchestrator.partial_resume") return (e.reason || "").slice(0, 80);
+  if (e.phase === "orchestrator.qa_doctrine_failed") return `${e.bl_id} — give up`;
+  if (e.phase === "orchestrator.aborted") return e.reason || (e.detail && e.detail.error) || "";
+  if (e.phase === "regression_gate") return `gate=${e.kind} ok=${e.ok}${e.post_rebase ? " (post-rebase)" : ""}`;
+  if (e.phase === "merge_to_target") return `merged=${e.ok}${e.kind ? ` kind=${e.kind}` : ""}`;
+  if (e.phase === "merge_rebase_attempt") return `→ ${e.target_ref}`;
+  if (e.phase === "merge_rebase_succeeded") return "rebased ok";
+  if (e.phase === "merge_rebase_failed") return (e.error || "").slice(0, 80);
   if (e.phase === "doctrine_check") return `${e.kind} attempts=${e.attempts ?? e.attempt ?? "?"}`;
   if (e.phase === "worktree_ready") return e.role || "";
   if (e.summary) return typeof e.summary === "string" ? e.summary.slice(0, 80) : "";

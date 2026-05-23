@@ -182,6 +182,16 @@ code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 .v2-bl-steps { display: flex; gap: 12px; margin-top: 4px; padding-left: 12px; }
 .v2-sub { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #777; cursor: pointer; }
 .v2-tag-sm { font-size: 10px; background: #eee; padding: 1px 4px; border-radius: 2px; color: #555; }
+.v2-tag-fail { background: #fde7e7; color: #a00; }
+/* B4: outcome color-coding (A5 truthful labels) */
+.v2-outcome-ok      { color: #0a7d12; font-weight: 600; }
+.v2-outcome-noop    { color: #888; font-style: italic; }
+.v2-outcome-warn    { color: #a36100; font-weight: 600; background: #fff6e0; padding: 1px 4px; border-radius: 2px; }
+.v2-outcome-fail    { color: #a00; font-weight: 600; background: #fde7e7; padding: 1px 4px; border-radius: 2px; }
+.v2-outcome-skipped { color: #888; }
+.v2-bl.v2-skipped { opacity: 0.55; }
+.v2-bl.v2-warned  { border-left: 3px solid #d4a200; }
+.v2-bl.v2-failed  { border-left: 3px solid #a00; }
 
 .v2-detail { background: #1a1a1a; color: #eee; font-size: 11px; padding: 8px; border-radius: 4px; max-height: 600px; overflow: auto; white-space: pre-wrap; }
 
