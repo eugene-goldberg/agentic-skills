@@ -188,6 +188,7 @@ async def stream_agent_task(
     repo_path: str | Path,
     *,
     timeout_seconds: int = 1800,
+    idle_timeout: int | None = 600,
     allowed_tools: str = "Bash,Read,Write,Edit",
     reference_repo: str | Path | None = None,
     target_repo: str | Path | None = None,
@@ -290,16 +291,31 @@ async def stream_agent_task(
     try:
         assert proc.stdout is not None
         try:
+            # B5: per-readline timeout = min(idle_timeout, timeout_seconds).
+            # idle_timeout=None preserves prior behavior (timeout_seconds only).
+            effective_timeout = (
+                min(idle_timeout, timeout_seconds) if idle_timeout is not None
+                else timeout_seconds
+            )
             while True:
                 # readline with timeout so a hung claude process doesn't hang us.
                 try:
                     raw = await asyncio.wait_for(
                         proc.stdout.readline(),
-                        timeout=timeout_seconds,
+                        timeout=effective_timeout,
                     )
                 except asyncio.TimeoutError:
                     await _kill_pgroup(proc)
-                    evt = {"type": "_error", "error": f"agent timed out after {timeout_seconds}s"}
+                    kind = "idle_timeout" if (idle_timeout is not None and idle_timeout <= timeout_seconds) else "wall_timeout"
+                    evt = {
+                        "type": "_error",
+                        "error": (
+                            f"agent silent for {effective_timeout}s "
+                            f"({kind}; idle={idle_timeout} wall={timeout_seconds})"
+                        ),
+                        "kind": kind,
+                        "idle_seconds": effective_timeout,
+                    }
                     if trace is not None:
                         trace.write_event(evt)
                     yield evt
