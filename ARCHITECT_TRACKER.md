@@ -30,14 +30,14 @@
 
 | ID | Item | Status | Commit | Verification |
 |---|---|---|---|---|
-| A-1 | `ARCHITECTURE_INVARIANTS.md` at repo root (7 invariants) | pending | — | file exists; cross-references existing A/B items |
-| A-2 | 7 architectural memory files + MEMORY.md index update | pending | — | `ls .claude/memory/arch_*.md \| wc -l` returns 7 |
-| A-3 | CONTINUATION_PROMPT.md cites invariants doc | pending | — | mandatory-reading section updated |
+| A-1 | `ARCHITECTURE_INVARIANTS.md` at repo root (7 invariants) | done | `658dcb1` | 371 LOC; back-maps 21 A/B items |
+| A-2 | 7 architectural memory files + MEMORY.md index update | done | `a50026a` | `ls .claude/memory/arch_*.md \| wc -l` = 7; index has 7 new lines |
+| A-3 | CONTINUATION_PROMPT.md cites invariants doc | done | `a2fa12a` | mandatory-reading bumped from 7 to 8 |
 
 **Batch A gate:**
-- [ ] All 3 files committed
-- [ ] No code paths touched
-- [ ] No uvicorn restart needed
+- [x] All 3 files committed
+- [x] No code paths touched
+- [x] No uvicorn restart needed (Sprint 4 unaffected)
 
 ---
 
@@ -113,7 +113,7 @@ After all four batches land, one final exercise validates the loop:
 
 ## Sign-off
 
-- [ ] Batch A verified — sign: ____  date: ____
+- [x] Batch A verified — sign: claude (Opus 4.7)  date: 2026-05-23  notes: 658dcb1 + a50026a + a2fa12a. Docs-only; Sprint 4 unaffected throughout.
 - [ ] Batch B verified — sign: ____  date: ____
 - [ ] Batch C verified — sign: ____  date: ____
 - [ ] Batch D verified — sign: ____  date: ____
