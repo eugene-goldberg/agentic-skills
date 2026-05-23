@@ -108,3 +108,17 @@ with urllib.request.urlopen(req, timeout=None) as resp:
         if phase in ("assistant", "user", "system", "tool_use", "tool_result"):
             continue
         emit(f"[{time.strftime('%H:%M:%S')}] {phase:48} {bl:9} {extra}")
+
+        # A6: on any failure-shaped event, dump the full event JSON so no
+        # diagnostic data is lost to formatter omissions.
+        ok = evt.get("ok")
+        is_failure_phase = (
+            phase == "orchestrator.aborted"
+            or phase.endswith("_error")
+            or (phase in ("merge_to_target", "regression_gate") and ok is False)
+        )
+        if is_failure_phase:
+            try:
+                emit(f"[{time.strftime('%H:%M:%S')}] FULL_EVENT {json.dumps(evt)[:1500]}")
+            except Exception as exc:
+                emit(f"[{time.strftime('%H:%M:%S')}] FULL_EVENT <dump error: {exc}>")
