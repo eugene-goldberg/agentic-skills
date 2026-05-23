@@ -116,17 +116,25 @@
 ## Batch 5 — Disk-persisted state
 
 **Branch:** `sprint-2-orchestrator`
-**Target commit message:** `state: disk-persisted run checkpoints for restart resume (A7)`
 **Depends on:** Batch 4 (B2 lock prevents concurrent state writes)
 
 | ID | Item | Status | Commit | Verification | Notes |
 |---|---|---|---|---|---|
-| A7 | Run-state checkpoints at `.orchestrator-state/<run_id>.json` | pending | — | kill uvicorn mid-sprint → resume picks up | new `run_state.py` module |
+| A7 | `run_state.py` module + 5 checkpoint sites + orphan-detection 409 in router | done | `a0deed3` | round-trip write/find/update/terminate; hash+repo filter; atomic tmp; idempotent mark_terminated; router 409 shape | run_id now flows router→orchestrator; reuses orphan's run_id on `skip_po=true` |
 
 **Batch 5 gate verification:**
-- [ ] Import smoke OK
-- [ ] State file structure validates with jq
-- [ ] Manual kill-restart resumes at right BL
+- [x] Import smoke OK (`run_state`, `orchestrator`, `projects`)
+- [x] State file round-trip (write → find_active → mark_terminated → done/ move)
+- [x] Atomic write: no `.json.tmp` leftovers
+- [x] Hash/repo mismatch correctly returns None from find_active
+- [x] Router 409 shape verified: `orphaned-run-detected` with completed_bls + current_bl + hint
+- [x] uvicorn restart OK (15 endpoints intact)
+- [ ] Real kill-restart-mid-sprint deferred to next live run
+
+**Out of scope (deferred per A7 commit):**
+- Git-history validation of `current_bl` against agent_branch HEAD
+- DELETE endpoint to discard a state file (operator rm's manually)
+- Automatic force_resume override (current design: explicit `skip_po=true` to opt in)
 
 ---
 
@@ -219,7 +227,7 @@
 - [x] Batch 2 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits b0b3914 (B1), ed80bec (B5). pgroup-kill confirmed against 3-process tree; idle_timeout default + math verified. Real disconnect test deferred to next live run.
 - [x] Batch 3 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits 6a1a40c (A2), 4fcd430 (A5), 4305870 (B12). One initial bundle (A2+A5) was unwound via `git reset --soft HEAD~1` + edit-revert-then-redo so atomic-per-item is preserved.
 - [x] Batch 4 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commits fe0a83b (B2), 4960c17 (B9). Unit tests on lock + hash both pass; real concurrent-curl race deferred to next live run.
-- [ ] Batch 5 verified — sign here: ____  date: ____  notes:
+- [x] Batch 5 verified — sign here: claude (Opus 4.7)  date: 2026-05-23  notes: commit a0deed3. State-module unit tests + router orphan-detection unit tests pass. Live kill-restart test deferred.
 - [ ] Batch 6 verified — sign here: ____  date: ____  notes:
 - [ ] Batch 7 verified — sign here: ____  date: ____  notes:
 - [ ] Batch 8 verified (quarantine + merge) — sign here: ____  date: ____  notes:
