@@ -94,6 +94,22 @@ These are bugs we have directly observed. Each has a clear fix and a clear test 
 
 ---
 
+### A8 — R9 graph-grounding floor is advisory, not enforced
+
+**Evidence:** Sprint 4 BL-0006 engineer trace `traces/full-stack-fastapi-template/20260523T223104Z-engineer-BL-0006-25a87d49309c/retrieval.jsonl` shows 3× `semantic_search` + 1× `target_status` + **0× `graph_*` calls**. The `doctrine_check` event returned `complete=true` on attempt=1 — meaning the validator never flagged the missing graph grounding. R9 in CLAUDE.md states ">=1 graph_* tool call required per role" but the per-role audit log is not actually consulted at validation time.
+
+**Cause:** `doctrine_validator.py` checks artifact paths, file sizes, R5 grounded-count via the audit log, R5b citations, and R7/R8 numeric ceilings — but no code path reads `retrieval.jsonl`, counts tool=='graph_*', and refuses if count<1. R5's grounded-count and R9's graph-specific floor are conflated in the prompt language but split in enforcement: Tier 1.5 (`claude_agent.py:stream_agent_task`) counts grounded calls via `GROUNDED_RETRIEVAL_TOOLS` which DOES include graph tools — but only enforces the *total* grounded count, not a per-family floor. An agent can satisfy R5 entirely through `semantic_search` and still pass.
+
+**Fix:** Add a `validate_r9(trace_retrieval_path)` helper in `doctrine_validator.py` that opens `retrieval.jsonl`, counts entries whose `tool` startswith `mcp__retrieval__graph_`, and adds `r9_graph_call_count < 1` → `missing.append("R9 graph-grounding: no graph_* calls in retrieval log")`. Wire into `validate_engineer` / `validate_qa` / `validate_scorer` (PO is exempt because backlog-decomposition workloads sometimes have nothing to traverse). When triggered, the existing R10.1 retry loop kicks in with a focused fix prompt naming exactly which graph_* tool family is missing.
+
+**Effort:** ~30 LOC (helper + 3 call sites + a one-line fix prompt template). **Risk:** low (additive validation; failure mode is "agent re-spawns with focused prompt", which is the well-tested R10.1 path). Edge case: if `retrieval.jsonl` doesn't exist (MCP not wired), fall back to skip rather than false-fail — same defensive pattern A6 uses.
+
+**Test:** synthetic engineer flow that makes only `semantic_search` calls → expect doctrine_check kind=incomplete with `summary.missing` containing the R9 message → R10.1 retry → second attempt with one `graph_neighbors` call → complete.
+
+**Why this surfaced in Sprint 4:** BL-0006 is the first *frontend-only* BL (notification bell + dropdown panel). The engineer's intuition was "this is React component work, the graph won't tell me much" — and the doctrine validator silently agreed. For a pure-UI BL that may be defensible, but the rule as documented in CLAUDE.md says it's a floor. Either the rule needs softening for UI-only BLs or enforcement needs to catch up. This entry argues for the latter.
+
+---
+
 ### A7 — Orchestrator state is in-memory only
 
 **Evidence:** Twice in Sprint 3, the orchestrator process died (Milvus crash → endpoint exception, then operator-induced abort after M1 commit) and we lost queue position. Recovery relied on `skip_po + R11 no-op + partial_resume` to reconstruct from git history.
@@ -320,7 +336,8 @@ These are deeper than Tier A. Numbered by severity (HIGH first within tier).
 
 | Set | Items | Why |
 |---|---|---|
-| **(a) "Now" set + easy wins (recommended)** | A1, A2, A3, A5, A6, A7, B1, B2, B3, B4, B5, B12, B7, B14, B15, B17, B18 | Eliminates every observed anomaly + closes two whole bug classes (orphan PIDs, gitignore pollution) + adds forensic + observability hygiene. ~4 hours, medium risk. |
+| **(a) "Now" set + easy wins (recommended)** | A1, A2, A3, A5, A6, A7, B1, B2, B3, B4, B5, B12, B7, B14, B15, B17, B18 | Eliminates every observed anomaly + closes two whole bug classes (orphan PIDs, gitignore pollution) + adds forensic + observability hygiene. ~4 hours, medium risk. **All landed in commits f1bb6b1…0bf3afb on 2026-05-23.** |
+| **(e) Sprint 4 follow-up batch** | A8 | R9 enforcement gap surfaced empirically during Sprint 4 BL-0006 (engineer did 3× semantic_search + 0× graph_*; doctrine_check returned complete). Not in the original 18; queued for the next hardening pass. |
 | **(b) "Now" set only** | A1, A2, A3, A5, A6, A7, B1, B2, B3, B4, B5, B12 | Fixes only what we've directly observed. ~3 hours, lower risk. |
 | **(c) Everything** | All of Tier A + Tier B except B6, B8, B10, B11, B13 | Largest blast radius, matches "every single fix" literally. ~5 hours, medium risk. Includes some prefetch of future sprint work. |
 | **(d) Tier A only** | A1, A2, A3, A5, A6, A7 + A4 doc | Minimum viable. ~1.5 hours, low risk. Leaves Tier B for later. |
@@ -343,6 +360,7 @@ These are deeper than Tier A. Numbered by severity (HIGH first within tier).
 - [x] A5 — truthful `bl.done outcome` — `4fcd430`
 - [x] A6 — reader dumps full event on failure — `5e652ce`
 - [x] A7 — disk-persisted state — `a0deed3`
+- [ ] A8 — R9 graph-grounding hard enforcement *(new — surfaced Sprint 4 BL-0006)*
 - [x] B1 — kill subprocess on cancellation — `b0b3914`
 - [x] B2 — per-repo concurrency lock — `fe0a83b`
 - [x] B3 — graphify writes to shared cache (not worktree) — `0bf3afb` (+ target `418ed91`)
