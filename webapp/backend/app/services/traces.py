@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,23 @@ from typing import Any
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 TRACES_ROOT = Path(os.environ.get("AGENT_TRACES_ROOT", BACKEND_DIR / "traces")).resolve()
+HARNESS_REPO_ROOT = BACKEND_DIR.parents[1]  # agentic-skills checkout root
+
+
+def _harness_sha() -> str:
+    """Capture the agentic-skills repo SHA once per process. B14 forensic field."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(HARNESS_REPO_ROOT), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=1.0, check=False,
+        )
+        sha = (out.stdout or "").strip()
+        return sha or "unknown"
+    except (subprocess.SubprocessError, OSError):
+        return "unknown"
+
+
+_HARNESS_SHA: str = _harness_sha()
 
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -66,6 +84,7 @@ class TraceWriter:
             "task_id": self.task_id,
             "started_at": self.started_at.isoformat(),
             "trace_dir": str(self.dir),
+            "harness_sha": _HARNESS_SHA,
         }
         self._final_result: dict | None = None
         self._done: dict | None = None
