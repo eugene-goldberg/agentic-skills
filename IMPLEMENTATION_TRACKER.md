@@ -1,0 +1,218 @@
+# Agentic Skills — Implementation Tracker
+
+> **Live status of the work described in `IMPLEMENTATION_PLAN.md`.**
+> Update this file as each item lands.
+>
+> **Plan version:** 2026-05-23 v1 (Decision (a) from DESIGN_SHORTCOMINGS.md)
+> **Sprint state at tracker start:** Sprint 3 aborted at BL-0005 merge (operator-commit/agent-worktree race). v3 HEAD: `b46b4d6`. Backend uvicorn alive (PID 34768). No live orchestrator/agents.
+
+---
+
+## Status legend
+
+- `pending` — not started, blocked only by ordering
+- `in_progress` — actively being implemented
+- `done` — landed + verified + committed
+- `blocked` — needs a decision or upstream fix
+- `deferred` — intentionally out-of-scope per plan §10
+- `reverted` — landed then rolled back (note reason)
+
+---
+
+## Pre-flight gate
+
+| Check | Status | Notes |
+|---|---|---|
+| No orchestrator running | ☐ | Verify before Batch 1 |
+| No live agent claude subprocesses | ☐ | |
+| Uvicorn alive | ☐ | PID 34768 (currently) |
+| No leftover worktrees | ☐ | |
+| Milvus healthy | ☐ | |
+| v3 HEAD known | ☐ | Expected: `b46b4d6` |
+| Backend imports clean baseline | ☐ | |
+
+---
+
+## Batch 1 — Pure observability (zero behavior change)
+
+**Branch:** `sprint-2-orchestrator`
+**Target commit message:** `obs: full event dumps, harness_sha, trace auto-archive, logs out of /tmp/ (A6+B14+B15+B18)`
+
+| ID | Item | Status | Commit | Verification | Notes |
+|---|---|---|---|---|---|
+| A6 | Reader script dumps full event JSON on failure | pending | — | failure-case full dump in log | `/tmp/run_orchestrator.py` |
+| B14 | `harness_sha` field in trace `meta.json` | pending | — | inspect meta.json after any run | `traces.py` |
+| B15 | Auto-archive traces on `sprint_complete` | pending | — | observe `traces/` → `traces_archive/<run_id>/` after run | `orchestrator.py` |
+| B18 | Logs out of `/tmp/` → `webapp/backend/logs/orchestrator/` | pending | — | new logs appear at new path | reader + watcher |
+
+**Batch 1 gate verification (all required):**
+- [ ] Import smoke OK
+- [ ] uvicorn restart OK
+- [ ] `/openapi.json` returns 200 with same endpoint set
+- [ ] 30s smoke run completes; meta has `harness_sha`; logs in new path
+
+---
+
+## Batch 2 — Subprocess hygiene
+
+**Branch:** `sprint-2-orchestrator`
+**Target commit message:** `subprocess: pgroup-aware kill on cancel + idle timeout (B1+B5)`
+
+| ID | Item | Status | Commit | Verification | Notes |
+|---|---|---|---|---|---|
+| B1 | `os.setsid` + `killpg` cleanup in `claude_agent.py` | pending | — | cancel test → 0 orphan claudes | research-confirmed pattern |
+| B5 | `idle_timeout` param, default 600s | pending | — | temp idle_timeout=5 → kill fires | |
+
+**Batch 2 gate verification:**
+- [ ] Import smoke OK
+- [ ] Cancellation test: 0 orphan PIDs after 15s
+- [ ] Idle test: synthetic 5s timeout kills cleanly
+
+---
+
+## Batch 3 — Orchestrator state honesty
+
+**Branch:** `sprint-2-orchestrator`
+**Target commit message:** `orchestrator: honest outcomes + qa-doctrine-failed event + safer partial_resume (A2+A5+B12)`
+
+| ID | Item | Status | Commit | Verification | Notes |
+|---|---|---|---|---|---|
+| A2 | QA-doctrine-failed event + `stop_on_qa_doctrine_failure` flag | pending | — | synthetic QA fail surfaces new event | opt-in flag preserves default behavior |
+| A5 | `bl.done outcome` reflects worst role | pending | — | synthetic QA fail → outcome="merged_no_qa" | new outcome strings list |
+| B12 | `partial_resume` cross-checks git log | pending | — | uncommitted QA file → QA runs | |
+
+**Batch 3 gate verification:**
+- [ ] Import smoke OK
+- [ ] Synthetic QA fail produces expected event + outcome
+- [ ] partial_resume safer-path test
+
+---
+
+## Batch 4 — Concurrency lock + idempotency
+
+**Branch:** `sprint-2-orchestrator`
+**Target commit message:** `concurrency: per-repo lock + brief idempotency on /run-brief (B2+B9)`
+
+| ID | Item | Status | Commit | Verification | Notes |
+|---|---|---|---|---|---|
+| B2 | Per-repo asyncio.Lock | pending | — | parallel POST: 200 + 409 | single-worker assumption noted in comment |
+| B9 | Brief-hash idempotency | pending | — | duplicate POST: 200 + 409 | bundled with B2 |
+
+**Batch 4 gate verification:**
+- [ ] Import smoke OK
+- [ ] Parallel POST test (2 curls): one 200, one 409
+- [ ] Duplicate POST test: 409
+
+---
+
+## Batch 5 — Disk-persisted state
+
+**Branch:** `sprint-2-orchestrator`
+**Target commit message:** `state: disk-persisted run checkpoints for restart resume (A7)`
+**Depends on:** Batch 4 (B2 lock prevents concurrent state writes)
+
+| ID | Item | Status | Commit | Verification | Notes |
+|---|---|---|---|---|---|
+| A7 | Run-state checkpoints at `.orchestrator-state/<run_id>.json` | pending | — | kill uvicorn mid-sprint → resume picks up | new `run_state.py` module |
+
+**Batch 5 gate verification:**
+- [ ] Import smoke OK
+- [ ] State file structure validates with jq
+- [ ] Manual kill-restart resumes at right BL
+
+---
+
+## Batch 6 — Recovery automations
+
+**Branch:** `sprint-2-orchestrator`
+**Target commit message:** `recovery: auto-rebase + milvus auto-restart + scorer backfill (A1+A3+A4)`
+**Depends on:** Batch 3 (outcome labels exist)
+
+| ID | Item | Status | Commit | Verification | Notes |
+|---|---|---|---|---|---|
+| A1 | Non-FF auto-rebase in agent worktree + re-run gate | pending | — | reproduce race scenario → recovers | gate re-run REQUIRED post-rebase |
+| A3 | Milvus auto-restart in `_preflight_retrieval` | pending | — | `docker stop milvus` → preflight recovers | cooldown 60s |
+| A4 | Document score-only path for backfill | pending | — | `/score-bl BL-0002` produces scorecard | doc-only |
+
+**Batch 6 gate verification:**
+- [ ] Import smoke OK
+- [ ] Non-FF race repro test
+- [ ] Milvus auto-restart test
+- [ ] BL-0002 score backfill on v3 succeeds
+
+---
+
+## Batch 7 — UI surface for new events
+
+**Branch:** `sprint-2-orchestrator`
+**Target commit message:** `ui: AppV2 surfaces partial_resume + qa_doctrine_failed + merge error (B4+B17)`
+
+| ID | Item | Status | Commit | Verification | Notes |
+|---|---|---|---|---|---|
+| B4 | AppV2 handlers for new events + outcome labels | pending | — | `npm run build` + visual smoke | |
+| B17 | UI Stop kills server-side | done-by-B1 | — | follows automatically once B1 lands | subsumed |
+
+**Batch 7 gate verification:**
+- [ ] `npm run build` OK
+- [ ] Visual smoke at `localhost:8000`
+
+---
+
+## Batch 8 — Graphify cache refactor (QUARANTINE)
+
+**Branch:** `sprint-2-orchestrator-b3-graphify-cache` (separate from sprint-2-orchestrator)
+**Target commit message:** `retrieval: graphify writes to shared content-addressed cache (B3 — closes B7, B8 implicit)`
+
+| ID | Item | Status | Commit | Verification | Notes |
+|---|---|---|---|---|---|
+| B3 | graphify writes to `~/.cache/agentic-skills/graphify/...` | pending | — | full quarantine test plan in PLAN §9 | **HIGH risk; isolated branch** |
+| B7 | `.gitignore` preflight | closed-by-B3 | — | moot once B3 lands | |
+| B8 | Cache reuse across worktrees | partial-by-B3 | — | full caching is later sprint | only the path move lands here |
+
+**Batch 8 gate verification:**
+- [ ] On quarantine branch: tiny `/decompose-brief` succeeds
+- [ ] Cache dir created at expected location
+- [ ] Target working tree has no `graphify-out/`
+- [ ] Agent's `n_retrieval_calls > 0`
+- [ ] QA `git add -A` does NOT include cache
+- [ ] Quarantine branch merged back to `sprint-2-orchestrator`
+
+---
+
+## Deferred items (per PLAN §10)
+
+| ID | Item | Status | Reason |
+|---|---|---|---|
+| B6 | Engineer re-spawn on QA findings | deferred | State-machine change, own scoping needed |
+| B8 (cache reuse) | Cache reuse logic beyond path move | deferred | Performance optimization, not correctness |
+| B10 | Cost telemetry aggregation | deferred | ABL-0013, own sprint |
+| B11 | Parallel BL execution | deferred | ABL-0011, own sprint |
+| B13 | Triage agent | deferred | ABL-0002, own sprint |
+
+---
+
+## Issues log
+
+(Append entries here as they're encountered during implementation.)
+
+| Date | Batch | Issue | Resolution |
+|---|---|---|---|
+| 2026-05-23 | — | Plan + tracker created | Awaiting operator go-ahead for Batch 1 |
+
+---
+
+## Sign-off
+
+- [ ] Batch 1 verified — sign here: ____  date: ____  notes:
+- [ ] Batch 2 verified — sign here: ____  date: ____  notes:
+- [ ] Batch 3 verified — sign here: ____  date: ____  notes:
+- [ ] Batch 4 verified — sign here: ____  date: ____  notes:
+- [ ] Batch 5 verified — sign here: ____  date: ____  notes:
+- [ ] Batch 6 verified — sign here: ____  date: ____  notes:
+- [ ] Batch 7 verified — sign here: ____  date: ____  notes:
+- [ ] Batch 8 verified (quarantine + merge) — sign here: ____  date: ____  notes:
+- [ ] **Full Sprint 4 dry-run with no previously-observed anomalies firing** — sign here: ____  date: ____  notes:
+
+---
+
+*Last updated: 2026-05-23. Edit only this file as work progresses; the plan is the spec.*
