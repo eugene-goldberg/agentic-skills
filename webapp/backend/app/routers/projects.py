@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services import backlog as backlog_svc
+from app.services import orchestrator as orchestrator_svc
 from app.services.claude_agent import stream_agent_task
 from app.services.indexing import run_claude_context_index, run_graphify_update
 from app.services.traces import TraceWriter, list_traces
@@ -60,14 +61,49 @@ RETRIEVAL_REFERENCE_REPO = Path(
 ).resolve()
 
 
+class RetrievalUnavailable(RuntimeError):
+    """Raised when the retrieval stack is not in a state to ground a brownfield run.
+
+    Routers catch this, emit a `_meta phase=retrieval kind=unavailable reason=...`
+    SSE event, and abort the run rather than silently degrading. Per CLAUDE.md
+    the brownfield doctrine requires grounded retrieval — a degraded run would
+    contaminate scores.
+    """
+
+
+def _preflight_retrieval() -> tuple[bool, str]:
+    """Cheap fail-loud health check: reference repo + Milvus reachable.
+
+    Returns (ok, reason). Reason is empty on success, human-readable on failure.
+    Best-effort: a Milvus ping that times out in <1s counts as failure.
+    """
+    if not RETRIEVAL_REFERENCE_REPO.exists():
+        return False, f"RETRIEVAL_REFERENCE_REPO missing: {RETRIEVAL_REFERENCE_REPO}"
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(1.0)
+    try:
+        s.connect(("127.0.0.1", 19530))
+    except OSError as e:
+        return False, f"Milvus unreachable at 127.0.0.1:19530 ({e})"
+    finally:
+        s.close()
+    return True, ""
+
+
 def _retrieval_kwargs(wt: Worktree, role: str, bl_id: str | None = None, trace: TraceWriter | None = None) -> dict:
     """Build stream_agent_task kwargs that enable the retrieval MCP server.
+
+    Fail-loud: if the reference repo is missing or Milvus is unreachable, raise
+    RetrievalUnavailable. The caller is responsible for emitting an SSE event
+    and aborting the run. Silent fallback is no longer acceptable — see CLAUDE.md.
 
     Retrieval audit log is written into the persistent trace dir so it survives
     worktree cleanup; falls back to inside the worktree if no trace is supplied.
     """
-    if not RETRIEVAL_REFERENCE_REPO.exists():
-        return {}
+    ok, reason = _preflight_retrieval()
+    if not ok:
+        raise RetrievalUnavailable(reason)
     if trace is not None:
         retrieval_log = trace.retrieval_path
     else:
@@ -206,12 +242,17 @@ async def decompose_brief(repo: str, req: DecomposeRequest):
             }
             trace.write_event(wt_evt)
             yield _sse(wt_evt)
+            try:
+                rk = _retrieval_kwargs(wt, role="po", trace=trace)
+            except RetrievalUnavailable as e:
+                yield _sse({"type": "_meta", "phase": "retrieval", "kind": "unavailable", "reason": str(e)})
+                return
             async for event in stream_agent_task(
                 prompt,
                 wt.path,
                 timeout_seconds=req.timeout_seconds,
                 trace=trace,
-                **_retrieval_kwargs(wt, role="po", trace=trace),
+                **rk,
             ):
                 yield _sse(event)
 
@@ -236,7 +277,7 @@ async def decompose_brief(repo: str, req: DecomposeRequest):
                     wt.path,
                     timeout_seconds=max(300, req.timeout_seconds // 2),
                     trace=trace,
-                    **_retrieval_kwargs(wt, role="po", trace=trace),
+                    **rk,
                 ):
                     yield _sse(event)
                 validation = doctrine_svc.validate_po(wt.path)
@@ -359,17 +400,35 @@ async def execute_bl(repo: str, req: ExecuteBLRequest):
             }
             trace.write_event(wt_evt)
             yield _sse(wt_evt)
+            try:
+                rk = _retrieval_kwargs(wt, role="engineer", bl_id=req.bl_id, trace=trace)
+            except RetrievalUnavailable as e:
+                yield _sse({"type": "_meta", "phase": "retrieval", "kind": "unavailable", "reason": str(e)})
+                return
             async for event in stream_agent_task(
                 full_prompt,
                 wt.path,
                 timeout_seconds=req.timeout_seconds,
                 trace=trace,
-                **_retrieval_kwargs(wt, role="engineer", bl_id=req.bl_id, trace=trace),
+                min_pregrounding=3,
+                **rk,
             ):
                 yield _sse(event)
             # ─── Doctrine pre-merge validator (brownfield) ───
             MAX_FIX_RETRIES = 2
-            validation = doctrine_svc.validate_engineer(wt.path, req.bl_id, base_ref=cfg.agent_branch)
+            validation = doctrine_svc.validate_engineer(wt.path, req.bl_id, base_ref=cfg.agent_branch, retrieval_log=trace.retrieval_path)
+            # R11 short-circuit: legitimately no-op BL (work already shipped upstream).
+            # Skip retries / gate / merge — there is nothing to validate or merge.
+            if validation.get("no_op"):
+                yield _sse({
+                    "type": "_meta",
+                    "phase": "no_op",
+                    "kind": "already_satisfied",
+                    "bl_id": req.bl_id,
+                    "base_ref": cfg.agent_branch,
+                    "summary": validation["summary"],
+                })
+                return
             attempt = 0
             while not validation["ok"] and attempt < MAX_FIX_RETRIES:
                 attempt += 1
@@ -388,10 +447,10 @@ async def execute_bl(repo: str, req: ExecuteBLRequest):
                     wt.path,
                     timeout_seconds=max(300, req.timeout_seconds // 2),
                     trace=trace,
-                    **_retrieval_kwargs(wt, role="engineer", bl_id=req.bl_id, trace=trace),
+                    **rk,
                 ):
                     yield _sse(event)
-                validation = doctrine_svc.validate_engineer(wt.path, req.bl_id, base_ref=cfg.agent_branch)
+                validation = doctrine_svc.validate_engineer(wt.path, req.bl_id, base_ref=cfg.agent_branch, retrieval_log=trace.retrieval_path)
             yield _sse({
                 "type": "_meta",
                 "phase": "doctrine_check",
@@ -409,9 +468,60 @@ async def execute_bl(repo: str, req: ExecuteBLRequest):
                 yield _sse({
                     "type": "_meta",
                     "phase": "regression_gate",
-                    **{k: gate_result.get(k) for k in ("ok", "kind", "pre", "post", "regressions", "new_failures", "reason", "command")},
+                    **{k: gate_result.get(k) for k in ("ok", "kind", "pre", "post", "regressions", "new_failures", "reason", "command", "post_tail", "pre_tail")},
                 })
-                if gate_result.get("ok"):
+                # R10.1: gate-failure auto-recovery. Re-invoke the engineer
+                # with a focused fix-prompt (extracted Playwright/pytest
+                # failures) and re-run doctrine + gate. Only `regressed`
+                # is recoverable — `error` / `inconclusive` go straight to
+                # awaiting_review since they're infra-level.
+                MAX_GATE_RETRIES = 2
+                gate_attempt = 0
+                while (
+                    not gate_result.get("ok")
+                    and gate_result.get("kind") == "regressed"
+                    and gate_attempt < MAX_GATE_RETRIES
+                ):
+                    gate_attempt += 1
+                    fix_prompt = doctrine_svc.build_gate_fix_prompt(
+                        "engineer", gate_result,
+                        bl_id=req.bl_id, attempt=gate_attempt, max_attempts=MAX_GATE_RETRIES,
+                    )
+                    async for event in stream_agent_task(
+                        fix_prompt,
+                        wt.path,
+                        timeout_seconds=max(300, req.timeout_seconds // 2),
+                        trace=trace,
+                        **rk,
+                    ):
+                        yield _sse(event)
+                    # Re-validate doctrine after the gate-fix amend.
+                    validation = doctrine_svc.validate_engineer(
+                        wt.path, req.bl_id, base_ref=cfg.agent_branch,
+                        retrieval_log=trace.retrieval_path,
+                    )
+                    if not validation["ok"]:
+                        yield _sse({
+                            "type": "_meta",
+                            "phase": "doctrine_check",
+                            "kind": "incomplete_after_gate_fix",
+                            "attempt": gate_attempt,
+                            "missing": validation["missing"],
+                            "empty": validation["empty"],
+                            "summary": validation["summary"],
+                        })
+                        break
+                    # Re-run gate.
+                    gate_result = await regression_gate_svc.run_gate(
+                        repo_dir, agent_branch=wt.branch, target_ref=cfg.agent_branch,
+                    )
+                    yield _sse({
+                        "type": "_meta",
+                        "phase": "regression_gate",
+                        "gate_attempt": gate_attempt,
+                        **{k: gate_result.get(k) for k in ("ok", "kind", "pre", "post", "regressions", "new_failures", "reason", "command", "post_tail", "pre_tail")},
+                    })
+                if validation["ok"] and gate_result.get("ok"):
                     merge_result = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
                     yield _sse({
                         "type": "_meta",
@@ -509,20 +619,39 @@ def _stream_role_on_bl(
             }
             trace.write_event(wt_evt)
             yield _sse(wt_evt)
+            try:
+                rk = _retrieval_kwargs(wt, role=role, bl_id=bl_id, trace=trace)
+            except RetrievalUnavailable as e:
+                yield _sse({"type": "_meta", "phase": "retrieval", "kind": "unavailable", "reason": str(e)})
+                return
+            # QA must ground before adding tests; scorer is read-only so no
+            # grounding floor (its retrieval is incentivized by the rubric).
+            qa_pregrounding = 3 if role == "qa" else 0
             async for event in stream_agent_task(
                 prompt,
                 wt.path,
                 timeout_seconds=timeout,
                 trace=trace,
-                **_retrieval_kwargs(wt, role=role, bl_id=bl_id, trace=trace),
+                min_pregrounding=qa_pregrounding,
+                **rk,
             ):
                 yield _sse(event)
-            # ─── Doctrine pre-merge validator (QA only; scorer is read-only) ───
+            # ─── Doctrine pre-merge validator (QA + scorer) ───
             validation = {"ok": True, "missing": [], "empty": [], "summary": "n/a"}
             attempt = 0
-            if role == "qa":
+            if role in ("qa", "scorer"):
                 MAX_FIX_RETRIES = 2
-                validation = doctrine_svc.validate_qa(wt.path, bl_id)
+                if role == "qa":
+                    _validate = lambda: doctrine_svc.validate_qa(
+                        wt.path, bl_id, base_ref=cfg.agent_branch,
+                        retrieval_log=trace.retrieval_path,
+                    )
+                else:  # scorer — R7 rubric self-consistency + R12 grounding
+                    _validate = lambda: doctrine_svc.validate_scorer(
+                        wt.path, bl_id, base_ref=cfg.agent_branch,
+                        retrieval_log=trace.retrieval_path,
+                    )
+                validation = _validate()
                 while not validation["ok"] and attempt < MAX_FIX_RETRIES:
                     attempt += 1
                     yield _sse({
@@ -534,16 +663,16 @@ def _stream_role_on_bl(
                         "empty": validation["empty"],
                         "summary": validation["summary"],
                     })
-                    fix_prompt = doctrine_svc.build_fix_prompt("qa", validation, bl_id=bl_id)
+                    fix_prompt = doctrine_svc.build_fix_prompt(role, validation, bl_id=bl_id)
                     async for event in stream_agent_task(
                         fix_prompt,
                         wt.path,
                         timeout_seconds=max(300, timeout // 2),
                         trace=trace,
-                        **_retrieval_kwargs(wt, role=role, bl_id=bl_id, trace=trace),
+                        **rk,
                     ):
                         yield _sse(event)
-                    validation = doctrine_svc.validate_qa(wt.path, bl_id)
+                    validation = _validate()
                 yield _sse({
                     "type": "_meta",
                     "phase": "doctrine_check",
@@ -561,9 +690,54 @@ def _stream_role_on_bl(
                 yield _sse({
                     "type": "_meta",
                     "phase": "regression_gate",
-                    **{k: gate_result.get(k) for k in ("ok", "kind", "pre", "post", "regressions", "new_failures", "reason", "command")},
+                    **{k: gate_result.get(k) for k in ("ok", "kind", "pre", "post", "regressions", "new_failures", "reason", "command", "post_tail", "pre_tail")},
                 })
-                if gate_result.get("ok"):
+                # R10.1: same gate-failure auto-recovery as the engineer flow.
+                MAX_GATE_RETRIES = 2
+                gate_attempt = 0
+                while (
+                    not gate_result.get("ok")
+                    and gate_result.get("kind") == "regressed"
+                    and gate_attempt < MAX_GATE_RETRIES
+                ):
+                    gate_attempt += 1
+                    fix_prompt = doctrine_svc.build_gate_fix_prompt(
+                        "qa", gate_result,
+                        bl_id=bl_id, attempt=gate_attempt, max_attempts=MAX_GATE_RETRIES,
+                    )
+                    async for event in stream_agent_task(
+                        fix_prompt,
+                        wt.path,
+                        timeout_seconds=max(300, timeout // 2),
+                        trace=trace,
+                        **rk,
+                    ):
+                        yield _sse(event)
+                    validation = doctrine_svc.validate_qa(
+                        wt.path, bl_id, base_ref=cfg.agent_branch,
+                        retrieval_log=trace.retrieval_path,
+                    )
+                    if not validation["ok"]:
+                        yield _sse({
+                            "type": "_meta",
+                            "phase": "doctrine_check",
+                            "kind": "incomplete_after_gate_fix",
+                            "attempt": gate_attempt,
+                            "missing": validation["missing"],
+                            "empty": validation["empty"],
+                            "summary": validation["summary"],
+                        })
+                        break
+                    gate_result = await regression_gate_svc.run_gate(
+                        repo_dir, agent_branch=wt.branch, target_ref=cfg.agent_branch,
+                    )
+                    yield _sse({
+                        "type": "_meta",
+                        "phase": "regression_gate",
+                        "gate_attempt": gate_attempt,
+                        **{k: gate_result.get(k) for k in ("ok", "kind", "pre", "post", "regressions", "new_failures", "reason", "command", "post_tail", "pre_tail")},
+                    })
+                if validation["ok"] and gate_result.get("ok"):
                     merge_result = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
                     yield _sse({
                         "type": "_meta",
@@ -645,6 +819,60 @@ async def score_bl(repo: str, req: BLActionRequest):
         timeout=req.timeout_seconds,
         extra_builder_args=None,
         repo=repo,
+    )
+
+
+# ----------------------- ABL-0001 Orchestrator ------------------------
+
+class RunBriefRequest(BaseModel):
+    brief: str = Field(..., min_length=20)
+    project_name: str | None = None
+    timeout_per_role: int = Field(2400, ge=60, le=7200)
+    max_bls: int | None = Field(None, ge=1, le=50)
+    skip_po: bool = False
+    stop_on_failure: bool = True
+
+
+@router.post("/{repo}/run-brief")
+async def run_brief(repo: str, req: RunBriefRequest):
+    """ABL-0001 Orchestrator entry point.
+
+    Single SSE stream covering the full pipeline:
+    index → PO → for each BL: engineer → reindex → QA → reindex → scorer.
+
+    Each event carries `phase=orchestrator.<step>` (or a per-role phase tagged
+    with `orchestrator_step`) so the v2 UI can render a live timeline.
+    """
+    repo_dir = _repo_dir(repo)
+
+    def _rk_builder(wt: Worktree, role: str, bl_id: str | None, trace: TraceWriter | None) -> dict:
+        # Reuses the same preflight + path conventions as the per-role endpoints.
+        return _retrieval_kwargs(wt, role=role, bl_id=bl_id, trace=trace)
+
+    async def gen():
+        try:
+            async for event in orchestrator_svc.run_brief(
+                repo_dir=repo_dir,
+                repo_name=repo,
+                brief=req.brief,
+                project_name=req.project_name or repo,
+                retrieval_kwargs_builder=_rk_builder,
+                timeout_per_role=req.timeout_per_role,
+                max_bls=req.max_bls,
+                skip_po=req.skip_po,
+                stop_on_failure=req.stop_on_failure,
+            ):
+                yield _sse(event)
+        except RetrievalUnavailable as e:
+            yield _sse({"type": "_meta", "phase": "orchestrator.aborted",
+                       "reason": f"retrieval unavailable: {e}"})
+        except Exception as exc:  # noqa: BLE001
+            yield _sse({"type": "_error", "error": f"{type(exc).__name__}: {exc}"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

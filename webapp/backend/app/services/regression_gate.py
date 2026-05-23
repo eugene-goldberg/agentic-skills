@@ -98,7 +98,10 @@ async def _run_tests(cwd: Path, cmd: list[str]) -> TestSet:
         effective.append("-v")
     exit_code, stdout, stderr = await _run_capture(effective, cwd)
     passed, failed = _parse_pytest(stdout, stderr)
-    tail = (stdout + "\n" + stderr).splitlines()[-30:]
+    # Last 300 lines so docker-compose cleanup at the end of a gate run
+    # doesn't push real test failure output (Playwright summary, pytest
+    # traceback) out of the captured tail.
+    tail = (stdout + "\n" + stderr).splitlines()[-300:]
     return TestSet(passed=passed, failed=failed, raw_exit=exit_code, raw_tail="\n".join(tail))
 
 
@@ -215,7 +218,7 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str) -> dict:
             "new_failures": new_failures[:50],
             "command": test_cmd,
             "reason": reason,
-            "post_tail": post.raw_tail[-2000:],
+            "post_tail": post.raw_tail[-15000:],
         }
     finally:
         for wt in (wt_pre, wt_post):

@@ -127,6 +127,28 @@ def _build_retrieval_mcp_config(
     return Path(path), list(RETRIEVAL_MCP_TOOLS)
 
 
+GROUNDED_RETRIEVAL_TOOLS = {
+    "mcp__retrieval__semantic_search",
+    "mcp__retrieval__graph_neighbors",
+    "mcp__retrieval__graph_find_similar",
+    "mcp__retrieval__graph_summary",
+}
+MUTATING_TOOLS = {"Write", "Edit", "NotebookEdit"}
+
+
+def _tool_uses_in_event(evt: dict) -> list[dict]:
+    """Extract tool_use blocks from an assistant event. Returns [] for non-assistant events."""
+    if evt.get("type") != "assistant":
+        return []
+    content = (evt.get("message") or {}).get("content") or []
+    if not isinstance(content, list):
+        return []
+    return [c for c in content if isinstance(c, dict) and c.get("type") == "tool_use"]
+
+
+MAX_RETRIEVAL_CALLS_DEFAULT = 30  # brownfield SKILLS.md states this budget
+
+
 async def stream_agent_task(
     task: str,
     repo_path: str | Path,
@@ -136,6 +158,8 @@ async def stream_agent_task(
     reference_repo: str | Path | None = None,
     target_repo: str | Path | None = None,
     retrieval_log_path: str | Path | None = None,
+    min_pregrounding: int = 0,
+    max_retrieval_calls: int = MAX_RETRIEVAL_CALLS_DEFAULT,
     trace=None,  # app.services.traces.TraceWriter | None
 ) -> AsyncIterator[dict]:
     """Run `claude --print --output-format stream-json` and yield parsed events.
@@ -221,6 +245,10 @@ async def stream_agent_task(
 
     stderr_task = asyncio.create_task(_drain_stderr())
 
+    grounded_count = 0  # running tally of grounded retrieval calls in this run
+    retrieval_call_count = 0  # ALL mcp__retrieval__* calls (incl. target_status)
+    pregrounding_violated = False
+    budget_exceeded = False
     try:
         assert proc.stdout is not None
         try:
@@ -247,9 +275,70 @@ async def stream_agent_task(
                     evt = json.loads(line)
                 except json.JSONDecodeError:
                     evt = {"type": "_raw", "text": line}
+
+                # ─── Pre-modification grounding + budget enforcement ────────
+                # R5/Tier1.5: ≥min_pregrounding grounded calls before any
+                # mutating tool (Write/Edit/NotebookEdit). target_status is
+                # inventory only and does not count toward grounding.
+                # R8: total mcp__retrieval__* calls capped at max_retrieval_calls.
+                for tu in _tool_uses_in_event(evt):
+                    name = tu.get("name", "")
+                    if name.startswith("mcp__retrieval__"):
+                        retrieval_call_count += 1
+                        if name in GROUNDED_RETRIEVAL_TOOLS:
+                            grounded_count += 1
+                        if retrieval_call_count > max_retrieval_calls:
+                            budget_exceeded = True
+                            break
+                    elif (
+                        min_pregrounding > 0
+                        and name in MUTATING_TOOLS
+                        and grounded_count < min_pregrounding
+                    ):
+                        pregrounding_violated = True
+                        break
+
                 if trace is not None:
                     trace.write_event(evt)
                 yield evt
+
+                if budget_exceeded:
+                    proc.kill()
+                    bud_evt = {
+                        "type": "_meta",
+                        "phase": "retrieval",
+                        "kind": "budget_exceeded",
+                        "retrieval_call_count": retrieval_call_count,
+                        "max": max_retrieval_calls,
+                        "reason": (
+                            f"Agent exceeded retrieval budget: {retrieval_call_count} > "
+                            f"{max_retrieval_calls} mcp__retrieval__* calls. "
+                            f"Brownfield SKILLS.md states a 30-call budget."
+                        ),
+                    }
+                    if trace is not None:
+                        trace.write_event(bud_evt)
+                    yield bud_evt
+                    return
+
+                if pregrounding_violated:
+                    proc.kill()
+                    viol_evt = {
+                        "type": "_meta",
+                        "phase": "pre_grounding_violation",
+                        "kind": "insufficient",
+                        "grounded_count": grounded_count,
+                        "required": min_pregrounding,
+                        "reason": (
+                            f"Agent attempted Write/Edit/NotebookEdit after only "
+                            f"{grounded_count} grounded retrieval call(s); doctrine "
+                            f"requires ≥{min_pregrounding} before any code mutation."
+                        ),
+                    }
+                    if trace is not None:
+                        trace.write_event(viol_evt)
+                    yield viol_evt
+                    return
         finally:
             await proc.wait()
             stderr_task.cancel()

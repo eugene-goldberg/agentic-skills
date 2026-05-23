@@ -16,7 +16,7 @@ Build a small FastAPI service that lets a single user store and search markdown 
 - SQLite persistence, auto-create tables on startup.
 - pytest tests covering CRUD + search.`;
 
-export function App() {
+export function AppV1() {
   const [repos, setRepos] = useState([]);
   const [repo, setRepo] = useState("");
   const [brief, setBrief] = useState(EXAMPLE_BRIEF);

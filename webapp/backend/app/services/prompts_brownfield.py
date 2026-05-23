@@ -79,6 +79,19 @@ retrieval tools are available:
 
 Rules:
 - ALWAYS call `target_status` first.
+- **MANDATORY PRE-MODIFICATION GROUNDING — HARNESS-ENFORCED.** Before your
+  FIRST `Write`, `Edit`, or `NotebookEdit` tool call, you MUST complete at
+  least **3 grounded retrieval calls** drawn from:
+  `semantic_search`, `graph_neighbors`, `graph_find_similar`, `graph_summary`.
+  (`target_status` is inventory and does NOT count toward the floor.)
+  These calls must target the BL's Impacted Components and acceptance
+  criteria — e.g., `semantic_search(query="<feature keyword>", source="target")`
+  for the area you're about to change, `graph_neighbors(symbol="<existing
+  function/class you'll touch>")` to map blast radius, `graph_find_similar`
+  to locate the closest analog you should mirror. If you attempt to Write
+  or Edit before satisfying this floor, the harness will kill the run and
+  emit `_meta phase=pre_grounding_violation`, then re-spawn you with a
+  delta prompt — you will lose all in-flight context. **Do retrieval first.**
 - For pattern discovery in brownfield: PREFER `source="target"`. Use
   `source="reference"` only as a fallback if the target lacks a relevant
   analog.
@@ -368,6 +381,27 @@ Verdict guidance (brownfield):
 
 def build_score_prompt_brownfield(bl_id: str, bl_section: str, rubric_text: str, artifact_dir: str = "_brownfield") -> str:
     body = f"""You are a strict, fair scoring agent evaluating ONE backlog item's implementation on a brownfield codebase. You score against the BROWNFIELD rubric, which adds five dimensions (Pattern Fidelity, Regression Coverage, Characterization Tests, Invariant Preservation, Blast Radius) to the standard core+role scoring.
+
+{RETRIEVAL_HINT_BROWNFIELD}
+
+## Scorer-specific grounding requirements (HARNESS-ENFORCED)
+
+You are read-only (no source edits) but your scoring is meaningless unless
+grounded. The doctrine validator will REJECT your run unless:
+
+1. You make **≥3 grounded retrieval calls** drawn from `semantic_search`,
+   `graph_neighbors`, `graph_find_similar`, `graph_summary`. (target_status
+   is inventory only; it does NOT count.) Use them to verify Pattern Fidelity
+   (find the closest analog), Blast Radius (graph_neighbors on changed symbols),
+   and Invariant Preservation (search for related guards / tests).
+2. The scorecard you write must contain **≥3 retrieval citations** —
+   either explicit `[retrieval: tool(args) → key result]` markers or
+   inline `mcp__retrieval__*` tool references — anywhere in the file.
+   Embed them in the Evidence cells of the Brownfield Dimensions table.
+3. Your verdict must be **rubric-self-consistent**: per the rubric, if any
+   Brownfield dimension scores ≤ 2, the verdict MUST be `Fail`. Issuing
+   `Pass` or `Pass W/R` with a brownfield dim ≤2 will be rejected by
+   the harness and your run re-prompted with the conflict.
 
 ## Backlog item
 {bl_section}
