@@ -602,8 +602,20 @@ async def run_brief(
             per_bl["scorer"] = score_outcome or {}
             yield _evt("scorer.done", **(score_outcome or {"bl_id": bl_id}))
 
+            # A5: outcome reflects the WORST role result, not just the engineer.
+            # Possible labels (this branch only — engineer already merged):
+            #   merged_full     — engineer ✓ qa ✓ scorer doctrine ✓
+            #   merged_no_qa    — engineer ✓ qa failed/didn't merge
+            #   merged_no_score — engineer ✓ qa ✓ scorer doctrine ✗
+            score_doc_ok = bool(score_outcome and score_outcome.get("doctrine_ok"))
+            if not qa_doc_ok or not qa_merged:
+                outcome = "merged_no_qa"
+            elif not score_doc_ok:
+                outcome = "merged_no_score"
+            else:
+                outcome = "merged_full"
             summary["bls"].append(per_bl)
-            yield _evt("bl.done", bl_id=bl_id, outcome="merged")
+            yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
 
         yield _evt("sprint_complete", summary=summary)
     finally:
