@@ -77,24 +77,75 @@ class RetrievalUnavailable(RuntimeError):
     """
 
 
+# A3: Milvus auto-restart cooldown so we don't loop on a permanently-broken
+# container. Module-local; resets when uvicorn restarts.
+_MILVUS_LAST_RESTART_AT: float = 0.0
+_MILVUS_RESTART_COOLDOWN_S = 60.0
+_MILVUS_CONTAINER = os.environ.get("MILVUS_CONTAINER_NAME", "milvus-standalone")
+
+
+def _milvus_port_reachable(timeout: float = 1.0) -> bool:
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(("127.0.0.1", 19530))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def _try_milvus_restart() -> tuple[bool, str]:
+    """A3: best-effort `docker start <container>` + poll up to 30s for the
+    port to come back. Returns (ok, message). Respects a 60s cooldown so
+    repeated preflight failures don't restart-loop a broken container.
+    """
+    global _MILVUS_LAST_RESTART_AT
+    now = time.time()
+    if now - _MILVUS_LAST_RESTART_AT < _MILVUS_RESTART_COOLDOWN_S:
+        elapsed = now - _MILVUS_LAST_RESTART_AT
+        return False, f"cooldown active ({elapsed:.0f}s of {_MILVUS_RESTART_COOLDOWN_S:.0f}s)"
+    _MILVUS_LAST_RESTART_AT = now
+    import subprocess as _sp
+    try:
+        proc = _sp.run(
+            ["docker", "start", _MILVUS_CONTAINER],
+            capture_output=True, text=True, timeout=15.0, check=False,
+        )
+    except (_sp.SubprocessError, OSError) as exc:
+        return False, f"docker start failed: {type(exc).__name__}: {exc}"
+    if proc.returncode != 0:
+        return False, f"docker start exit={proc.returncode}: {(proc.stderr or '').strip()[:200]}"
+    # Poll port for up to 30s
+    deadline = time.time() + 30.0
+    while time.time() < deadline:
+        if _milvus_port_reachable(timeout=0.5):
+            return True, f"restarted {_MILVUS_CONTAINER} (port healthy)"
+        time.sleep(1.0)
+    return False, f"restarted {_MILVUS_CONTAINER} but port still unreachable after 30s"
+
+
 def _preflight_retrieval() -> tuple[bool, str]:
     """Cheap fail-loud health check: reference repo + Milvus reachable.
 
     Returns (ok, reason). Reason is empty on success, human-readable on failure.
     Best-effort: a Milvus ping that times out in <1s counts as failure.
+
+    A3: if Milvus is unreachable, try ONE `docker start <container>` + 30s
+    wait before giving up. Cooldown 60s prevents restart-loops.
     """
     if not RETRIEVAL_REFERENCE_REPO.exists():
         return False, f"RETRIEVAL_REFERENCE_REPO missing: {RETRIEVAL_REFERENCE_REPO}"
-    import socket
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(1.0)
-    try:
-        s.connect(("127.0.0.1", 19530))
-    except OSError as e:
-        return False, f"Milvus unreachable at 127.0.0.1:19530 ({e})"
-    finally:
-        s.close()
-    return True, ""
+    if _milvus_port_reachable():
+        return True, ""
+    # Port closed → try to self-heal.
+    restart_ok, restart_msg = _try_milvus_restart()
+    if restart_ok:
+        print(f"[preflight] {restart_msg}", flush=True)
+        return True, ""
+    return False, f"Milvus unreachable at 127.0.0.1:19530; auto-restart attempt: {restart_msg}"
 
 
 def _retrieval_kwargs(wt: Worktree, role: str, bl_id: str | None = None, trace: TraceWriter | None = None) -> dict:
