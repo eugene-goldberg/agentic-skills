@@ -57,6 +57,45 @@ def _evt(phase: str, **kwargs) -> dict:
     return e
 
 
+async def _rebase_in_worktree(wt_path: Path, target_ref: str) -> dict:
+    """A1: rebase the agent branch in its OWN worktree onto target_ref.
+
+    The probe confirmed this must happen inside the worktree (not the main
+    checkout) so the agent branch's HEAD advances without disturbing the
+    main repo's working tree.
+
+    Returns a merge-shaped dict: {"ok": bool, "kind": "rebased"|"rebase_failed",
+    "error": str|None}. On any non-zero exit, attempts `git rebase --abort`
+    so the worktree is left clean for the fall-through to awaiting_review.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "rebase", target_ref,
+            cwd=str(wt_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+    except (asyncio.TimeoutError, OSError) as exc:
+        return {"ok": False, "kind": "rebase_failed",
+                "error": f"{type(exc).__name__}: {exc}"}
+    if proc.returncode != 0:
+        # Abort so the worktree isn't left in detached-rebase state.
+        try:
+            abort = await asyncio.create_subprocess_exec(
+                "git", "rebase", "--abort",
+                cwd=str(wt_path),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(abort.wait(), timeout=10.0)
+        except (asyncio.TimeoutError, OSError):
+            pass
+        err_text = (stderr or b"").decode(errors="replace")[:500] or f"exit={proc.returncode}"
+        return {"ok": False, "kind": "rebase_failed", "error": err_text}
+    return {"ok": True, "kind": "rebased", "error": None}
+
+
 def _qa_commit_landed(repo_dir: Path, bl_id: str, agent_branch: str) -> bool:
     """B12: confirm a `qa(<bl>...)` commit on agent_branch actually touches
     .agile-v/qa/<bl>.md.
@@ -311,6 +350,34 @@ async def _engineer_flow(
                     merge_retry = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
                     if merge_retry.get("ok"):
                         merge = merge_retry
+                # A1: non_ff caused by an operator commit racing the agent
+                # worktree (Sprint 3 BL-0005 root cause). Rebase the agent
+                # branch in its OWN worktree onto target_ref, re-run the
+                # gate (the new SHA wasn't tested), and re-attempt the ff.
+                if not merge.get("ok") and merge.get("kind") == "non_ff":
+                    yield _tag({"type": "_meta", "phase": "merge_rebase_attempt",
+                                "branch": wt.branch, "target_ref": cfg.agent_branch},
+                               "engineer", bl_id)
+                    rebase = await _rebase_in_worktree(wt.path, cfg.agent_branch)
+                    if rebase.get("ok"):
+                        yield _tag({"type": "_meta", "phase": "merge_rebase_succeeded",
+                                    "branch": wt.branch}, "engineer", bl_id)
+                        gate2 = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
+                                                                   target_ref=cfg.agent_branch)
+                        yield _tag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
+                                    **{k: gate2.get(k) for k in ("ok","kind","regressions","reason","post_tail")}},
+                                   "engineer", bl_id)
+                        if gate2.get("ok"):
+                            merge = await fast_forward_target(repo_dir, wt.branch,
+                                                              target_ref=cfg.agent_branch)
+                        else:
+                            # Gate failed on rebased SHA — leave for review.
+                            merge = {"ok": False, "kind": "non_ff_gate_failed_post_rebase",
+                                     "error": gate2.get("reason")}
+                    else:
+                        yield _tag({"type": "_meta", "phase": "merge_rebase_failed",
+                                    "error": rebase.get("error"), "branch": wt.branch},
+                                   "engineer", bl_id)
                 merged = bool(merge.get("ok"))
                 yield _tag({"type": "_meta", "phase": "merge_to_target",
                             "ok": merge.get("ok"), "merged_sha": merge.get("merged_sha"),
@@ -423,6 +490,31 @@ async def _qa_or_scorer_flow(
                     merge_retry = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
                     if merge_retry.get("ok"):
                         merge = merge_retry
+                # A1: same non_ff auto-rebase as the engineer flow — operator
+                # commits race QA worktrees too.
+                if not merge.get("ok") and merge.get("kind") == "non_ff":
+                    yield _tag({"type": "_meta", "phase": "merge_rebase_attempt",
+                                "branch": wt.branch, "target_ref": cfg.agent_branch},
+                               role, bl_id)
+                    rebase = await _rebase_in_worktree(wt.path, cfg.agent_branch)
+                    if rebase.get("ok"):
+                        yield _tag({"type": "_meta", "phase": "merge_rebase_succeeded",
+                                    "branch": wt.branch}, role, bl_id)
+                        gate2 = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
+                                                                   target_ref=cfg.agent_branch)
+                        yield _tag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
+                                    **{k: gate2.get(k) for k in ("ok","kind","regressions","reason","post_tail")}},
+                                   role, bl_id)
+                        if gate2.get("ok"):
+                            merge = await fast_forward_target(repo_dir, wt.branch,
+                                                              target_ref=cfg.agent_branch)
+                        else:
+                            merge = {"ok": False, "kind": "non_ff_gate_failed_post_rebase",
+                                     "error": gate2.get("reason")}
+                    else:
+                        yield _tag({"type": "_meta", "phase": "merge_rebase_failed",
+                                    "error": rebase.get("error"), "branch": wt.branch},
+                                   role, bl_id)
                 merged = bool(merge.get("ok"))
                 yield _tag({"type": "_meta", "phase": "merge_to_target",
                             "ok": merge.get("ok"), "merged_sha": merge.get("merged_sha"),
