@@ -11,3 +11,10 @@
 - [Honest verification when asked](feedback_honest_verification.md) — user pushes back on overclaims
 - [Subprocess-Option-A preference](feedback_subprocess_option_a.md) — Python subprocess, no TS SDK
 - [Worktree-isolated agent runs](pattern_worktree_isolation.md) — every agent invocation runs in its own git worktree
+- [Arch invariants overview](arch_invariants.md) — the seven structural rules; pointer to ARCHITECTURE_INVARIANTS.md
+- [Arch I-1: subprocess lifecycle](arch_subprocess_lifecycle.md) — every spawn registers cleanup on every exit path
+- [Arch I-2: doctrine contract](arch_doctrine_contract.md) — every documented R-rule maps to one enforcement point + one test
+- [Arch I-3: closure postconditions](arch_closure_postconditions.md) — at termination, assert the world matches cleanup's intent
+- [Arch I-4: run identity](arch_run_identity.md) — one run_id, minted once in the router, threaded through every artifact
+- [Arch I-6: failure taxonomy](arch_failure_taxonomy.md) — 10 classes; >3 instances triggers invariant review
+- [Arch I-7: self-hardening](arch_self_hardening.md) — doctrine-meta-agent proposes; operator approves; never auto-merges
