@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from app.services import backlog as backlog_svc
 from app.services import orchestrator as orchestrator_svc
+from app.services import run_state as run_state_svc
 from app.services.claude_agent import stream_agent_task
 from app.services.indexing import run_claude_context_index, run_graphify_update
 from app.services.traces import TraceWriter, list_traces
@@ -928,12 +929,44 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 **existing_meta,
             },
         )
+
+    # A7: detect orphaned disk state from a prior process that crashed mid-run.
+    # If skip_po=True, the operator has signaled "this is a deliberate resume"
+    # — reuse the orphan's run_id so checkpoints + traces stay correlated.
+    # If skip_po=False, refuse with a hint so we don't clobber the prior run's
+    # PO output by re-running PO on top of an existing BACKLOG.md.
+    orphan = run_state_svc.find_active(repo, brief_hash) if not lock.locked() else None
+    if orphan is not None and not req.skip_po:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "orphaned-run-detected",
+                "repo": repo,
+                "orphan_run_id": orphan.get("run_id"),
+                "orphan_started_at": orphan.get("started_at"),
+                "orphan_current_bl": orphan.get("current_bl"),
+                "orphan_completed_bls": [o.get("bl_id") for o in (orphan.get("bl_outcomes") or [])],
+                "hint": (
+                    "A prior /run-brief for this repo + brief crashed mid-run. "
+                    "Re-POST with skip_po=true to resume (orchestrator will short-circuit "
+                    "already-merged BLs and re-run QA where missing). "
+                    "Or rm webapp/backend/.orchestrator-state/<orphan_run_id>.json to discard."
+                ),
+            },
+        )
+
     await lock.acquire()
-    run_id = f"run-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
+    if orphan is not None and req.skip_po:
+        # Reuse the prior run's identity so trace archival + state file move
+        # land in the right place.
+        run_id = orphan["run_id"]
+    else:
+        run_id = f"run-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
     _RUN_META[repo] = {
         "run_id": run_id,
         "started_at": time.time(),
         "brief_hash": brief_hash,
+        "resumed_from_orphan": bool(orphan is not None and req.skip_po),
     }
 
     def _rk_builder(wt: Worktree, role: str, bl_id: str | None, trace: TraceWriter | None) -> dict:
@@ -953,6 +986,10 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 skip_po=req.skip_po,
                 stop_on_failure=req.stop_on_failure,
                 stop_on_qa_doctrine_failure=req.stop_on_qa_doctrine_failure,
+                # A7: share run_id with the router's lock metadata so the disk
+                # state file, trace archive dir, and 409 detail all line up.
+                run_id=run_id,
+                brief_hash=brief_hash,
             ):
                 # Track current_bl from bl.start so 409 responses can name it.
                 if event.get("phase") == "orchestrator.bl.start":

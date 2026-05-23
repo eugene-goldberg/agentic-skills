@@ -32,6 +32,7 @@ from app.services import doctrine_validator as doctrine_svc
 from app.services import prompts as prompts_svc
 from app.services import regression_gate as regression_gate_svc
 from app.services import repo_config as repo_config_svc
+from app.services import run_state as run_state_svc
 from app.services.brownfield import classify_target
 from app.services.claude_agent import stream_agent_task
 from app.services.git_worktree import (
@@ -485,6 +486,8 @@ async def run_brief(
     skip_po: bool = False,
     stop_on_failure: bool = True,
     stop_on_qa_doctrine_failure: bool = False,
+    run_id: str | None = None,
+    brief_hash: str | None = None,
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -497,10 +500,39 @@ async def run_brief(
         "po": None,
         "bls": [],  # [{bl_id, engineer:{merged,no_op}, qa:{merged}, scorer:{doctrine_ok}}]
     }
+    # A7: compact per-BL state for the disk checkpoint. Mirrors `summary["bls"]`
+    # at a smaller, schema-stable shape so resume can read it without coupling
+    # to the full per-role outcome structure.
+    bl_outcomes_compact: list[dict] = []
+    # A7: terminal status for the disk state move. Defaults to "aborted" so any
+    # return / exception path lands in done/ tagged as aborted; the single
+    # sprint_complete path flips this just before the terminal yield.
+    terminal_status = "aborted"
 
-    # B15: tag this run for trace archival on exit (any path: complete or aborted).
+    def _checkpoint(current_bl: str | None) -> None:
+        try:
+            run_state_svc.write_checkpoint(
+                run_id=run_id,
+                repo=repo_name,
+                brief_hash=brief_hash,
+                started_at=run_started_at,
+                current_bl=current_bl,
+                bl_outcomes=bl_outcomes_compact,
+                status="active",
+            )
+        except OSError:
+            pass  # checkpoints are advisory; never block the sprint on disk I/O
+
+    # B15+A7: tag this run for trace archival on exit AND for disk-persisted
+    # state checkpoints. If the router (B2/B9) already minted a run_id, honor
+    # it so the disk state file matches the lock metadata.
     run_started_at = datetime.now(timezone.utc)
-    run_id = f"run-{run_started_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
+    if run_id is None:
+        run_id = f"run-{run_started_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
+    # A7 needs brief_hash to find orphaned state on resume — keep "unknown"
+    # only as a back-compat sentinel for callers that didn't pass one.
+    if brief_hash is None:
+        brief_hash = "unknown"
 
     yield _evt("start", brief_chars=len(brief), project_name=project_name, run_id=run_id)
 
@@ -537,12 +569,14 @@ async def run_brief(
         yield _evt("backlog_parsed", count=len(ordered),
                    bls=[{"id": it.id, "title": it.title,
                          "deps": str(it.meta.get("dependencies") or "")} for it in ordered])
+        _checkpoint(current_bl=None)  # A7: first checkpoint after PO+parse
 
         # ── Step 5: per-BL loop ────────────────────────────────────────────────
         for it in ordered:
             bl_id = it.id
             per_bl = {"bl_id": bl_id, "title": it.title}
             yield _evt("bl.start", bl_id=bl_id, title=it.title)
+            _checkpoint(current_bl=bl_id)  # A7: mark which BL is in flight
 
             # Engineer
             yield _evt("engineer.start", bl_id=bl_id)
@@ -570,6 +604,8 @@ async def run_brief(
             if eng_outcome and eng_outcome.get("no_op"):
                 if qa_report.exists() and qa_committed:
                     summary["bls"].append(per_bl)
+                    bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "no_op"})
+                    _checkpoint(current_bl=None)  # A7
                     yield _evt("bl.done", bl_id=bl_id, outcome="no_op")
                     continue
                 # Engineer no_op but QA report missing OR uncommitted —
@@ -590,6 +626,8 @@ async def run_brief(
                 # Fall through directly to QA below.
             elif not (eng_outcome and eng_outcome.get("merged")):
                 summary["bls"].append(per_bl)
+                bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "engineer_unmerged"})
+                _checkpoint(current_bl=None)  # A7
                 yield _evt("bl.done", bl_id=bl_id, outcome="engineer_unmerged")
                 if stop_on_failure:
                     yield _evt("aborted", reason=f"engineer did not merge {bl_id}")
@@ -626,6 +664,8 @@ async def run_brief(
                 )
                 if stop_on_qa_doctrine_failure:
                     summary["bls"].append(per_bl)
+                    bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "merged_no_qa"})
+                    _checkpoint(current_bl=None)  # A7
                     yield _evt("bl.done", bl_id=bl_id, outcome="merged_no_qa")
                     yield _evt("aborted",
                                reason=f"QA doctrine failed for {bl_id} (stop_on_qa_doctrine_failure)")
@@ -660,10 +700,18 @@ async def run_brief(
             else:
                 outcome = "merged_full"
             summary["bls"].append(per_bl)
+            bl_outcomes_compact.append({"bl_id": bl_id, "outcome": outcome})
+            _checkpoint(current_bl=None)  # A7
             yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
 
+        terminal_status = "sprint_complete"  # A7: flip from default "aborted"
         yield _evt("sprint_complete", summary=summary)
     finally:
+        # A7: move the disk state file into done/ tagged with how the run ended.
+        try:
+            run_state_svc.mark_terminated(run_id, terminal_status)
+        except Exception:
+            pass
         # B15: archive any traces this run produced (clean exit OR aborted OR
         # consumer disconnect). Silently best-effort — yielding from an async
         # generator's finally during aclose() is illegal (PEP 525), so we

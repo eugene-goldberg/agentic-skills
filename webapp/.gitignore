@@ -10,3 +10,4 @@ backend/repos/*
 backend/traces/
 backend/logs/orchestrator/*
 !backend/logs/orchestrator/.gitkeep
+backend/.orchestrator-state/
