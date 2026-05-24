@@ -14,6 +14,7 @@ const API = ""; // same-origin
 export function AppV2() {
   const [repos, setRepos] = useState([]);
   const [repo, setRepo] = useState("full-stack-fastapi-template");
+  const [featureName, setFeatureName] = useState("");
   const [brief, setBrief] = useState("");
   const [maxBls, setMaxBls] = useState("");
   const [skipPo, setSkipPo] = useState(false);
@@ -233,11 +234,14 @@ export function AppV2() {
     try {
       const body = {
         brief,
-        project_name: null,
+        project_name: featureName || null,
         max_bls: maxBls ? parseInt(maxBls, 10) : null,
         skip_po: skipPo,
         stop_on_failure: true,
         timeout_per_role: 2400,
+        // A18: per-feature isolation — server creates
+        // <target>/_brownfield/features/<slug>/ and tails events.jsonl there.
+        feature_name: featureName || null,
       };
       for await (const evt of streamPost(`${API}/api/projects/${encodeURIComponent(repo)}/run-brief`, body, ctrl.signal)) {
         ingest(evt);
@@ -288,16 +292,28 @@ export function AppV2() {
                  placeholder="all" style={{ width: 60 }} disabled={running} />
           <label><input type="checkbox" checked={skipPo} onChange={(e) => setSkipPo(e.target.checked)} disabled={running} /> Skip PO (re-run on existing backlog)</label>
         </div>
+        <div className="v2-row">
+          <label>Feature name</label>
+          <input
+            value={featureName}
+            onChange={(e) => setFeatureName(e.target.value)}
+            placeholder="audit-log, rbac, multi-tenant-workspaces …"
+            style={{ flex: 1, minWidth: 240 }}
+            disabled={running}
+          />
+        </div>
         <textarea
           className="v2-brief"
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
-          placeholder="Describe the feature you want the team to deliver. Min 20 characters. E.g. 'Add multi-tenant collaboration with workspaces, invitations, and per-workspace task lists. Keep backwards-compat with existing single-user routes.'"
-          rows={6}
+          placeholder="Full description of the feature. Min 20 characters. E.g. 'Add multi-tenant collaboration with workspaces, invitations, and per-workspace task lists. Keep backwards-compat with existing single-user routes.'"
+          rows={8}
           disabled={running}
         />
         <div className="v2-row">
-          <button onClick={run} disabled={running || brief.length < 20 || !repo} className="v2-primary">
+          <button onClick={run}
+                  disabled={running || brief.length < 20 || !repo || featureName.trim().length < 2}
+                  className="v2-primary">
             {running ? "Running…" : "Run pipeline"}
           </button>
           <button onClick={stop} disabled={!running} className="v2-secondary">Stop</button>
