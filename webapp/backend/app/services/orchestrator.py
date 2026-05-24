@@ -30,6 +30,7 @@ from typing import AsyncIterator
 from app.services import backlog as backlog_svc
 from app.services import doctrine_validator as doctrine_svc
 from app.services import prompts as prompts_svc
+from app.services import prompts_brownfield as prompts_brownfield_svc
 from app.services import regression_gate as regression_gate_svc
 from app.services import repo_config as repo_config_svc
 from app.services import run_state as run_state_svc
@@ -539,6 +540,119 @@ async def _qa_or_scorer_flow(
                 pass
 
 
+# ─── doctrine-meta flow (B-3 / I-7 self-hardening) ─────────────────────────
+
+
+async def _doctrine_meta_flow(
+    repo_name: str,
+    run_id: str,
+    timeout: int,
+) -> AsyncIterator[dict]:
+    """Spawn the doctrine-meta-agent against the just-completed sprint's
+    archived traces. The agent reads traces_archive/<run_id>/ and writes
+    proposal files to .planning/doctrine_proposals/. It does NOT modify code.
+
+    This flow:
+      1. Locates the trace archive and the proposals dir.
+      2. Snapshots existing proposal files (so we can detect new ones).
+      3. Builds the prompt (doctrine SKILLS.md + run_id + paths + invariants
+         doc reference).
+      4. Streams the agent in the agentic-skills repo root (no MCP retrieval —
+         the meta-agent reads files directly via Read/Bash, no graphify needed).
+      5. Validates each new proposal file: must contain `## Evidence` and at
+         least one `trace_path` reference. Rejected proposals get flagged but
+         remain on disk for operator inspection.
+      6. Emits orchestrator.doctrine_meta.proposals with counts + paths.
+
+    Honors I-7: this flow NEVER changes doctrine itself; the agent NEVER
+    auto-merges proposals. Operator approval is the only path to landed
+    doctrine change.
+    """
+    agentic_root = prompts_brownfield_svc.AGENTIC_ROOT
+    archive_dir = agentic_root / "webapp" / "backend" / "traces_archive" / run_id
+    proposals_dir = agentic_root / ".planning" / "doctrine_proposals"
+
+    if not archive_dir.exists():
+        yield _evt("doctrine_meta.skipped", reason="no_archive", archive_dir=str(archive_dir))
+        return
+
+    trace_subdirs = sorted(p.name for p in archive_dir.iterdir() if p.is_dir())
+    if not trace_subdirs:
+        yield _evt("doctrine_meta.skipped", reason="empty_archive", archive_dir=str(archive_dir))
+        return
+
+    proposals_dir.mkdir(parents=True, exist_ok=True)
+    pre_existing = {p.name for p in proposals_dir.glob("*.md") if p.name not in ("README.md",)}
+
+    invariants_doc = agentic_root / "ARCHITECTURE_INVARIANTS.md"
+    ledger_doc = agentic_root / "DESIGN_SHORTCOMINGS.md"
+
+    doctrine = prompts_brownfield_svc._load_skill("doctrine_meta")
+    task = (
+        f"{doctrine}\n\n"
+        f"---\n\n"
+        f"# Run context\n\n"
+        f"- run_id: `{run_id}`\n"
+        f"- trace archive: `{archive_dir}` ({len(trace_subdirs)} trace dirs)\n"
+        f"- canonical invariants: `{invariants_doc}`\n"
+        f"- existing ledger: `{ledger_doc}`\n"
+        f"- proposals output dir: `{proposals_dir}`\n\n"
+        f"Trace dirs under the archive (each holds events.jsonl, retrieval.jsonl, meta.json):\n"
+        + "\n".join(f"- {n}" for n in trace_subdirs)
+        + "\n\n"
+        f"Follow the Required Completion Steps in your SKILLS.md. "
+        f"Write proposal files only under `{proposals_dir}` — never elsewhere. "
+        f"Cite every claim with a trace path + line number that can be re-opened. "
+        f"If you find nothing proposal-worthy, write zero files and emit a final JSON summary with `proposals_count: 0`.\n"
+    )
+
+    trace = TraceWriter(repo=repo_name, role="doctrine_meta", task_id=run_id)
+    yield _evt("doctrine_meta.start", run_id=run_id, traces_count=len(trace_subdirs),
+               trace_dir=str(trace.dir))
+    try:
+        async for event in stream_agent_task(
+            task,
+            agentic_root,
+            timeout_seconds=timeout,
+            idle_timeout=600,
+            allowed_tools="Bash,Read,Write,Edit",
+            trace=trace,
+        ):
+            event.setdefault("orchestrator_step", "doctrine_meta")
+            yield event
+    finally:
+        trace.close()
+
+    # Detect new proposal files + validate.
+    after = {p.name for p in proposals_dir.glob("*.md") if p.name not in ("README.md",)}
+    new_files = sorted(after - pre_existing)
+    proposals: list[dict] = []
+    for name in new_files:
+        path = proposals_dir / name
+        try:
+            body = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        has_evidence = "## Evidence" in body
+        cites_trace = "traces_archive/" in body
+        proposals.append({
+            "filename": name,
+            "path": str(path),
+            "bytes": path.stat().st_size,
+            "has_evidence_section": has_evidence,
+            "cites_trace": cites_trace,
+            "valid": has_evidence and cites_trace,
+        })
+
+    yield _evt(
+        "doctrine_meta.proposals",
+        run_id=run_id,
+        proposals_count=len(proposals),
+        valid_count=sum(1 for p in proposals if p["valid"]),
+        proposals=proposals,
+    )
+
+
 # ─── main orchestrator ─────────────────────────────────────────────────────
 
 
@@ -581,6 +695,7 @@ async def run_brief(
     run_id: str | None = None,
     brief_hash: str | None = None,
     start_bl: str | None = None,
+    run_doctrine_meta: bool = True,
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -811,6 +926,22 @@ async def run_brief(
 
         terminal_status = "sprint_complete"  # A7: flip from default "aborted"
         yield _evt("sprint_complete", summary=summary)
+
+        # B-3 / I-7: spawn the doctrine-meta-agent against this sprint's
+        # archived traces. Runs ONLY after sprint_complete (a partial sprint
+        # has no completed-pattern to mine). Archive traces NOW so the meta
+        # agent can read them; _archive_traces_since is idempotent so the
+        # finally-block call below becomes a no-op for already-moved dirs.
+        if run_doctrine_meta:
+            try:
+                _archive_traces_since(repo_name, run_started_at, run_id)
+            except Exception:
+                pass
+            try:
+                async for evt in _doctrine_meta_flow(repo_name, run_id, timeout=timeout_per_role):
+                    yield evt
+            except Exception as exc:
+                yield _evt("doctrine_meta.error", error=str(exc))
     finally:
         # A7: move the disk state file into done/ tagged with how the run ended.
         try:
