@@ -88,16 +88,39 @@
 
 ---
 
+## Move 2 — closure_check() (I-3)
+
+**Scope:** Strategic move proposed 2026-05-23 in the architect-prereqs strategic plan. Not part of `ARCHITECT_PLAN.md`'s four batches; tracked here because it closes A10 + foundation for A13. Operator approved 2026-05-23 evening.
+
+**Why:** The crew gains the capacity to verify its own runs end cleanly. The 25 orphan containers reaped by hand earlier this session are exactly the gap this closes structurally.
+
+**Items:**
+
+| ID | Item | Status | Commit | Verification |
+|---|---|---|---|---|
+| M2-1 | Label gate-spawned docker containers with `agentic-skills.run_id=<run_id>` | pending | — | `docker ps --filter label=agentic-skills.run_id=<id>` returns the gate's containers; existing unlabeled containers ignored |
+| M2-2 | New `closure_check.py` module with scan functions (pgroup survivors, stale worktrees, agent branches, docker containers); no integration yet | pending | — | `python -c "from app.services import closure_check; closure_check.scan_all('fake-run-id')"` returns a `list[Violation]` |
+| M2-3 | Hook `run_closure_check` into `run_brief` outer finally; emit `orchestrator.closure_violation` per survivor | pending | — | kill -9 mid-run → next run's start finds violations from prior `run_id` and emits SSE events |
+| M2-4 | A13 fix: orchestrator writes per-agent `phase_events.jsonl` co-located with `stream.jsonl` | pending | — | doctrine_check, regression_gate, pregrounding events appear in the per-agent trace dir, not just orchestrator stream |
+
+**Move 2 gate:**
+- [ ] M2-1..M2-4 land atomically
+- [ ] Smoke: synthetic sprint terminate → closure_check fires, each scan returns 0 for a clean run
+- [ ] Smoke: kill -9 mid-sprint, restart → closure_check on prior run_id emits ≥1 closure_violation
+- [ ] A10 + A13 marked done in `DESIGN_SHORTCOMINGS.md`
+
+---
+
 ## End-to-end smoke
 
 After all four batches land, one final exercise validates the loop:
 
 | Step | Status |
 |---|---|
-| Synthetic sprint completes (e.g., Sprint 4 archive) | ☐ |
-| Doctrine-meta reads archive → ≥1 proposal in `.planning/doctrine_proposals/` | ☐ |
-| Framework-reviewer reads the proposal → ≥1 concern in `.planning/reviews/` | ☐ |
-| Observer writes first health report → no UNKNOWN events | ☐ |
+| Synthetic sprint completes (e.g., Sprint 4 archive) | ☑ (Sprint 4 archive `run-20260523T212548Z-5bfff3` used; 11 trace dirs) |
+| Doctrine-meta reads archive → ≥1 proposal in `.planning/doctrine_proposals/` | ☑ (smoke1: 2 valid proposals; smoke2 after A12+A14 fixes: 0 — also correct, "silence is correct when nothing to say"; both runs verified `forbidden_tools` held) |
+| Framework-reviewer reads the proposal → ≥1 concern in `.planning/reviews/` | ☐ (pending Batch C) |
+| Observer writes first health report → no UNKNOWN events | ☐ (pending Batch D) |
 
 ---
 
@@ -114,7 +137,7 @@ After all four batches land, one final exercise validates the loop:
 ## Sign-off
 
 - [x] Batch A verified — sign: claude (Opus 4.7)  date: 2026-05-23  notes: 658dcb1 + a50026a + a2fa12a. Docs-only; Sprint 4 unaffected throughout.
-- [x] Batch B verified — sign: claude (Opus 4.7)  date: 2026-05-23  notes: c65ff09 + 9ec64c6 + 0cdfec7 + 47e7157 + d5c17f3. Backend imports clean; new endpoint exposed in OpenAPI. Awaits end-to-end smoke against a real `traces_archive/<run_id>/` (deferred until uvicorn restart + test run).
+- [x] Batch B verified — sign: claude (Opus 4.7)  date: 2026-05-23  notes: c65ff09 + 9ec64c6 + 0cdfec7 + 47e7157 + d5c17f3. **Smoke validated end-to-end:** smoke1 produced 2 valid proposals against Sprint 4 archive (A12, A13 surfaced by the agent itself; A14 surfaced by my review pass). Smoke2 (after A12+A14 SKILLS.md fixes landed at d126bd4) correctly produced 0 proposals — agent recognized A12/A13/A14 in ledger and applied "silence is correct" discipline. Forbidden-tools constraint held in both runs (smoke2 explicitly refused `git add`/`git commit` per SKILLS.md). I-7 self-hardening loop closed and validated.
 - [ ] Batch C verified — sign: ____  date: ____
 - [ ] Batch D verified — sign: ____  date: ____
 - [ ] **End-to-end smoke** — sign: ____  date: ____
