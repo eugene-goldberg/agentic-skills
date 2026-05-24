@@ -194,6 +194,55 @@ def _ptag(event: dict, step: str, bl_id: str | None = None, *, trace=None) -> di
     return _tag(event, step, bl_id)
 
 
+def _slugify(name: str, *, max_len: int = 40) -> str:
+    """Filesystem-safe slug for a project_name. Lowercase alphanumeric+hyphen."""
+    import re as _re
+    s = _re.sub(r"[^a-zA-Z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    return s[:max_len] or "untitled"
+
+
+def _persist_brief_in_worktree(
+    *,
+    wt_path: Path,
+    artifact_dir: str,
+    brief: str,
+    run_id: str,
+    project_name: str,
+    repo_name: str,
+    brief_hash: str | None,
+    started_at: str,
+) -> Path | None:
+    """A17: write the operator's verbatim brief into
+    ``<worktree>/<artifact_dir>/sprint_briefs/<run_id>-<slug>.md`` so it
+    lands inside the PO's brownfield tree. The existing PO copy-back
+    (``copytree wt/<art> → repo_dir/<art>``) and ``git add <art>`` flow
+    naturally carry it onto the target's agent branch.
+
+    Idempotent: returns the existing path if already written. Best-effort:
+    OSError is swallowed so persistence failure never blocks the sprint.
+    """
+    if not brief or not run_id:
+        return None
+    target = wt_path / artifact_dir / "sprint_briefs" / f"{run_id}-{_slugify(project_name)}.md"
+    if target.exists():
+        return target
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            f"---\n"
+            f"run_id: {run_id}\n"
+            f"project_name: {project_name}\n"
+            f"repo: {repo_name}\n"
+            f"started_at: {started_at}\n"
+            f"brief_hash: {brief_hash or '(unset)'}\n"
+            f"---\n\n"
+        )
+        target.write_text(header + brief, encoding="utf-8")
+    except OSError:
+        return None
+    return target
+
+
 async def _run_indexers(repo_dir: Path, label: str) -> AsyncIterator[dict]:
     """Run claude-context + graphify, in parallel. Incremental by provider design."""
     yield _evt(f"{label}.start")
@@ -222,6 +271,9 @@ async def _po_flow(
     project_name: str,
     timeout: int,
     retrieval_kwargs_builder,
+    *,
+    run_id: str | None = None,
+    brief_hash: str | None = None,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
@@ -233,6 +285,32 @@ async def _po_flow(
         trace = TraceWriter(repo=repo_name, role="po", task_id=wt.task_id)
         yield _ptag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
                     "branch": wt.branch, "role": "po", "trace_dir": str(trace.dir)}, "po", trace=trace)
+
+        # A17: persist the operator's verbatim brief into the worktree's
+        # brownfield artifact dir BEFORE the PO subprocess spawns. The PO's
+        # existing copy-back (wt/<art> → repo_dir/<art>) and git-add carry
+        # it onto the target's agent branch naturally. Located in the target
+        # repo (NOT in agentic-skills) because the brief describes the
+        # TARGET's feature, alongside BACKLOG.md and per-BL artifacts.
+        if run_id:
+            from app.services.brownfield import pick_artifact_dir
+            _art_for_brief = pick_artifact_dir(repo_dir)
+            _brief_path = _persist_brief_in_worktree(
+                wt_path=wt.path,
+                artifact_dir=_art_for_brief,
+                brief=brief,
+                run_id=run_id,
+                project_name=project_name,
+                repo_name=repo_name,
+                brief_hash=brief_hash,
+                started_at=datetime.now(timezone.utc).isoformat(),
+            )
+            if _brief_path is not None:
+                yield _ptag({"type": "_meta", "phase": "brief_persisted",
+                            "path": str(_brief_path.relative_to(wt.path)),
+                            "bytes": _brief_path.stat().st_size,
+                            "run_id": run_id}, "po", trace=trace)
+
         rk = retrieval_kwargs_builder(wt, "po", None, trace)
         async for event in stream_agent_task(prompt, wt.path, timeout_seconds=timeout, trace=trace, **rk):
             yield _tag(event, "po")
@@ -779,7 +857,8 @@ async def run_brief(
         if not skip_po:
             yield _evt("po.start")
             async for e in _po_flow(repo_dir, repo_name, brief, project_name,
-                                    timeout_per_role, retrieval_kwargs_builder):
+                                    timeout_per_role, retrieval_kwargs_builder,
+                                    run_id=run_id, brief_hash=brief_hash):
                 if "_orchestrator_outcome" in e:
                     summary["po"] = e
                     po_ok = e.get("doctrine_ok", False)

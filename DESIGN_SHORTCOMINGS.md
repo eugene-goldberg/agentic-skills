@@ -333,11 +333,13 @@ The current `briefs/` top-level dir holds **old-harness role-work-packets** (`en
 **Cause:** The orchestrator accepts the brief as an inline string (`RunBriefRequest.brief: str`) and never persists it. The PO trace is the only durable record, and it's inside `webapp/backend/traces/`, not in the agentic-skills source tree where governance lives.
 
 **Fix:** On every `/run-brief` invocation:
-1. Server writes the brief verbatim to `sprint_briefs/<run_id>-<slug>.md` at run start, before the orchestrator generator begins.
+1. After the PO worktree is created (in `orchestrator._po_flow`), the server writes the brief verbatim to **`<worktree>/<artifact_dir>/sprint_briefs/<run_id>-<slug>.md`** — that is, into the target repo's brownfield artifact tree. The brief describes a target-repo feature; it belongs alongside `BACKLOG.md`, the per-BL `codebase_context.md` files, and the eventual feature code on the target's agent branch. **NOT** in the agentic-skills source tree, which holds only doctrine + ledger + framework code.
 2. The file carries a YAML frontmatter header with `run_id`, `project_name`, `repo`, `started_at`, `brief_hash` so each brief is self-describing.
-3. The orchestrator emits a new `orchestrator.brief_persisted` event carrying the path; UI + observer can surface it.
-4. The brief file is **tracked** (not gitignored). Operator commits it at the end of the sprint (or pre-emptively) so the requirements live in the same source tree as the doctrine and the ledger.
-5. The server does NOT auto-commit (R13-class architect overreach — agents/server don't run git mutations on the agentic-skills repo).
+3. The orchestrator emits an `orchestrator.brief_persisted` SSE event (tagged `orchestrator_step=po`) carrying the worktree-relative path; UI + observer can surface it.
+4. The PO's existing copy-back path (`shutil.copytree wt/<art> → repo_dir/<art>`) and `git add <art>` flow naturally pull the brief into the PO's import-backlog commit. The brief lands on the target's `agent_branch` (e.g. `agentic-skills-work-v3`) alongside the PO's other artifacts.
+5. The server (orchestrator) does NOT touch the agentic-skills repo's index. The brief lands on the target via the existing PO commit; the target's branch lifecycle is operator-owned.
+
+**Location correction (initial draft was wrong):** an earlier version of A17 had the server write to `<agentic-skills>/sprint_briefs/<run_id>-<slug>.md`. That conflated framework-level governance (doctrine, ledger, invariants — agentic-skills concerns) with target-level intent (feature briefs — target repo concerns). Operator-flagged 2026-05-24 mid-RBAC-sprint. Implementation now writes to the target's `_brownfield/sprint_briefs/`. Backfilled briefs in `agentic-skills/sprint_briefs/` (api-keys + RBAC) are transitional records; they will be moved into the target's `_brownfield/sprint_briefs/` after the RBAC sprint completes.
 
 **Risk:**
 1. **Brief size**: massive briefs (50+ KB) clutter the repo. Mitigation: leave it; large briefs are signal that scope is too big, not noise.
