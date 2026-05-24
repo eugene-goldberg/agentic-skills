@@ -18,3 +18,5 @@
 - [Arch I-4: run identity](arch_run_identity.md) — one run_id, minted once in the router, threaded through every artifact
 - [Arch I-6: failure taxonomy](arch_failure_taxonomy.md) — 10 classes; >3 instances triggers invariant review
 - [Arch I-7: self-hardening](arch_self_hardening.md) — doctrine-meta-agent proposes; operator approves; never auto-merges
+- [Claude's architect role](arch_claude_role.md) — operator directive 2026-05-23: Claude is the architect with delivery accountability; codified in CLAUDE.md
+- [Active work branch](arch_active_branch.md) — `architect-prereqs` off `sprint-2-orchestrator@710992b`; Batch A done; B/C/D pending
