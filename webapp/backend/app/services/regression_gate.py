@@ -27,6 +27,23 @@ from pathlib import Path
 
 from app.services.brownfield import detect_test_command, pick_artifact_dir
 from app.services import repo_config as repo_config_svc
+from app.services.doctrine_validator import detect_infra_failure
+
+# A26: minimum free disk space (in GB) on the docker storage mount before
+# the gate is willing to spin up another pre/post worktree + docker compose
+# stack. Below this floor, gates routinely fail mid-run with ENOSPC during
+# `bun install` / image build / volume create, masquerading as code
+# regressions and exhausting engineer retry budget on unfixable problems.
+_MIN_FREE_GB = 5.0
+
+
+def _free_gb(path: Path) -> float:
+    """Return free disk space (GB) on the filesystem containing path."""
+    try:
+        s = shutil.disk_usage(str(path))
+        return s.free / (1024 ** 3)
+    except Exception:
+        return float("inf")  # don't block on diagnostic failure
 
 
 def _compose_project_prefix(run_id: str | None) -> str | None:
@@ -45,7 +62,11 @@ def _compose_project_prefix(run_id: str | None) -> str | None:
     # run_id is already short-ish (e.g. "run-20260523T212548Z-5bfff3"); strip
     # the "run-" prefix to keep the docker name under the 63-char ceiling
     # docker-compose imposes on project names.
-    short = run_id.removeprefix("run-")[:40]
+    # A22: docker-compose project names must be lowercase alphanumeric+hyphen/underscore.
+    # ISO-8601 timestamps include uppercase T/Z which compose rejects with
+    # "invalid project name: must consist only of lowercase ...". Lowercase
+    # the whole prefix so any future run_id schema also passes validation.
+    short = run_id.removeprefix("run-")[:40].lower()
     return f"agentic-skills-{short}"
 
 
@@ -202,6 +223,24 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
     if code != 0:
         return {"ok": False, "kind": "error", "reason": f"agent branch {agent_branch} not found", "command": test_cmd}
 
+    # A26: pre-flight disk check. The gate spawns two worktrees, builds two
+    # docker stacks, and runs the test suite twice — each side can easily
+    # consume 5–10 GB of transient image/volume/cache. When the docker
+    # storage volume is near-full, ENOSPC fires mid-run and the gate emits
+    # `tests/frontend::lint_typecheck_build FAILED` (or similar) which the
+    # engineer agent then tries to "fix" with code edits. Surface the real
+    # problem instead, before burning ~30 min on a doomed gate run.
+    free = _free_gb(repo_root)
+    if free < _MIN_FREE_GB:
+        return {
+            "ok": False, "kind": "infra_fail",
+            "reason": (f"docker storage near-full: only {free:.1f} GB free on "
+                       f"{repo_root} (need ≥{_MIN_FREE_GB:.1f} GB). Run "
+                       "`docker system prune -a --volumes -f` then retry."),
+            "command": test_cmd,
+            "post_tail": "",
+        }
+
     # Use a disposable worktree to avoid mutating the active checkout.
     wt_id = uuid.uuid4().hex[:8]
     wt_pre = repo_root.parent / ".gate-worktrees" / f"pre-{wt_id}"
@@ -238,6 +277,26 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
                 }
         post = await _run_tests(wt_post, test_cmd, compose_project=post_proj)
 
+        # A25b: before the regression/new-failure decision tree, check
+        # whether the post-run tail carries an infrastructure-failure marker
+        # (ENOSPC, OOMKilled, docker daemon error, postgres unreachable,
+        # etc.). When it does, the gate failure is NOT a code regression
+        # the engineer can fix — surface `kind=infra_fail` so the
+        # orchestrator routes it to operator review rather than burning
+        # retries on unfixable problems. This is distinct from `error`
+        # (which means the gate itself couldn't run) — infra_fail means the
+        # gate ran but the runtime crashed under it.
+        infra = detect_infra_failure(post.raw_tail)
+        if infra:
+            return {
+                "ok": False, "kind": "infra_fail",
+                "pre": pre.to_dict(), "post": post.to_dict(),
+                "regressions": [], "new_failures": [],
+                "command": test_cmd,
+                "reason": f"infra failure: {infra[:200]}",
+                "post_tail": post.raw_tail[-15000:],
+            }
+
         # A test that was passing pre-merge but is now failing (or missing) is a regression.
         regressions = sorted(pre.passed - post.passed)
         new_failures = sorted(post.failed - pre.failed)
@@ -248,8 +307,18 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
         post_executed = bool(post.passed or post.failed)
         if regressions:
             kind, reason = "regressed", f"{len(regressions)} regression(s); post exit={post.raw_exit}"
-        elif not post_executed and post.raw_exit != 0:
-            kind, reason = "inconclusive", f"tests did not execute (post exit={post.raw_exit}); fix the test command or the runtime, then retry"
+        elif post.raw_exit != 0:
+            # A21 (I-5 truthful aggregation): runner self-reported failure.
+            # Even when no test regressed vs pre, a non-zero exit means the
+            # suite did not complete cleanly — build error, infrastructure
+            # failure, fixture crash, or a brand-new failure with no pre
+            # counterpart. Never call this 'green'. If only new failures
+            # appeared (none shared with pre), surface them as 'regressed';
+            # otherwise it's 'inconclusive'.
+            if new_failures:
+                kind, reason = "regressed", f"{len(new_failures)} new failure(s); post exit={post.raw_exit}"
+            else:
+                kind, reason = "inconclusive", f"post suite did not exit clean (exit={post.raw_exit}, {len(post.passed)} passed, {len(post.failed)} failed); inspect post_tail"
         elif not post_executed:
             kind, reason = "inconclusive", "tests did not execute (no pass/fail parsed); verify test_cmd"
         else:
