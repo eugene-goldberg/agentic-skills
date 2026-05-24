@@ -4,28 +4,27 @@
 
 - Run ID: `qa-lg-lg-SKILLS-bl-0005`
 - Target Repo: `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/target-repos/lg-graph-test`
-- Target Commit: `aec67d611c0e860877fe49431293d2454a49df33` (engineering closing commit for BL-0005)
+- Target Commit: `38d0890ee67e75d136a1926b1413ab69f67ead2d` (engineering closing commit for BL-0005)
 - Engineering Run: `eng-lg-lg-SKILLS-bl-0005`
 - Engineering BL Under Test: `BL-0005`
 - Carry-Forward Suite: `qa-lg-lg-SKILLS-bl-0004` (copied into `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/runs/qa-lg-lg-SKILLS-bl-0005/journey_suite/`)
 
 ## Selected Backlog Item
 
-## BL-0005: Workspace Creation
-**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0003
-**Story:** As an authenticated user, I want to create a workspace so that I can organize projects and invite team members.
+## BL-0005: Workspace Listing and Detail
+**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0008, REQ-0020, REQ-0022
+**Story:** As a workspace member, I want to list my workspaces and view a specific workspace so that I can navigate my teams.
 **Acceptance:**
-1. `POST /workspaces` creates a workspace and sets the caller as Owner.
-2. Workspace record is persisted and returned.
-3. Unauthenticated request → 401.
-**Effort:** 2 · **Dependencies:** BL-0003, BL-0004 · **Status:** Ready
-
----
+1. `GET /workspaces` lists only workspaces the caller belongs to.
+2. `GET /workspaces/{ws_id}` returns workspace details for members.
+3. Non-member requests to either endpoint return `404` (not `403`).
+4. No workspace data leaks to non-members.
+**Effort:** 3 · **Dependencies:** BL-0004 · **Status:** Ready
 
 
 ## Mandatory Inputs
 
-Run inside the target repo at commit `aec67d611c0e860877fe49431293d2454a49df33`. Capture exit code + verbatim stdout for each:
+Run inside the target repo at commit `38d0890ee67e75d136a1926b1413ab69f67ead2d`. Capture exit code + verbatim stdout for each:
 
 ```bash
 .venv/bin/python -m py_compile app.py
@@ -62,7 +61,7 @@ Under `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/runs/qa-lg-lg-SKILLS
 ## Scope rules
 
 - Do NOT modify any engineer-authored artifact in the target repo. You report findings; engineering fixes.
-- Do NOT advance the target repo past `aec67d611c0e860877fe49431293d2454a49df33`. Use `git checkout aec67d611c0e860877fe49431293d2454a49df33` if needed and restore the prior HEAD when done.
+- Do NOT advance the target repo past `38d0890ee67e75d136a1926b1413ab69f67ead2d`. Use `git checkout 38d0890ee67e75d136a1926b1413ab69f67ead2d` if needed and restore the prior HEAD when done.
 - Do NOT use `TestClient(app)` in your journey suite.
 - Do NOT skip the engineer-authored verification stack.
 

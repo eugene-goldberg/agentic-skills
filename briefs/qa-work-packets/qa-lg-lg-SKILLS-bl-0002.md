@@ -4,29 +4,27 @@
 
 - Run ID: `qa-lg-lg-SKILLS-bl-0002`
 - Target Repo: `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/target-repos/lg-graph-test`
-- Target Commit: `a1bdd317e7c5a8d55ecec1d5fec4c7d707d2220e` (engineering closing commit for BL-0002)
+- Target Commit: `fe978ab7f5c383cf684419dd6cc34367033bf991` (engineering closing commit for BL-0002)
 - Engineering Run: `eng-lg-lg-SKILLS-bl-0002`
 - Engineering BL Under Test: `BL-0002`
 - Carry-Forward Suite: `qa-lg-lg-SKILLS-bl-0001` (copied into `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/runs/qa-lg-lg-SKILLS-bl-0002/journey_suite/`)
 
 ## Selected Backlog Item
 
-## BL-0002: User Registration Endpoint
-**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0002
-**Story:** As a new user, I want to register with a unique username and password so that I can later authenticate and use the system.
+## BL-0002: Authentication Signup and Login
+**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0001, REQ-0002, REQ-0022
+**Story:** As a user, I want to sign up with email and password and log in to receive a bearer token so that I can access protected resources.
 **Acceptance:**
-1. `POST /auth/register` accepts `{username, password}` and creates a user.
-2. Password is hashed before persistence (e.g., bcrypt).
-3. Duplicate username returns HTTP 409.
-4. Response does not include the password hash.
-**Effort:** 2 · **Dependencies:** BL-0001 · **Status:** Ready
-
----
+1. `POST /auth/signup` creates a user with hashed password; duplicate email returns `400` or `409`.
+2. `POST /auth/login` returns a bearer token for valid credentials and `401` for invalid credentials.
+3. Password is never returned in any API response.
+4. Protected endpoints reject missing or invalid tokens with `401`.
+**Effort:** 5 · **Dependencies:** BL-0001 · **Status:** Ready
 
 
 ## Mandatory Inputs
 
-Run inside the target repo at commit `a1bdd317e7c5a8d55ecec1d5fec4c7d707d2220e`. Capture exit code + verbatim stdout for each:
+Run inside the target repo at commit `fe978ab7f5c383cf684419dd6cc34367033bf991`. Capture exit code + verbatim stdout for each:
 
 ```bash
 .venv/bin/python -m py_compile app.py
@@ -63,7 +61,7 @@ Under `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/runs/qa-lg-lg-SKILLS
 ## Scope rules
 
 - Do NOT modify any engineer-authored artifact in the target repo. You report findings; engineering fixes.
-- Do NOT advance the target repo past `a1bdd317e7c5a8d55ecec1d5fec4c7d707d2220e`. Use `git checkout a1bdd317e7c5a8d55ecec1d5fec4c7d707d2220e` if needed and restore the prior HEAD when done.
+- Do NOT advance the target repo past `fe978ab7f5c383cf684419dd6cc34367033bf991`. Use `git checkout fe978ab7f5c383cf684419dd6cc34367033bf991` if needed and restore the prior HEAD when done.
 - Do NOT use `TestClient(app)` in your journey suite.
 - Do NOT skip the engineer-authored verification stack.
 

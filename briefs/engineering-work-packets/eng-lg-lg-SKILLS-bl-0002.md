@@ -5,7 +5,7 @@
 - Run ID: `eng-lg-lg-SKILLS-bl-0002`
 - Engineering Skill: `lg-SKILLS`
 - Target Repo: `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/target-repos/lg-graph-test`
-- Baseline Commit: `90357de742c3e4b7020d6b63111232518fa7d8cc`
+- Baseline Commit: `3a6147257ace6c1dfd9d62804f42e9b3cc2a3ef3`
 - Backlog Item: `BL-0002`
 
 ## Source Context
@@ -17,22 +17,39 @@
 
 ## Selected Backlog Item
 
-## BL-0002: User Registration Endpoint
-**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0002
-**Story:** As a new user, I want to register with a unique username and password so that I can later authenticate and use the system.
+## BL-0002: Authentication Signup and Login
+**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0001, REQ-0002, REQ-0022
+**Story:** As a user, I want to sign up with email and password and log in to receive a bearer token so that I can access protected resources.
 **Acceptance:**
-1. `POST /auth/register` accepts `{username, password}` and creates a user.
-2. Password is hashed before persistence (e.g., bcrypt).
-3. Duplicate username returns HTTP 409.
-4. Response does not include the password hash.
-**Effort:** 2 · **Dependencies:** BL-0001 · **Status:** Ready
-
----
+1. `POST /auth/signup` creates a user with hashed password; duplicate email returns `400` or `409`.
+2. `POST /auth/login` returns a bearer token for valid credentials and `401` for invalid credentials.
+3. Password is never returned in any API response.
+4. Protected endpoints reject missing or invalid tokens with `401`.
+**Effort:** 5 · **Dependencies:** BL-0001 · **Status:** Ready
 
 
 ## Related Requirements
 
-(no REQ excerpts available)
+## REQ-0001 Authentication Signup
+
+- **Requirement:** A user can sign up with a unique email and password.
+- **Constraint:** Email must be unique. Passwords must be stored only as hashes.
+- **Verification Criteria:** Creating a new account returns a user without password fields and enables authenticated access.
+- **Done Criteria:** Duplicate email is rejected; password is never returned by any API response.
+
+## REQ-0002 Authentication Login
+
+- **Requirement:** A user can log in with valid credentials and receive a bearer token.
+- **Constraint:** Invalid credentials return `401`.
+- **Verification Criteria:** Valid credentials return a token; invalid credentials do not.
+- **Done Criteria:** Token can be used on protected routes.
+
+## REQ-0022 HTTP API Surface
+
+- **Requirement:** The API exposes auth, workspace, project, task, comment, `/me/tasks`, and workspace summary routes described in the project brief.
+- **Constraint:** All non-auth surfaces require `Authorization: Bearer <token>`.
+- **Verification Criteria:** Protected endpoints reject missing tokens with `401`.
+- **Done Criteria:** Route behavior is covered through real HTTP requests.
 
 ## In Scope
 

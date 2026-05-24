@@ -5,7 +5,7 @@
 - Run ID: `eng-lg-lg-SKILLS-bl-0003`
 - Engineering Skill: `lg-SKILLS`
 - Target Repo: `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/target-repos/lg-graph-test`
-- Baseline Commit: `a1bdd317e7c5a8d55ecec1d5fec4c7d707d2220e`
+- Baseline Commit: `fe978ab7f5c383cf684419dd6cc34367033bf991`
 - Backlog Item: `BL-0003`
 
 ## Source Context
@@ -17,22 +17,31 @@
 
 ## Selected Backlog Item
 
-## BL-0003: JWT Authentication and Login
-**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0001
-**Story:** As a registered user, I want to log in and receive a JWT access token so that I can access protected endpoints.
+## BL-0003: Current User Endpoint
+**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0003, REQ-0022
+**Story:** As an authenticated user, I want to call `GET /me` so that I can see my own account details.
 **Acceptance:**
-1. `POST /auth/login` returns a JWT with `sub` claim on valid credentials.
-2. Invalid credentials return HTTP 401.
-3. Protected endpoints reject missing/invalid tokens with HTTP 401.
-4. Token expiration is enforced (configurable).
+1. `GET /me` returns the current user's email and id without password fields.
+2. Missing or invalid bearer token returns `401`.
+3. Response shape is consistent with the user model schema.
 **Effort:** 2 · **Dependencies:** BL-0002 · **Status:** Ready
-
----
 
 
 ## Related Requirements
 
-(no REQ excerpts available)
+## REQ-0003 Current User
+
+- **Requirement:** An authenticated user can call `GET /me` to see their own account.
+- **Constraint:** Missing or invalid bearer token returns `401`.
+- **Verification Criteria:** `/me` returns only the current user and no password fields.
+- **Done Criteria:** Unauthenticated requests fail.
+
+## REQ-0022 HTTP API Surface
+
+- **Requirement:** The API exposes auth, workspace, project, task, comment, `/me/tasks`, and workspace summary routes described in the project brief.
+- **Constraint:** All non-auth surfaces require `Authorization: Bearer <token>`.
+- **Verification Criteria:** Protected endpoints reject missing tokens with `401`.
+- **Done Criteria:** Route behavior is covered through real HTTP requests.
 
 ## In Scope
 

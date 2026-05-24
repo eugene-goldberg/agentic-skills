@@ -243,3 +243,30 @@ After completing all increments for a task:
 - [ ] The build is clean
 - [ ] The feature works end-to-end as specified
 - [ ] No uncommitted changes remain
+
+## Codebase Intelligence Layer
+
+If the following retrieval tools are available, treat them as first-class — they are not optional decoration. They expose a curated reference codebase (`source="reference"`) and the live target codebase (`source="target"`) for structural and semantic queries.
+
+Tools (when present):
+- `semantic_search(query, k=5, source="reference"|"target")` — natural-language code search.
+- `graph_neighbors(symbol, depth=1, source=...)` — callers/callees/contains for a symbol.
+- `graph_find_similar(symbol, k=5, source=...)` — entities sharing call targets (Jaccard).
+- `graph_summary(path, source=...)` — all entities in a file and what they call.
+
+### Usage protocol (per BL item)
+
+1. **Before writing a single line**, call `semantic_search(query="<the BL's main concern>", source="reference")`. Read at least two of the returned snippets in full via `read_file`. This is the "what good looks like" step.
+
+2. **If you are editing/extending existing target code**, call `graph_neighbors(symbol="<the module/function you'll touch>", source="target")` to see what depends on it. Surprises uncovered here are common — handle them before they bite QA.
+
+3. **After your first working draft**, call `graph_find_similar(symbol="<your new function>", source="reference")`. If the top match is structurally closer to the canonical pattern than what you wrote, refactor toward it.
+
+4. **For architecture-shaped BLs** (new router, new model, new layer), call `graph_summary(path="<closest reference file>", source="reference")` to see the structure you should mirror.
+
+### Anti-patterns
+
+- Skipping retrieval and inventing structure from scratch. The reference repo exists specifically so you don't have to.
+- Dumping `graph_summary` output verbatim into your work without acting on it.
+- Copying reference code verbatim including names that don't fit the current target schema. Adapt, don't transplant.
+- Burning the retrieval budget on speculative queries unrelated to the current BL. There's a per-run cap; stay focused.

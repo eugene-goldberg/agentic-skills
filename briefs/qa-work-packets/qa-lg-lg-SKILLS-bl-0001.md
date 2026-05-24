@@ -4,29 +4,27 @@
 
 - Run ID: `qa-lg-lg-SKILLS-bl-0001`
 - Target Repo: `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/target-repos/lg-graph-test`
-- Target Commit: `90357de742c3e4b7020d6b63111232518fa7d8cc` (engineering closing commit for BL-0001)
+- Target Commit: `3a6147257ace6c1dfd9d62804f42e9b3cc2a3ef3` (engineering closing commit for BL-0001)
 - Engineering Run: `eng-lg-lg-SKILLS-bl-0001`
 - Engineering BL Under Test: `BL-0001`
 - Carry-Forward Suite: none (first QA cycle)
 
 ## Selected Backlog Item
 
-## BL-0001: Project Bootstrap and Health Check
-**Type:** Technical · **Priority:** CRITICAL · **REQ:** REQ-0016
-**Story:** As a developer, I want a runnable FastAPI project skeleton with a health check endpoint so that I can verify the service is operational and build on a stable foundation.
+## BL-0001: Project Bootstrap and Database Schema
+**Type:** Technical · **Priority:** CRITICAL · **REQ:** REQ-0022
+**Story:** As a developer, I want a bootstrapped FastAPI project with database models so that the service can run and persist data.
 **Acceptance:**
-1. FastAPI app is runnable (`uvicorn` or equivalent).
-2. `GET /health` returns HTTP 200 with a JSON status payload.
-3. `GET /health` requires no authentication.
-4. Project structure is established (e.g., `app/`, `tests/` directories).
-**Effort:** 2 · **Dependencies:** none · **Status:** Ready
-
----
+1. FastAPI app starts with `uvicorn` and responds to a health endpoint.
+2. SQLAlchemy (or equivalent ORM) models exist for User, Workspace, Membership, Project, Task, and Comment with correct relationships.
+3. Database migrations or auto-create tables are configured.
+4. Project structure follows standard FastAPI layout (routers, models, schemas, dependencies).
+**Effort:** 5 · **Dependencies:** none · **Status:** Ready
 
 
 ## Mandatory Inputs
 
-Run inside the target repo at commit `90357de742c3e4b7020d6b63111232518fa7d8cc`. Capture exit code + verbatim stdout for each:
+Run inside the target repo at commit `3a6147257ace6c1dfd9d62804f42e9b3cc2a3ef3`. Capture exit code + verbatim stdout for each:
 
 ```bash
 .venv/bin/python -m py_compile app.py
@@ -63,7 +61,7 @@ Under `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/runs/qa-lg-lg-SKILLS
 ## Scope rules
 
 - Do NOT modify any engineer-authored artifact in the target repo. You report findings; engineering fixes.
-- Do NOT advance the target repo past `90357de742c3e4b7020d6b63111232518fa7d8cc`. Use `git checkout 90357de742c3e4b7020d6b63111232518fa7d8cc` if needed and restore the prior HEAD when done.
+- Do NOT advance the target repo past `3a6147257ace6c1dfd9d62804f42e9b3cc2a3ef3`. Use `git checkout 3a6147257ace6c1dfd9d62804f42e9b3cc2a3ef3` if needed and restore the prior HEAD when done.
 - Do NOT use `TestClient(app)` in your journey suite.
 - Do NOT skip the engineer-authored verification stack.
 

@@ -5,7 +5,7 @@
 - Run ID: `eng-lg-lg-SKILLS-bl-0004`
 - Engineering Skill: `lg-SKILLS`
 - Target Repo: `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/target-repos/lg-graph-test`
-- Baseline Commit: `6c9984ac980bf530316e373176165ce92998d35a`
+- Baseline Commit: `87ae85214c968f4c508910e327aa1919abc45991`
 - Backlog Item: `BL-0004`
 
 ## Source Context
@@ -17,22 +17,31 @@
 
 ## Selected Backlog Item
 
-## BL-0004: Database Models and Migrations (Users, Workspaces, Memberships)
-**Type:** Technical · **Priority:** CRITICAL · **REQ:** REQ-0003, REQ-0004, REQ-0005
-**Story:** As a developer, I want persistent models for users, workspaces, and memberships so that workspace and membership features can be built on a stable schema.
+## BL-0004: Workspace Creation
+**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0004, REQ-0022
+**Story:** As an authenticated user, I want to create a workspace so that I can organize projects with my team.
 **Acceptance:**
-1. SQLAlchemy (or equivalent ORM) models exist for User, Workspace, and WorkspaceMembership.
-2. WorkspaceMembership links a User to a Workspace with a role (`owner` | `member`).
-3. Migration scripts or auto-create mechanism is in place.
-4. Database connection is configurable via environment variable.
-**Effort:** 3 · **Dependencies:** BL-0001 · **Status:** Ready
-
----
+1. `POST /workspaces` creates a workspace and sets the creator as the first admin.
+2. Created workspace appears in the creator's workspace list with role `admin`.
+3. Workspace is private to its members (non-members cannot see it).
+**Effort:** 3 · **Dependencies:** BL-0002 · **Status:** Ready
 
 
 ## Related Requirements
 
-(no REQ excerpts available)
+## REQ-0004 Workspace Creation
+
+- **Requirement:** An authenticated user can create a workspace.
+- **Constraint:** The creator becomes the workspace's first admin.
+- **Verification Criteria:** Created workspace appears in the creator's workspace list with admin role.
+- **Done Criteria:** Workspace is private to its members.
+
+## REQ-0022 HTTP API Surface
+
+- **Requirement:** The API exposes auth, workspace, project, task, comment, `/me/tasks`, and workspace summary routes described in the project brief.
+- **Constraint:** All non-auth surfaces require `Authorization: Bearer <token>`.
+- **Verification Criteria:** Protected endpoints reject missing tokens with `401`.
+- **Done Criteria:** Route behavior is covered through real HTTP requests.
 
 ## In Scope
 

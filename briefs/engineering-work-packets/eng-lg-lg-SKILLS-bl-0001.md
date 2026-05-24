@@ -5,7 +5,7 @@
 - Run ID: `eng-lg-lg-SKILLS-bl-0001`
 - Engineering Skill: `lg-SKILLS`
 - Target Repo: `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/target-repos/lg-graph-test`
-- Baseline Commit: `486f80e9a111d3ad8686aefa3bb8dac825b8440c`
+- Baseline Commit: `329d767f9b66b522137fb9d97718299b1a33f112`
 - Backlog Item: `BL-0001`
 
 ## Source Context
@@ -17,22 +17,25 @@
 
 ## Selected Backlog Item
 
-## BL-0001: Project Bootstrap and Health Check
-**Type:** Technical · **Priority:** CRITICAL · **REQ:** REQ-0016
-**Story:** As a developer, I want a runnable FastAPI project skeleton with a health check endpoint so that I can verify the service is operational and build on a stable foundation.
+## BL-0001: Project Bootstrap and Database Schema
+**Type:** Technical · **Priority:** CRITICAL · **REQ:** REQ-0022
+**Story:** As a developer, I want a bootstrapped FastAPI project with database models so that the service can run and persist data.
 **Acceptance:**
-1. FastAPI app is runnable (`uvicorn` or equivalent).
-2. `GET /health` returns HTTP 200 with a JSON status payload.
-3. `GET /health` requires no authentication.
-4. Project structure is established (e.g., `app/`, `tests/` directories).
-**Effort:** 2 · **Dependencies:** none · **Status:** Ready
-
----
+1. FastAPI app starts with `uvicorn` and responds to a health endpoint.
+2. SQLAlchemy (or equivalent ORM) models exist for User, Workspace, Membership, Project, Task, and Comment with correct relationships.
+3. Database migrations or auto-create tables are configured.
+4. Project structure follows standard FastAPI layout (routers, models, schemas, dependencies).
+**Effort:** 5 · **Dependencies:** none · **Status:** Ready
 
 
 ## Related Requirements
 
-(no REQ excerpts available)
+## REQ-0022 HTTP API Surface
+
+- **Requirement:** The API exposes auth, workspace, project, task, comment, `/me/tasks`, and workspace summary routes described in the project brief.
+- **Constraint:** All non-auth surfaces require `Authorization: Bearer <token>`.
+- **Verification Criteria:** Protected endpoints reject missing tokens with `401`.
+- **Done Criteria:** Route behavior is covered through real HTTP requests.
 
 ## In Scope
 

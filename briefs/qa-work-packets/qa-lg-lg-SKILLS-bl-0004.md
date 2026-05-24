@@ -4,29 +4,26 @@
 
 - Run ID: `qa-lg-lg-SKILLS-bl-0004`
 - Target Repo: `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/target-repos/lg-graph-test`
-- Target Commit: `f027ccd3d2b976c7cb42718fd3af8f77335998d2` (engineering closing commit for BL-0004)
+- Target Commit: `2f21f8a6a6b0607f256906aee7121ee18d164a27` (engineering closing commit for BL-0004)
 - Engineering Run: `eng-lg-lg-SKILLS-bl-0004`
 - Engineering BL Under Test: `BL-0004`
 - Carry-Forward Suite: `qa-lg-lg-SKILLS-bl-0003` (copied into `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/runs/qa-lg-lg-SKILLS-bl-0004/journey_suite/`)
 
 ## Selected Backlog Item
 
-## BL-0004: Database Models and Migrations (Users, Workspaces, Memberships)
-**Type:** Technical · **Priority:** CRITICAL · **REQ:** REQ-0003, REQ-0004, REQ-0005
-**Story:** As a developer, I want persistent models for users, workspaces, and memberships so that workspace and membership features can be built on a stable schema.
+## BL-0004: Workspace Creation
+**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0004, REQ-0022
+**Story:** As an authenticated user, I want to create a workspace so that I can organize projects with my team.
 **Acceptance:**
-1. SQLAlchemy (or equivalent ORM) models exist for User, Workspace, and WorkspaceMembership.
-2. WorkspaceMembership links a User to a Workspace with a role (`owner` | `member`).
-3. Migration scripts or auto-create mechanism is in place.
-4. Database connection is configurable via environment variable.
-**Effort:** 3 · **Dependencies:** BL-0001 · **Status:** Ready
-
----
+1. `POST /workspaces` creates a workspace and sets the creator as the first admin.
+2. Created workspace appears in the creator's workspace list with role `admin`.
+3. Workspace is private to its members (non-members cannot see it).
+**Effort:** 3 · **Dependencies:** BL-0002 · **Status:** Ready
 
 
 ## Mandatory Inputs
 
-Run inside the target repo at commit `f027ccd3d2b976c7cb42718fd3af8f77335998d2`. Capture exit code + verbatim stdout for each:
+Run inside the target repo at commit `2f21f8a6a6b0607f256906aee7121ee18d164a27`. Capture exit code + verbatim stdout for each:
 
 ```bash
 .venv/bin/python -m py_compile app.py
@@ -63,7 +60,7 @@ Under `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/runs/qa-lg-lg-SKILLS
 ## Scope rules
 
 - Do NOT modify any engineer-authored artifact in the target repo. You report findings; engineering fixes.
-- Do NOT advance the target repo past `f027ccd3d2b976c7cb42718fd3af8f77335998d2`. Use `git checkout f027ccd3d2b976c7cb42718fd3af8f77335998d2` if needed and restore the prior HEAD when done.
+- Do NOT advance the target repo past `2f21f8a6a6b0607f256906aee7121ee18d164a27`. Use `git checkout 2f21f8a6a6b0607f256906aee7121ee18d164a27` if needed and restore the prior HEAD when done.
 - Do NOT use `TestClient(app)` in your journey suite.
 - Do NOT skip the engineer-authored verification stack.
 

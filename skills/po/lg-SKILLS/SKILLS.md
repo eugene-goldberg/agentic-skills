@@ -256,3 +256,25 @@ Produce:
 6. **KPI Dashboard** — Completion rate, defect escape, REQ coverage
 
 Stored in `.agile-v/sprints/CN/` for sprint-level traceability.
+
+## Codebase Intelligence Layer
+
+If retrieval tools are available, use them sparingly but deliberately during backlog decomposition. Your goal is not to design code — it's to size and slice BL items realistically based on whether a proven pattern exists.
+
+Tools (when present):
+- `semantic_search(query, k=3, source="reference")`
+- `graph_summary(path, source="reference")`
+
+### Usage protocol
+
+1. **Before sizing a BL item**, call `semantic_search(query="<the BL's main concern>", source="reference")`. Two outcomes:
+   - **Pattern exists** → reference it in the BL description (`Pattern: app/routers/projects.py uses this approach`). Size at the lower end of the range. Engineer + QA will benefit.
+   - **No pattern** → mark the BL as "exploratory" and split it into a thinner first slice. Unknown territory is where overruns happen.
+
+2. **When the BL touches an architectural layer** (new model, new router type, new dependency), `graph_summary` the closest reference file to confirm scope. If the reference layer has 4 functions and the BL implies 1, the BL is probably under-scoped.
+
+### Anti-patterns
+
+- Using retrieval to write the BL acceptance criteria for the engineer. That's the engineer's job; your BLs are the WHAT, not the HOW.
+- Querying `source="target"` from the PO role — the target is the engineer's working tree, not yours.
+- Spending the budget on every BL. Use retrieval only for items whose size is genuinely uncertain.

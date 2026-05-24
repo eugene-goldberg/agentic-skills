@@ -5,7 +5,7 @@
 - Run ID: `eng-lg-lg-SKILLS-bl-0005`
 - Engineering Skill: `lg-SKILLS`
 - Target Repo: `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/target-repos/lg-graph-test`
-- Baseline Commit: `f027ccd3d2b976c7cb42718fd3af8f77335998d2`
+- Baseline Commit: `2f21f8a6a6b0607f256906aee7121ee18d164a27`
 - Backlog Item: `BL-0005`
 
 ## Source Context
@@ -17,21 +17,39 @@
 
 ## Selected Backlog Item
 
-## BL-0005: Workspace Creation
-**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0003
-**Story:** As an authenticated user, I want to create a workspace so that I can organize projects and invite team members.
+## BL-0005: Workspace Listing and Detail
+**Type:** Feature · **Priority:** CRITICAL · **REQ:** REQ-0008, REQ-0020, REQ-0022
+**Story:** As a workspace member, I want to list my workspaces and view a specific workspace so that I can navigate my teams.
 **Acceptance:**
-1. `POST /workspaces` creates a workspace and sets the caller as Owner.
-2. Workspace record is persisted and returned.
-3. Unauthenticated request → 401.
-**Effort:** 2 · **Dependencies:** BL-0003, BL-0004 · **Status:** Ready
-
----
+1. `GET /workspaces` lists only workspaces the caller belongs to.
+2. `GET /workspaces/{ws_id}` returns workspace details for members.
+3. Non-member requests to either endpoint return `404` (not `403`).
+4. No workspace data leaks to non-members.
+**Effort:** 3 · **Dependencies:** BL-0004 · **Status:** Ready
 
 
 ## Related Requirements
 
-(no REQ excerpts available)
+## REQ-0008 Workspace Listing And Detail
+
+- **Requirement:** A user can list and retrieve only workspaces they belong to.
+- **Constraint:** Non-members see nothing from the workspace.
+- **Verification Criteria:** `GET /workspaces` lists only the caller's memberships; `GET /workspaces/{ws_id}` returns `404` to non-members.
+- **Done Criteria:** No workspace data leaks to non-members.
+
+## REQ-0020 Cross-Tenant Privacy
+
+- **Requirement:** A non-member sees no workspace, project, task, comment, assignment, or summary data from a workspace.
+- **Constraint:** Workspace-scoped paths return `404` to non-members, not `403`.
+- **Verification Criteria:** Cross-user attempts against workspace, project, task, comment, `/me/tasks`, and summary surfaces reveal no data.
+- **Done Criteria:** Privacy behavior is consistent across all endpoints.
+
+## REQ-0022 HTTP API Surface
+
+- **Requirement:** The API exposes auth, workspace, project, task, comment, `/me/tasks`, and workspace summary routes described in the project brief.
+- **Constraint:** All non-auth surfaces require `Authorization: Bearer <token>`.
+- **Verification Criteria:** Protected endpoints reject missing tokens with `401`.
+- **Done Criteria:** Route behavior is covered through real HTTP requests.
 
 ## In Scope
 
