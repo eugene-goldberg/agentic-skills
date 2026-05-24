@@ -941,6 +941,11 @@ class RunBriefRequest(BaseModel):
     # specific BL after a mid-sprint scorer/qa abort (e.g. Sprint 3 BL-0002
     # had no scorer because the orchestrator died during reindex).
     start_bl: str | None = None
+    # B-3 / I-7: run the doctrine-meta-agent after sprint_complete. Default
+    # True — the self-hardening loop should be on for any real sprint. Set
+    # False for short test runs where the post-sprint analysis adds latency
+    # without value.
+    run_doctrine_meta: bool = True
 
 
 @router.post("/{repo}/run-brief")
@@ -1046,6 +1051,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 run_id=run_id,
                 brief_hash=brief_hash,
                 start_bl=req.start_bl,
+                run_doctrine_meta=req.run_doctrine_meta,
             ):
                 # Track current_bl from bl.start so 409 responses can name it.
                 if event.get("phase") == "orchestrator.bl.start":
@@ -1097,6 +1103,49 @@ async def merge_branch(repo: str, req: MergeBranchRequest):
         return {"gate": gate, "merge": None}
     merge = await fast_forward_target(repo_dir, req.branch, target_ref=cfg.agent_branch)
     return {"gate": gate, "merge": merge}
+
+
+# ----------------------- doctrine-meta (B-4 / I-7) --------------------
+
+class RunDoctrineMetaRequest(BaseModel):
+    """B-4: invoke the doctrine-meta-agent against an already-archived run.
+
+    Use this to re-mine a past sprint's traces for doctrine proposals — e.g.
+    after editing the doctrine_meta SKILLS.md, or to backfill if the post-
+    sprint hook was disabled (run_doctrine_meta=False) on the original run.
+    """
+    run_id: str = Field(..., min_length=1)
+    timeout_seconds: int = Field(2400, ge=60, le=7200)
+
+
+@router.post("/{repo}/run-doctrine-meta")
+async def run_doctrine_meta(repo: str, req: RunDoctrineMetaRequest):
+    """Stream the doctrine-meta-agent against traces_archive/<run_id>/.
+
+    Read-only against trace data; writes proposal markdown files under
+    .planning/doctrine_proposals/. Never modifies code or doctrine. Operator
+    approval is required before any proposal becomes a doctrine change.
+    """
+    repo_dir = _repo_dir(repo)
+    if not repo_dir.exists():
+        raise HTTPException(status_code=404, detail=f"repo not found: {repo}")
+
+    async def gen():
+        try:
+            async for event in orchestrator_svc._doctrine_meta_flow(
+                repo_name=repo,
+                run_id=req.run_id,
+                timeout=req.timeout_seconds,
+            ):
+                yield _sse(event)
+        except Exception as exc:  # noqa: BLE001
+            yield _sse({"type": "_error", "error": f"{type(exc).__name__}: {exc}"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/{repo}/branches")
