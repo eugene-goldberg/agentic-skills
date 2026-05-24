@@ -19,3 +19,9 @@ briefs/qa-work-packets/
 .spike-node/node_modules/
 .spike-node/package-lock.json
 ab_runs/
+
+# B-5: doctrine-meta-agent writes session-local proposals here.
+# README.md + .gitkeep are tracked; proposal files are ignored until the
+# operator promotes them into canonical doctrine by hand.
+.planning/doctrine_proposals/*.md
+!.planning/doctrine_proposals/README.md
