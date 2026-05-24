@@ -21,3 +21,4 @@
 - [Claude's architect role](arch_claude_role.md) — operator directive 2026-05-23: Claude is the architect with delivery accountability; codified in CLAUDE.md
 - [Mission framing](arch_mission_framing.md) — operator correction 2026-05-23: mission is the autonomous synthetic crew itself, not operator-time metrics; metrics are symptoms
 - [Active work branch](arch_active_branch.md) — `architect-prereqs` off `sprint-2-orchestrator@710992b`; Batch A done; B/C/D pending
+- [Gate throughput bottleneck](arch_gate_throughput.md) — playwright 79-test gate at 1 worker, PRE+POST per BL = 80-160 min/BL; A28-A31 in ledger for workers/sharding/TIA/tiered gates

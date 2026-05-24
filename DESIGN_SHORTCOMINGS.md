@@ -647,7 +647,29 @@ These are deeper than Tier A. Numbered by severity (HIGH first within tier).
 - [ ] B10 — cost telemetry aggregation (deferred — ABL-0013)
 - [ ] B11 — parallel BL execution (deferred — ABL-0011)
 - [ ] B13 — Triage agent (deferred — ABL-0002)
+- [x] A19 — per-feature BL numbering must reset to BL-0001 — `58d9468`
+- [x] A20 — canonical `brief.md` at `_brownfield/features/<slug>/` root — `58d9468`
+- [x] A21 — regression gate no longer falsely green on non-zero exit (I-5) — `9142263`. Verified live in run-20260524T180834Z-3bbf81 (gate correctly emitted `regressed` 3×).
+- [x] A22 — `_compose_project_prefix` lowercased; docker-compose accepts ISO timestamps in run_id — `9142263`. Verified live (containers ran with `agentic-skills-...t180834z-...` lowercase).
+- [x] A23/A24 — `events.jsonl` untracked on target's `agent_branch`; local `.git/info/exclude` entry — target commit `b2c79d4`.
+- [x] A25a — `_extract_test_failures` priority-orders infra markers, gate-wrapper pseudo-tests, TS errors before pytest/Playwright — `58d9468`.
+- [x] A25b — new `kind="infra_fail"` distinct from `regressed`; orchestrator retry loop already gated on `regressed` so infra failures auto-route to awaiting_review — `9142263` + `58d9468`.
+- [x] A26 — pre-flight disk check (`_MIN_FREE_GB=5.0`) before gate spawn — `9142263`.
+- [x] WI3A — `validate_engineer` rejects commits touching sibling `_brownfield/features/<other>/` paths; PO prompt warns of the boundary — `58d9468`.
+- [ ] **A27** — Per-feature branch isolation off `main_ref` (deferred). Current model: every sprint forks from shared `agent_branch`, which accumulates prior PO commits + merged BL work. Doctrine + WI3A provide logical isolation; branch-level isolation would provide structural guarantee. ~200 LOC across `git_worktree.py`, `orchestrator.py`, `closure_check.py`, `repo_config.py`. **Defer until parallel sprints become a real workload.**
+- [ ] **A28** — Playwright workers = 1 in `regression_gate.sh`. Bump to `--workers 4` for 3-4× gate speedup. ONE-LINE FIX. Verifiable: time before/after on identical sprint. Risk: low (some flake risk under contention; mitigate with `--retries 1`).
+- [ ] **A29** — PRE-phase result caching keyed on `agent_branch` HEAD SHA. Current gate re-runs full PRE for every BL even when baseline hasn't moved. Cache hit → skip PRE worktree+stack+tests entirely (~50% gate time reduction per sprint after first BL). Risk: cache invalidation on `agent_branch` mutation; mitigate with SHA-based key + TTL.
+- [ ] **A30** — Test Impact Analysis (TIA). Map engineer's `git diff --name-only` → affected playwright spec files. Run only those. 5-20× reduction on focused changes (e.g. editing only `app/api/routes/items.py` → run only `items.spec.ts`). Heuristic mapping (file-prefix or test-name correspondence) is the cheap start; explicit mapping table in `.agentic-skills.json` is the durable version. Risk: under-inclusion misses cross-cutting regressions; mitigate with full-suite fallback on schema/auth/UI-system-level changes.
+- [ ] **A31** — Tiered gate: per-BL fast (unit + smoke ≤3min), full e2e once at sprint-completion or async post-merge. Restructures the "every BL is production-ready" contract — appropriate when the crew has matured. Out-of-band fix path: revert sprint if post-merge full e2e regresses. Risk: medium (changes the merge contract). Defer until A28 + A30 are in place and the crew has demonstrated consistent BL-quality.
+
+---
+
+## Gate throughput note (2026-05-24)
+
+The brownfield target's gate runs **~79 playwright e2e tests at 1 worker, PRE+POST per BL**. Per-BL gate time = 80-160 minutes. For an 11-BL sprint this projects to 17-33 hours of gate wall-time alone before any retries. This is **the single biggest throughput lever** in the current framework. See `.claude/memory/arch_gate_throughput.md` for cross-session context and industry comparison.
 
 ---
 
 *Authored: 2026-05-23, after Sprint 3 BL-0005 abort. Update this file as the ledger is worked through.*
+
+*Updated 2026-05-24: A19, A20, A21, A22, A24, A25a/b, A26, WI3A landed (commits 9142263 + 58d9468). A27 (per-feature branch isolation) and A28-A31 (gate throughput) filed as open follow-ups.*
