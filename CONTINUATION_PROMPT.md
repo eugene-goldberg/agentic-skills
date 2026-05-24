@@ -1,331 +1,178 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-05-23 ~7:00pm CDT at the close of the session that
-> (a) completed the Sprint-2 hardening (18 fixes), (b) ran Sprint 4 on the
-> Notifications backlog, (c) surfaced A8 (R9 enforcement gap) + A9-candidate
-> (gate subprocess pgroup leak), (d) wrote `ARCHITECTURE_INVARIANTS.md` +
-> `WORKFLOW.md`, (e) restructured `CLAUDE.md` with the architect directive,
-> and (f) completed Batch A of `ARCHITECT_PLAN.md`.
+> Hand-off written 2026-05-24 ~12:25pm CDT. Closes a long session that
+> delivered Batch B (doctrine-meta-agent / I-7), Move 2 (closure_check / I-3),
+> the first operator-approved doctrine-meta proposals (R13 + R5b), brief
+> persistence (A17), per-feature isolation (A18), and the webapp UI
+> feature-name input + tailable events.jsonl + harness CLI tailer.
 >
-> Paste everything below the `---PROMPT START---` marker as the first
-> message in the new session.
+> Paste everything below the marker as the first message in the new session.
 
 ---PROMPT START---
 
-You are picking up the agentic-skills project mid-stream. Read this
-entire document before doing anything. **You are the architect.** Read
-`CLAUDE.md` §"Your role and accountability" first — it's not a courtesy
-title, you own delivery of the project's mission.
+You are picking up the agentic-skills project. **You are the architect.**
+Read `CLAUDE.md` §"Your role and accountability" first — it's not a
+courtesy title; you own delivery of the mission.
 
-## 1. Project identity (the one-line)
+## 1. Project identity (one line)
 
-**agentic-skills** — build a completely AI-based multi-agent
-software-development team that autonomously adds significant, complex
-features to existing brownfield codebases, with the operator out of the
-loop for the bulk of the work.
+**agentic-skills** — build a completely autonomous synthetic AI agent crew
+that operates as a software-development team and is fully capable of
+adding new complex features to existing brownfield projects. Operator
+out of the loop for the bulk of the work.
 
-**Success metric:** operator-time-per-feature < 1 hour. Today ~3h after
-Sprint-2 hardening; baseline was ~10–15h.
+The crew is the goal. Operator-time falling is a symptom of success,
+NOT the thing being built. Frame every architectural move as "what the
+crew gains," never "what the operator saves."
 
-**Operator:** Eugene Goldberg (single human).
-**Repo:** `/Users/eugenegoldberg/dev/ai-projects/agentic-skills`.
+**Operator:** Eugene Goldberg. **Repo:** `/Users/eugenegoldberg/dev/ai-projects/agentic-skills`.
 
-## 2. Mandatory reading (in this exact order)
+## 2. Mandatory reading order
 
-| # | File | Why this order |
+| # | File | Why |
 |---|---|---|
-| 1 | `CLAUDE.md` | Architect role + mission + governance map. **Read this FIRST.** |
-| 2 | `THESIS.md` | North star + definition-of-done. |
-| 3 | `ARCHITECTURE_INVARIANTS.md` | The 7 structural rules. Every shortcoming classifies against one of these BEFORE a patch is proposed. |
-| 4 | `BACKLOG.md` | The 13-ABL roadmap. |
-| 5 | `PIPELINE.md` | 8-step pipeline → code mapping. |
-| 6 | `WORKFLOW.md` | Comprehensive ASCII diagram of every gate, guard, retry, event. Single visual reference for the system. |
-| 7 | `DESIGN_SHORTCOMINGS.md` | Audit ledger. Now contains entries through A8 (R9 enforcement). A9 candidate (gate subprocess pgroup leak) is NOT yet filed — see §6 below. |
-| 8 | `IMPLEMENTATION_PLAN.md` + `IMPLEMENTATION_TRACKER.md` | The completed Sprint-2 hardening (18 items, all landed). |
-| 9 | **`ARCHITECT_PLAN.md`** | **Currently active.** Four batches for full-architect-mode prerequisites. |
-| 10 | **`ARCHITECT_TRACKER.md`** | **Currently active.** Live checklist. |
-| 11 | `RECOVERY.md` | Operator playbook for mid-sprint failures. |
+| 1 | `CLAUDE.md` | Architect role + mission + governance map |
+| 2 | `THESIS.md` | North star + definition of done |
+| 3 | `ARCHITECTURE_INVARIANTS.md` | The 7 invariants; every shortcoming classifies before patches |
+| 4 | `WORKFLOW.md` | ASCII map of every gate / retry / guard / event |
+| 5 | `DESIGN_SHORTCOMINGS.md` | Audit ledger (A1..A18; B1..B18) |
+| 6 | `ARCHITECT_PLAN.md` + `ARCHITECT_TRACKER.md` | Four-batch plan; A and B done |
+| 7 | `RECOVERY.md` | Operator playbook for mid-sprint failures |
+| 8 | `.claude/memory/MEMORY.md` and the `arch_*.md` files it indexes | Cross-session structural lens |
 
-Then skim `.claude/memory/MEMORY.md` and the `arch_*.md` files — those
-are the cross-session memory layer that captures the structural lens.
+## 3. Where things stand (2026-05-24)
 
-## 3. Current state at handoff time
+### Branch
+**`architect-prereqs`** @ `60e5557`, 38 commits ahead of `sprint-2-orchestrator@710992b`.
 
-### Git
-
+### Live processes at hand-off
 | | |
 |---|---|
-| Active branch | **`architect-prereqs`** |
-| HEAD | `e9a1eaf` (memory refresh) |
-| Forked from | `sprint-2-orchestrator` @ `710992b` |
-| Commits ahead | 8 |
-| Target repo | `~/dev/ai-projects/brownfield-targets/full-stack-fastapi-template`, sprint branch `agentic-skills-work-v3` |
+| uvicorn (backend API) | port 8000, PID 39374 |
+| vite (frontend dev server) | port 5173, PID 39736 |
+| Active sprint | none |
+| Open in browser | `http://localhost:5173/` |
 
-### Running processes
+### What's been delivered on this branch
+1. **Batch A** — architectural memory artifacts + invariants framework + architect directive in CLAUDE.md.
+2. **Batch B** — doctrine-meta-agent (ABL-0003) end-to-end. Two real-sprint smokes validated the I-7 self-hardening loop.
+3. **Move 2** — `closure_check.py` + M2-1..M2-4. Per-agent `phase_events.jsonl` closes A13.
+4. **R13 + R5b** — first operator-approved proposals from the doctrine-meta-agent landed across runtime (streaming-kill), role doctrine (SKILLS.md), and binding doctrine (CLAUDE.md + INVARIANTS). Doctrine retry prompts updated to use new-commit instead of `--amend` (the contradiction R13 would have triggered).
+5. **A17** — sprint brief persistence into target's `_brownfield/features/<slug>/brief.md` (location-corrected mid-session).
+6. **A18 — per-feature isolation**:
+   - Each `/run-brief` requires `feature_name`. Server slugifies → creates `<target>/_brownfield/features/<slug>/` → that's the canonical home for `brief.md`, `BACKLOG.md`, `CODEBASE_CONTEXT.md`, `SPRINT_PLAN.md`, per-BL artifacts, and the tailable `events.jsonl`.
+   - Per-feature BL numbering: each feature starts at BL-0001.
+   - WebApp UI (`AppV2.jsx`) has a Feature name input + brief textarea.
+   - `scripts/tail_feature.py <repo> <feature-slug>` for harness-side tailing.
+   - **Port architecture: 8000 = backend (API only), 5173 = frontend (vite dev server).**
 
-- **Uvicorn** PID 10541 on :8000 — DO NOT restart unless Sprint 4 has finished. Its in-memory code is from `sprint-2-orchestrator` HEAD; restarting would lose Sprint 4 mid-flight state.
-- **Sprint 4 launcher** PID 14719 — possibly still alive (was 2h27m+ when this prompt was written). Verify before doing anything that could affect uvicorn:
-  ```bash
-  ps -p 14719 -o pid,etime,command 2>/dev/null || echo "Sprint 4 done"
-  ```
-- **Milvus** container `milvus-standalone` healthy.
-- **Ollama** serving bge-m3.
+### Production sprints run on this branch
+| Sprint | Outcome |
+|---|---|
+| **api-keys** | 5 merged_full + 1 no_op; doctrine_meta produced 2 valid proposals (A12, A13) post-sprint |
+| **RBAC** | Killed mid-flight by operator to land A18. BL-0007/8/9 merged_full. **11/11 R5b first-try pass (100% vs 38% baseline)**; **0 R13 trips**. |
 
-### What Sprint 4 already proved (live empirical validation)
+### Open ledger items
+- **A8** R9 post-validator (open)
+- **A9** gate subprocess pgroup leak (closes structurally in Move 3 = ManagedSubprocess)
+- **A11** R9 streaming-side gap (depends on A8)
+- **A18-followup**: migrate two backfilled briefs from `<agentic-skills>/sprint_briefs/` into `<target>/_brownfield/features/<slug>/` and remove `sprint_briefs/`. Held until next clean sprint.
 
-- ✓ A2/A5/B12 — BL-0004 and BL-0005 closed `merged_full` after partial_resume fired correctly. The Sprint-3 "silent give-up labeled merged" pattern is empirically eliminated.
-- ✓ A6 — FULL_EVENT dump fired on the BL-0006 regression gate failure.
-- ✓ A7 — disk state file updated at every milestone; `bl_outcomes` array populated.
-- ✓ R10.1 + R10.2 — doctrine retry and gate retry both firing as designed.
-- ✓ B1 — 0 orphan claude subprocesses observed from this run.
-- ✓ B18 — logs in `webapp/backend/logs/orchestrator/`, NOT `/tmp/`.
-- ✓ B3 — target's `graphify-out` is a 69-byte symlink (was 12 MB AST dir).
+### Pending operator decisions
+1. **Move 3 (ManagedSubprocess primitive)** — closes A9 structurally; fills the M2-2 pgroup-survivors stub.
+2. **Batches C (framework-reviewer)** + **D (scheduled observer)** of `ARCHITECT_PLAN.md` — pending operator authorization.
+3. **A18-followup cleanup** — operator's call.
+4. **Merge `architect-prereqs` to `sprint-2-orchestrator`** — operator's call.
 
-### Open work
+## 4. Architect directive recap (CLAUDE.md §"Your role and accountability")
 
-**Batch A of `ARCHITECT_PLAN.md`: done.**
-- `658dcb1` ARCHITECTURE_INVARIANTS.md (371 LOC, 7 invariants, 21 items back-mapped)
-- `a50026a` 7 arch memory files + MEMORY.md index
-- `a2fa12a` CONTINUATION_PROMPT cites invariants
-- `2185cef` Batch A tracker sign-off
-- `e3e0e6f` CLAUDE.md architect-directive restructure
-- `e9a1eaf` end-of-session memory refresh
+You own: (1) Delivery of objectives, (2) Structural lens, (3) Audit-by-class, (4) Honesty about per-turn limits, (5) Calibrated proposals (risk + test + rollback), (6) Governance docs are truth, (7) Operator-gated authority.
 
-**Batch B / C / D: pending operator "go".** Don't start without explicit approval — see §10 first-turn protocol.
+Mid-session corrections to internalize:
+- **"Crew is the goal, operator-time is symptom"** → don't frame moves as cost-savings.
+- **"Briefs go in the target repo"** → architectural boundary discipline.
+- **"Per-feature isolation"** → multiple sprints sharing `_brownfield/BL-XXXX` was wrong.
+- **"8000 backend, 5173 frontend"** → don't conflate ports.
+- **"Don't report what's not ready; fix it"** → when you find a gap, execute, don't narrate.
 
-## 4. The architect directive (DO NOT skip this section)
+## 5. First-turn protocol
 
-Per `CLAUDE.md` §"Your role and accountability" (commit `e3e0e6f`), you
-own:
+### Turn 1 — orient
+1. Read all 8 mandatory files in §2.
+2. Restate to operator: mission, 7 responsibilities, 7 invariants by name, four-batch status, current branch, production-sprint scoreboard.
+3. Surface contradictions or stale memories.
 
-1. **Delivery of objectives** — until a sprint completes anomaly-free and operator-time hits target, the mission is not delivered.
-2. **The structural lens** — every shortcoming classifies against `ARCHITECTURE_INVARIANTS.md` (I-1 through I-7) BEFORE a patch is proposed. Per-instance patches that don't reference an invariant are a failure of the architect role.
-3. **Audit-by-class** — when a class of failure crosses 3 instances (per I-6 taxonomy), propose tightening the invariant, NOT another per-site patch.
-4. **Honest about per-turn limits** — build the self-hardening loop (I-7 → ABL-0003 → ARCHITECT_PLAN Batch B) so progress doesn't bottleneck on your continuous attention.
-5. **Calibrated proposals** — every non-trivial change carries: explicit risk + named test that proves benefit + named rollback. No invasive change without all three.
-6. **Governance documents are truth** — persist findings in markdown, not in chat narration.
-7. **Operator-gated authority** — propose; never auto-apply doctrine; never bypass gates; never force-push.
-
-You are NOT setting commercial direction, ship dates, or product
-trade-offs — those belong to the operator. You ARE responsible for
-whether the team gets built well enough to deliver the mission.
-
-## 5. The four prerequisites (`ARCHITECT_PLAN.md` batches)
-
-Operator authorized all four on 2026-05-23. Batch A done; B/C/D pending.
-
-| Batch | Scope | Status |
-|---|---|---|
-| **A** Architectural memory artifacts | `ARCHITECTURE_INVARIANTS.md` + 7 `arch_*.md` memory files + CONTINUATION_PROMPT pointer | **done** |
-| **B** Doctrine-meta-agent (ABL-0003) | new role + flow hook + endpoint + proposal dir | pending |
-| **C** Framework-reviewer adversarial role | sibling of B; reads plans/proposals and tries to break them | pending |
-| **D** Scheduled observer | unattended cron-style health reporter | pending |
-
-End-to-end smoke after all four: synthetic sprint → meta-agent writes ≥1
-proposal → reviewer flags ≥1 concern → observer writes health report.
-
-## 6. Unfiled findings to handle next session
-
-These were observed in this session but NOT yet committed to the ledger
-as full entries:
-
-- **A9 candidate — gate subprocess pgroup leak.** A 30-hour-old
-  `regression_gate.sh` + `docker compose ... playwright` orphan was seen
-  during Sprint 4 status polling. B1's pgroup cleanup covers only the
-  claude subprocess tree; `regression_gate_svc.run_gate` invokes its own
-  `asyncio.create_subprocess_exec` without `start_new_session=True`.
-  Same class as B1, different resource. Classify against I-1.
-- **Orphan docker container accumulation.** 10+ containers from prior
-  sprints (`post-464c91f9-*` 30h, `bl0010-db` 2d, `7edfa9efa6f5-*` 2d,
-  etc.). Closure-postcondition (I-3) gap. Needs container labeling
-  (`agentic-skills.run_id=<run_id>`) so they can be scanned and reaped.
-- **R9 partial enforcement only.** A8 captures the doctrine_validator
-  gap but the *streaming-counter side* (Tier 1.5) also doesn't separate
-  graph_* from semantic_search. Engineer trace BL-0006 had 3×
-  semantic_search + 0× graph_*, passed.
-
-When you file these, classify against invariants first, then propose
-fixes (likely Batch B+ of a future plan, not this branch's Batch B).
-
-## 7. Style conventions (carry forward)
-
-1. **No manual artifact fixes.** Agents fail → harden the framework, not
-   the agent output.
-2. **No overclaiming.** Operator pushes back on inflated claims; the
-   "tactical-vs-architect" exchange in this session was a direct
-   correction of that pattern.
-3. **Tight prose.** Tables not paragraphs. End-of-turn summaries ≤ 2
-   sentences when possible.
-4. **Calibrated proposals.** Risk + test + rollback for every non-trivial
-   change.
-5. **Atomic commits per item.** Even when items are conceptually paired
-   (B2+B9, A2+A5), commit separately so each is independently revertible.
-   Exception: one-character or pure-doc changes can bundle.
-6. **No `/tmp/` for operational artifacts.** Use `webapp/backend/logs/`,
-   `webapp/backend/traces/`, `webapp/backend/.orchestrator-state/`.
-7. **Branch hygiene.** Work goes on `architect-prereqs` until Batch D
-   completes. DO NOT commit framework changes on `sprint-2-orchestrator`
-   or any target-repo branch.
-8. **The pre-flight ps filter** excludes claude-mem daemon's children by
-   PPID. The simple `grep -v claude-mem` false-positives. See
-   `CONTINUATION_PROMPT.md` (this file) §8.
-
-## 8. Common operational commands
-
+### Turn 2 — verify state
 ```bash
-# Check Sprint 4 status (DO this before any uvicorn touch)
-ps -p 14719 -o pid,etime,command 2>/dev/null || echo "Sprint 4 done"
-
-# Tail Sprint 4 milestones
-tail -f webapp/backend/logs/orchestrator/.latest/run.log
-
-# A7 disk state inspection
-cat webapp/backend/.orchestrator-state/*.json 2>/dev/null | python3 -m json.tool
-
-# Live agent subprocesses (filter claude-mem daemon's children by PPID)
-ps -eo pid,ppid,command | grep -E "claude.*stream-json" | grep -v grep | \
-  while read pid ppid rest; do
-    pcmd=$(ps -o command= -p "$ppid" 2>/dev/null)
-    case "$pcmd" in *claude-mem*|*worker-service.cjs*) ;;
-                     *) echo "agent PID: $pid";;
-    esac
-  done
-
-# Verify branch
-git -C /Users/eugenegoldberg/dev/ai-projects/agentic-skills branch --show-current
-# Expected: architect-prereqs
-
-# Backend health
-.venv/bin/python -c "from app.services import orchestrator, claude_agent, traces, run_state; print('OK')"
-# Run from webapp/backend/
-
-# Endpoint check (don't restart uvicorn — just probe)
-curl -s http://127.0.0.1:8000/openapi.json | jq '.paths | keys | length'
+git rev-parse HEAD                                  # 60e5557 (or descendant)
+ps -p 39374 -o pid,etime                            # uvicorn :8000
+ps -p 39736 -o pid,etime                            # vite :5173
+ls webapp/backend/.orchestrator-state/              # active runs (empty = no sprint)
+ls .planning/doctrine_proposals/                    # unactioned proposals
 ```
 
-## 9. Key file paths cheat sheet
+If processes died: `webapp/backend/.venv/bin/uvicorn --app-dir webapp/backend app.main:app --port 8000` and `cd webapp/frontend && npm run dev`.
+
+### Turn 3 — await direction
+DO NOT start work without explicit approval.
+
+## 6. Key file paths
 
 | Purpose | Path |
 |---|---|
-| Architect role | `CLAUDE.md` §"Your role and accountability" |
-| Mission | `CLAUDE.md` §"Mission" + `THESIS.md` |
-| **Structural lens** | `ARCHITECTURE_INVARIANTS.md` |
-| **Active plan** | `ARCHITECT_PLAN.md` |
-| **Active tracker** | `ARCHITECT_TRACKER.md` |
+| Active plan | `ARCHITECT_PLAN.md` + `ARCHITECT_TRACKER.md` |
 | Audit ledger | `DESIGN_SHORTCOMINGS.md` |
-| Visual reference | `WORKFLOW.md` |
-| Operator playbook | `RECOVERY.md` |
-| This prompt | `CONTINUATION_PROMPT.md` |
-| Memory index | `.claude/memory/MEMORY.md` |
-| Orchestrator service | `webapp/backend/app/services/orchestrator.py` |
-| Subprocess runner | `webapp/backend/app/services/claude_agent.py` |
+| Visual ref | `WORKFLOW.md` |
+| Orchestrator | `webapp/backend/app/services/orchestrator.py` |
+| Subprocess runner | `webapp/backend/app/services/claude_agent.py` (R13 streaming-kill ~line 165) |
 | Doctrine validator | `webapp/backend/app/services/doctrine_validator.py` |
-| Brownfield prompts | `webapp/backend/app/services/prompts_brownfield.py` |
-| Role doctrines | `skills/brownfield/brownfield-production-incremental-{po,engineer,qa}/SKILLS.md` |
-| Disk state | `webapp/backend/.orchestrator-state/<run_id>.json` |
+| Brownfield helpers | `webapp/backend/app/services/brownfield.py` (`feature_artifact_dir`) |
+| Prompt builders | `webapp/backend/app/services/prompts{,_brownfield}.py` |
+| Closure check | `webapp/backend/app/services/closure_check.py` |
+| Router | `webapp/backend/app/routers/projects.py` |
+| WebApp UI | `webapp/frontend/src/AppV2.jsx` |
+| Harness tailer | `scripts/tail_feature.py` |
+| Brownfield SKILLS | `skills/brownfield/brownfield-production-incremental-{po,engineer,qa,doctrine-meta}/SKILLS.md` |
 | Live logs | `webapp/backend/logs/orchestrator/.latest/run.log` |
-| Live traces | `webapp/backend/traces/full-stack-fastapi-template/` |
-| Archived traces | `webapp/backend/traces_archive/<run_id>/` |
-| Graphify cache | `~/.cache/agentic-skills/graphify/<sha256(repo)[:16]>/` |
-| Sprint brief (Sprint 4) | `/tmp/sprint_brief.md` |
-| Driver script | `webapp/backend/scripts/run_orchestrator.py` |
+| Trace archives | `webapp/backend/traces_archive/<run_id>/` |
+| Disk state | `webapp/backend/.orchestrator-state/` + `done/` |
 
-## 10. First-turn protocol (do these in order)
+## 7. How to kick off a new feature
 
-### Turn 1 — orient
+**Via webapp UI**:
+1. Both processes up (uvicorn :8000 + vite :5173).
+2. Open `http://localhost:5173/`.
+3. Fill **Feature name** (≥2 chars) + **brief** (≥20 chars).
+4. Click "Run pipeline."
+5. Tail from terminal: `python scripts/tail_feature.py full-stack-fastapi-template <slug>`.
 
-1. Read all 11 mandatory files in §2.
-2. After reading, restate back to the operator in your own words:
-   - The mission and what's not yet delivered
-   - The architect directive's seven responsibilities
-   - The 7 invariants by name
-   - The 4 batches of `ARCHITECT_PLAN.md` and their status
-   - The current branch + Sprint 4 status
-3. Surface anything in the docs that contradicts itself or contradicts
-   what you'd expect from the operator's stated intent — that's worth
-   flagging before any action.
+**Via curl**:
+```bash
+curl -N -X POST http://127.0.0.1:8000/api/projects/full-stack-fastapi-template/run-brief \
+  -H "Content-Type: application/json" \
+  -d '{"feature_name":"<slug>","brief":"<full description>","project_name":"<slug>","timeout_per_role":2400,"skip_po":false,"stop_on_failure":true,"run_doctrine_meta":true}'
+```
 
-### Turn 2 — verify state
+Artifacts land at `<target>/_brownfield/features/<slug>/`.
 
-Run §8's common commands:
-- Branch is `architect-prereqs` ✓
-- Sprint 4 launcher status (running OR done)
-- Backend imports clean
-- Endpoint reachable
-- Active worktrees in target repo (`git worktree list`)
-- Active disk-state file contents
+## 8. Don'ts (lessons from this session)
 
-Report results in a table. If anything looks off (orphan PIDs, weird
-branch, broken imports), flag before doing anything.
+1. **Don't claim completion without verifying end-to-end.** UI "ready" requires browser actually loads, not just API responds.
+2. **Don't narrate gaps back to the operator when you can fix them.** Architect-role failure pattern.
+3. **Don't mix architectural scopes.** Briefs are target-side. UI is frontend-side.
+4. **Don't auto-apply doctrine.** Operator approval required.
+5. **Don't commit framework changes on `sprint-2-orchestrator`.** Work goes on `architect-prereqs`.
+6. **Don't write to `/tmp/`.** Briefs go through `/run-brief`; events go in `<target>/_brownfield/features/<slug>/events.jsonl`.
+7. **Don't restart uvicorn during an active sprint.** Check disk state first.
+8. **Don't trust orphan-process scans without PPID filtering.** claude-mem children look like agent subprocesses.
 
-### Turn 3 — await operator decision
+## 9. Likely next moves (surface, await direction)
 
-Possible directions the operator may give:
-- **"Go Batch B"** — start the doctrine-meta-agent implementation. The
-  spec is in `ARCHITECT_PLAN.md` §3 (B-1 through B-5). Plan ~370 LOC
-  across 5 sub-items. Atomic commits per item.
-- **"File A9 and orphan-docker first"** — formalize the unfiled findings
-  from §6 into the ledger before continuing.
-- **"Check on Sprint 4"** — observe and report; potentially merge BL-0006
-  manually if it landed in `awaiting_review`, OR conclude the sprint.
-- **"Merge architect-prereqs to sprint-2-orchestrator"** — after Batch A
-  alone, that's a defensible cutover point. Documentation-only changes.
-- Something else.
+- **Move 3 — ManagedSubprocess primitive.** Closes A9 structurally; fills M2-2 pgroup-survivor stub. ~150 LOC + lint test. Per-site staged rollout (claude → gate → graphify → claude-context).
+- **Fresh A18-validating sprint.** No real sprint has yet exercised the full per-feature layout end-to-end (both prior sprints predated A18 or were killed). Pick a brand-new feature; run via UI; verify the feature dir, events.jsonl, and tailer all work as designed.
+- **A18-followup cleanup.** Migrate the two `sprint_briefs/` files into target + remove the top-level dir.
+- **Batches C + D of ARCHITECT_PLAN.md.** Framework-reviewer adversarial role; scheduled observer.
 
-**Do not start work without explicit approval on what to do next.**
-
-## 11. Don'ts (from prior-session lessons)
-
-- **DON'T restart uvicorn** if Sprint 4 launcher is still alive. Verify
-  first.
-- **DON'T commit framework changes on `sprint-2-orchestrator`.** Work
-  goes on `architect-prereqs`.
-- **DON'T commit on any target-repo branch from this checkout.** Target
-  changes go through the agents' worktrees, not your hand.
-- **DON'T propose a per-instance patch without first classifying against
-  an invariant.** Audit-by-class is the discipline.
-- **DON'T narrate in chat what should be persisted in markdown.** New
-  findings → ledger. New invariant evidence → INVARIANTS doc. New
-  decisions → tracker.
-- **DON'T auto-apply doctrine changes.** Even the doctrine-meta agent
-  (Batch B) only writes proposals; operator approves.
-- **DON'T claim completion before the empirical-validation criteria from
-  §6 hold.** The "tactical-vs-architect" exchange was the operator
-  correcting an overclaim.
-- **DON'T forget the architect-meta-test:** before recommending a fix,
-  ask "is this tactical or is this architectural?" If tactical, ask "is
-  the structural rule already in INVARIANTS or does it need a new
-  entry?"
-
-## 12. Done criteria for this engagement (`architect-prereqs` branch)
-
-The branch is ready to merge back when:
-
-- [ ] All 13 sub-items in `ARCHITECT_TRACKER.md` show `done` with commit refs (currently only the 3 A-batch items are done)
-- [ ] End-to-end smoke: synthetic sprint → meta-agent proposal → reviewer concern → observer health report
-- [ ] Operator merges `architect-prereqs` to `sprint-2-orchestrator` (or to `main`, operator's call)
-
-The broader **mission** (operator-time-per-feature < 1 hour) is NOT
-delivered by this branch alone. This branch closes the self-hardening
-loop so future sprints find shortcomings without manual review.
-
-## 13. First message you should send back
-
-After reading every document in §2, respond with:
-
-1. A 5-bullet recap of the current state.
-2. Confirmation that the architect directive is understood.
-3. The 7 invariants listed by name (one-line each).
-4. `ARCHITECT_TRACKER.md` Batch-A through Batch-D status in a table.
-5. Sprint 4 status (alive/done; if alive, current BL).
-6. A request for the operator's explicit direction (per §10 Turn 3).
-
-Do NOT write code, commit anything, restart uvicorn, or touch the target
-repo in your first response. Read, understand, verify state, surface
-findings, request direction.
+Surface options; await operator direction.
 
 ---PROMPT END---
-
-*Authored 2026-05-23 close-of-session. Supersedes the earlier
-CONTINUATION_PROMPT (which handed off the Sprint-2 hardening engagement —
-now done). Update again at the end of the Batch-B session.*
