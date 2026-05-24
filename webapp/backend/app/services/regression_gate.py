@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
 import uuid
@@ -26,6 +27,26 @@ from pathlib import Path
 
 from app.services.brownfield import detect_test_command, pick_artifact_dir
 from app.services import repo_config as repo_config_svc
+
+
+def _compose_project_prefix(run_id: str | None) -> str | None:
+    """M2-1: build a stable docker-compose project-name prefix encoding the
+    run_id, so closure_check (Move 2) can scan for orphan gate containers by
+    name pattern. Returns None if run_id is unavailable — call sites then
+    skip the override and let docker-compose use its directory-basename
+    default (the prior behavior).
+
+    Format: ``agentic-skills-<run_id_short>``. Compose appends ``-<service>-1``
+    per container, so a scan filter of ``name=agentic-skills-<run_id_short>-``
+    matches the full container set from one run.
+    """
+    if not run_id:
+        return None
+    # run_id is already short-ish (e.g. "run-20260523T212548Z-5bfff3"); strip
+    # the "run-" prefix to keep the docker name under the 63-char ceiling
+    # docker-compose imposes on project names.
+    short = run_id.removeprefix("run-")[:40]
+    return f"agentic-skills-{short}"
 
 
 PYTEST_RESULT_RE = re.compile(r"^(?P<file>tests?/[\w./-]+)::(?P<name>[\w.\[\]-]+)\s+(?P<verdict>PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)", re.MULTILINE)
@@ -46,13 +67,23 @@ class TestSet:
         }
 
 
-async def _run_capture(cmd: list[str], cwd: Path, timeout: int = 1800) -> tuple[int, str, str]:
+async def _run_capture(cmd: list[str], cwd: Path, timeout: int = 1800,
+                       env: dict[str, str] | None = None) -> tuple[int, str, str]:
+    """Run cmd, capturing stdout/stderr. If env is given, merge it into the
+    inherited process environment (caller-supplied keys win)."""
+    proc_env: dict[str, str] | None
+    if env:
+        proc_env = os.environ.copy()
+        proc_env.update(env)
+    else:
+        proc_env = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=proc_env,
         )
     except FileNotFoundError as exc:
         # Command binary not on PATH — surface a structured error instead of
@@ -90,13 +121,20 @@ def _parse_pytest(stdout: str, stderr: str) -> tuple[set[str], set[str]]:
     return passed, failed
 
 
-async def _run_tests(cwd: Path, cmd: list[str]) -> TestSet:
+async def _run_tests(cwd: Path, cmd: list[str], *,
+                     compose_project: str | None = None) -> TestSet:
     # If pytest is the runner and the user hasn't pinned `-v`, add it so we
     # get parseable per-test verdicts.
     effective = list(cmd)
     if effective and effective[0] == "pytest" and "-v" not in effective and "--verbose" not in effective:
         effective.append("-v")
-    exit_code, stdout, stderr = await _run_capture(effective, cwd)
+    # M2-1: when a compose_project name is supplied, pass it via the standard
+    # docker-compose env var so containers spawned by the test_cmd carry a
+    # predictable prefix that closure_check (Move 2) can scan for.
+    env: dict[str, str] | None = None
+    if compose_project:
+        env = {"COMPOSE_PROJECT_NAME": compose_project}
+    exit_code, stdout, stderr = await _run_capture(effective, cwd, env=env)
     passed, failed = _parse_pytest(stdout, stderr)
     # Last 300 lines so docker-compose cleanup at the end of a gate run
     # doesn't push real test failure output (Playwright summary, pytest
@@ -114,7 +152,8 @@ async def _git(args: list[str], cwd: Path) -> tuple[int, str]:
     return proc.returncode or 0, (out + err).decode(errors="replace")
 
 
-async def run_gate(repo_root: Path, agent_branch: str, target_ref: str) -> dict:
+async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
+                   *, run_id: str | None = None) -> dict:
     """Run pre/post differential test suite around a dry-run merge.
 
     Returns a dict suitable for the SSE log:
@@ -169,11 +208,18 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str) -> dict:
     wt_post = repo_root.parent / ".gate-worktrees" / f"post-{wt_id}"
     wt_pre.parent.mkdir(parents=True, exist_ok=True)
 
+    # M2-1: stable docker-compose project name prefix encoding the run_id
+    # so closure_check can scan by name pattern. Two sub-names — pre/post —
+    # because the gate runs the test_cmd twice in disposable worktrees.
+    base_proj = _compose_project_prefix(run_id)
+    pre_proj = f"{base_proj}-pre-{wt_id}" if base_proj else None
+    post_proj = f"{base_proj}-post-{wt_id}" if base_proj else None
+
     try:
         code, msg = await _git(["worktree", "add", "--detach", str(wt_pre), target_ref], cwd=repo_root)
         if code != 0:
             return {"ok": False, "kind": "error", "reason": f"pre worktree add failed: {msg.strip()}", "command": test_cmd}
-        pre = await _run_tests(wt_pre, test_cmd)
+        pre = await _run_tests(wt_pre, test_cmd, compose_project=pre_proj)
 
         code, msg = await _git(["worktree", "add", "--detach", str(wt_post), target_ref], cwd=repo_root)
         if code != 0:
@@ -190,7 +236,7 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str) -> dict:
                     "reason": f"dry-run merge failed: {msg2.strip()[:400]}",
                     "command": test_cmd,
                 }
-        post = await _run_tests(wt_post, test_cmd)
+        post = await _run_tests(wt_post, test_cmd, compose_project=post_proj)
 
         # A test that was passing pre-merge but is now failing (or missing) is a regression.
         regressions = sorted(pre.passed - post.passed)

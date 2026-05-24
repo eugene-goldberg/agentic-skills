@@ -268,6 +268,8 @@ async def _engineer_flow(
     bl_id: str,
     timeout: int,
     retrieval_kwargs_builder,
+    *,
+    run_id: str | None = None,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
@@ -318,7 +320,7 @@ async def _engineer_flow(
         new_commits = await has_new_commits(wt, base_ref="HEAD~1")
         if validation["ok"] and new_commits > 0:
             gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
-                                                     target_ref=cfg.agent_branch)
+                                                     target_ref=cfg.agent_branch, run_id=run_id)
             yield _tag({"type": "_meta", "phase": "regression_gate",
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
                        "engineer", bl_id)
@@ -337,7 +339,7 @@ async def _engineer_flow(
                 if not validation["ok"]:
                     break
                 gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
-                                                         target_ref=cfg.agent_branch)
+                                                         target_ref=cfg.agent_branch, run_id=run_id)
                 yield _tag({"type": "_meta", "phase": "regression_gate",
                             "gate_attempt": gate_attempt,
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
@@ -364,7 +366,7 @@ async def _engineer_flow(
                         yield _tag({"type": "_meta", "phase": "merge_rebase_succeeded",
                                     "branch": wt.branch}, "engineer", bl_id)
                         gate2 = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
-                                                                   target_ref=cfg.agent_branch)
+                                                                   target_ref=cfg.agent_branch, run_id=run_id)
                         yield _tag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
                                     **{k: gate2.get(k) for k in ("ok","kind","regressions","reason","post_tail")}},
                                    "engineer", bl_id)
@@ -408,6 +410,8 @@ async def _qa_or_scorer_flow(
     role: str,  # "qa" or "scorer"
     timeout: int,
     retrieval_kwargs_builder,
+    *,
+    run_id: str | None = None,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
@@ -461,7 +465,7 @@ async def _qa_or_scorer_flow(
         new_commits = await has_new_commits(wt, base_ref="HEAD~1")
         if role == "qa" and validation["ok"] and new_commits > 0:
             gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
-                                                     target_ref=cfg.agent_branch)
+                                                     target_ref=cfg.agent_branch, run_id=run_id)
             yield _tag({"type": "_meta", "phase": "regression_gate",
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
                        role, bl_id)
@@ -479,7 +483,7 @@ async def _qa_or_scorer_flow(
                 if not validation["ok"]:
                     break
                 gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
-                                                         target_ref=cfg.agent_branch)
+                                                         target_ref=cfg.agent_branch, run_id=run_id)
                 yield _tag({"type": "_meta", "phase": "regression_gate",
                             "gate_attempt": gate_attempt,
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
@@ -502,7 +506,7 @@ async def _qa_or_scorer_flow(
                         yield _tag({"type": "_meta", "phase": "merge_rebase_succeeded",
                                     "branch": wt.branch}, role, bl_id)
                         gate2 = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
-                                                                   target_ref=cfg.agent_branch)
+                                                                   target_ref=cfg.agent_branch, run_id=run_id)
                         yield _tag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
                                     **{k: gate2.get(k) for k in ("ok","kind","regressions","reason","post_tail")}},
                                    role, bl_id)
@@ -802,7 +806,8 @@ async def run_brief(
             yield _evt("engineer.start", bl_id=bl_id)
             eng_outcome = None
             async for e in _engineer_flow(repo_dir, repo_name, bl_id,
-                                           timeout_per_role, retrieval_kwargs_builder):
+                                           timeout_per_role, retrieval_kwargs_builder,
+                                           run_id=run_id):
                 if "_orchestrator_outcome" in e:
                     eng_outcome = e
                     continue
@@ -862,7 +867,8 @@ async def run_brief(
             yield _evt("qa.start", bl_id=bl_id)
             qa_outcome = None
             async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "qa",
-                                                timeout_per_role, retrieval_kwargs_builder):
+                                                timeout_per_role, retrieval_kwargs_builder,
+                                                run_id=run_id):
                 if "_orchestrator_outcome" in e:
                     qa_outcome = e
                     continue
@@ -899,7 +905,8 @@ async def run_brief(
             yield _evt("scorer.start", bl_id=bl_id)
             score_outcome = None
             async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "scorer",
-                                                timeout_per_role, retrieval_kwargs_builder):
+                                                timeout_per_role, retrieval_kwargs_builder,
+                                                run_id=run_id):
                 if "_orchestrator_outcome" in e:
                     score_outcome = e
                     continue
