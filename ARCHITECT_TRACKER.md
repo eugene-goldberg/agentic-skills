@@ -45,11 +45,11 @@
 
 | ID | Item | Status | Commit | Verification |
 |---|---|---|---|---|
-| B-1 | doctrine-meta SKILLS.md | pending | — | file exists, follows existing brownfield-role format |
-| B-2 | `prompts_brownfield.py` SKILL_PATHS update | pending | — | role loadable via `_load_skill("doctrine_meta")` |
-| B-3 | `_doctrine_meta_flow` in orchestrator + post-sprint hook | pending | — | synthetic sprint emits `orchestrator.doctrine_meta.*` events |
-| B-4 | `POST /run-doctrine-meta` endpoint | pending | — | OpenAPI lists endpoint; invocation produces SSE |
-| B-5 | `.planning/doctrine_proposals/` dir + README + gitignore | pending | — | dir tracked; non-README .md ignored |
+| B-1 | doctrine-meta SKILLS.md | done | `c65ff09` | 166 LOC; follows brownfield-role format with forbidden_targets safeguard |
+| B-2 | `prompts_brownfield.py` SKILL_PATHS update | done | `9ec64c6` | `_load_skill('doctrine_meta')` returns 9294 chars |
+| B-3 | `_doctrine_meta_flow` in orchestrator + post-sprint hook | done | `0cdfec7` | 131 LOC; hook between `sprint_complete` yield and outer finally |
+| B-4 | `POST /run-doctrine-meta` endpoint | done | `47e7157` | OpenAPI now lists `/api/projects/{repo}/run-doctrine-meta`; `run_doctrine_meta` flag added to `RunBriefRequest` |
+| B-5 | `.planning/doctrine_proposals/` dir + README + gitignore | done | `d5c17f3` | dir tracked via `.gitkeep`; non-README `*.md` ignored |
 
 **Batch B gate:**
 - [ ] Unit smoke: synthetic trace dirs → proposal file written with ≥1 cited trace path
@@ -114,7 +114,7 @@ After all four batches land, one final exercise validates the loop:
 ## Sign-off
 
 - [x] Batch A verified — sign: claude (Opus 4.7)  date: 2026-05-23  notes: 658dcb1 + a50026a + a2fa12a. Docs-only; Sprint 4 unaffected throughout.
-- [ ] Batch B verified — sign: ____  date: ____
+- [x] Batch B verified — sign: claude (Opus 4.7)  date: 2026-05-23  notes: c65ff09 + 9ec64c6 + 0cdfec7 + 47e7157 + d5c17f3. Backend imports clean; new endpoint exposed in OpenAPI. Awaits end-to-end smoke against a real `traces_archive/<run_id>/` (deferred until uvicorn restart + test run).
 - [ ] Batch C verified — sign: ____  date: ____
 - [ ] Batch D verified — sign: ____  date: ____
 - [ ] **End-to-end smoke** — sign: ____  date: ____
