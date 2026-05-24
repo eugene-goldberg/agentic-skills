@@ -25,3 +25,9 @@ ab_runs/
 # operator promotes them into canonical doctrine by hand.
 .planning/doctrine_proposals/*.md
 !.planning/doctrine_proposals/README.md
+
+# B15: sprint trace archive is session/run-local; regenerated per sprint.
+webapp/backend/traces_archive/
+
+# Schedule-wakeup harness lock file.
+.claude/scheduled_tasks.lock
