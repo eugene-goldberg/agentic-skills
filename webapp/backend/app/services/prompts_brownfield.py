@@ -31,9 +31,10 @@ AGENTIC_ROOT = Path(__file__).resolve().parents[4]
 SKILLS_DIR = AGENTIC_ROOT / "skills" / "brownfield"
 
 SKILL_PATHS = {
-    "po":       SKILLS_DIR / "brownfield-production-incremental-po" / "SKILLS.md",
-    "engineer": SKILLS_DIR / "brownfield-production-incremental-engineer" / "SKILLS.md",
-    "qa":       SKILLS_DIR / "brownfield-production-incremental-qa" / "SKILLS.md",
+    "po":            SKILLS_DIR / "brownfield-production-incremental-po" / "SKILLS.md",
+    "engineer":      SKILLS_DIR / "brownfield-production-incremental-engineer" / "SKILLS.md",
+    "qa":            SKILLS_DIR / "brownfield-production-incremental-qa" / "SKILLS.md",
+    "doctrine_meta": SKILLS_DIR / "brownfield-production-incremental-doctrine-meta" / "SKILLS.md",
 }
 
 
