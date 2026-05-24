@@ -122,6 +122,84 @@ These are bugs we have directly observed. Each has a clear fix and a clear test 
 
 ---
 
+### A9 — Gate subprocess pgroup leak (sibling of B1)
+
+**Class:** `resource-leak` · **Invariant:** I-1 (resource lifecycle owned end-to-end). Same class as B1; B1 fixed it for the claude tree only.
+
+**Evidence:** During Sprint 4 status polling (2026-05-23 ~18:00), a 30-hour-old `regression_gate.sh` process and its `docker compose ... playwright` children were observed running in the system process table, traced to `post-464c91f9-*` containers from a Sprint 3 BL-0005 gate retry. B1's pgroup-kill covers `claude_agent.stream_agent_task` only. `regression_gate_svc.run_gate` calls `asyncio.create_subprocess_exec` directly without `start_new_session=True`, and its `finally` block calls `proc.kill()` on the parent only — leaving the docker-compose child tree orphaned when SSE disconnects, the orchestrator crashes, or uvicorn cycles.
+
+**Cause:** Per-call-site cleanup discipline. B1 was patched once at the claude site; nobody scanned siblings. The crew has no `ManagedSubprocess` primitive that guarantees pgroup hygiene by construction.
+
+**Fix:** Two-stage.
+- (Tactical) Add `start_new_session=True` + `_kill_pgroup`-equivalent finally to `regression_gate_svc.run_gate`. ~15 LOC.
+- (Structural — preferred, deferred to Move 3) Introduce `ManagedSubprocess` primitive in `webapp/backend/app/services/subprocess_runner.py`; migrate claude, gate, graphify, and claude-context call sites; lint direct `asyncio.create_subprocess_exec` usage. ~150 LOC + migration.
+
+**Risk:** Move 3's invasive migration could miss a call site, reintroducing the leak class on a new resource.
+**Mitigations:**
+1. **Lint as CI gate** — add a `tests/test_no_raw_subprocess.py` that greps the `app/services/` tree for `asyncio.create_subprocess_exec` and fails if any hit is outside `subprocess_runner.py`. Closes the "miss a site" failure mode at PR time.
+2. **Closure-check observability (Move 2)** — `closure_check()` scans for surviving children of the run's pgroup at terminate. Any future miss surfaces as a `closure_violation` event, not as a 30h orphan discovered by hand.
+3. **Per-site staged rollout** — claude (already covered) → gate → graphify → claude-context. Each migration is one commit; if a stage causes a regression, only that stage rolls back.
+4. **Smoke test per stage** — `kill -9` the orchestrator mid-run for each stage; assert zero surviving children.
+
+**Test:** start a gate run, `kill -9` orchestrator, `ps -ef | grep -E '(regression_gate|docker.*playwright)'` → zero rows.
+
+**Effort:** ~15 LOC tactical only; ~150 LOC for the structural Move 3.
+
+---
+
+### A10 — Orphan docker container accumulation (no run_id labeling)
+
+**Class:** `consistency-violation` · **Invariant:** I-3 (closure postconditions asserted). Adjacent to I-1; the resource is owned externally (docker daemon), so the lifecycle gap manifests as containers, not PIDs.
+
+**Evidence:** On 2026-05-23 ~19:13, `docker ps -a` listed 25 orphan containers from prior sprints: `post-464c91f9-*` (30h), `bl0010-db` (2d), `7edfa9efa6f5-*` (2d), `326b866ec7e9-*` (2d), `9a58a4ec62a7-*` (2d), plus the live Sprint 4 cluster `pre-28908e49-*` (~10 min). Reaping required hand-correlation by container-name prefix because nothing in the container metadata identifies the agentic-skills run that spawned it. `milvus-standalone` (legitimate, framework-owned) and `sescrew-postgres` (operator's unrelated project) had to be excluded by name allowlist — fragile.
+
+**Cause:** `regression_gate.sh` invokes `docker compose -p <project> up` with a project-prefix derived from a sha; no `--label agentic-skills.run_id=<run_id>` is passed. Closure-check (I-3) is not implemented anywhere — even if labeling existed, no code path scans for survivors at run terminate.
+
+**Fix:** Three-part, sequenced.
+1. **Label at creation** — patch `regression_gate.sh` (and any other `docker compose up` site) to add `--label agentic-skills.run_id=<run_id> --label agentic-skills.role=<role> --label agentic-skills.bl=<bl_id>`. ~5 LOC.
+2. **Closure-check scan** — new `closure_check.scan_orphan_containers(run_id)` that runs `docker ps -aq --filter label=agentic-skills.run_id=<run_id>` and emits one `closure_violation` event per survivor. Called from orchestrator outer-finally. ~30 LOC.
+3. **Reaper (operator-approved)** — `POST /api/projects/<repo>/reap-orphans` endpoint that scans by label, reports findings, and reaps only on `confirm=true`. ~25 LOC. NOT auto-invoked.
+
+**Risk:**
+- **R1** — false positive reaping external containers (sescrew-postgres style).
+- **R2** — false negative if a container is created without the label (legacy code path missed).
+- **R3** — label injection: a rogue container could claim our run_id.
+
+**Mitigations:**
+1. **Label-scoping** — closure-check only matches `agentic-skills.run_id=<known>` where `<known>` is a value the orchestrator minted itself (cross-referenced against the disk state file). External containers carry no `agentic-skills.*` labels and are invisible to the scan. R1 closed.
+2. **Lint as CI gate** — `tests/test_compose_invocations_labeled.py` greps every `docker compose up` / `docker run` call in our code and asserts the `--label agentic-skills.run_id` flag is present. R2 closed.
+3. **Run-id minted only in the router** (I-4) — `run_id` values are UUID-like and not externally guessable; a rogue container would need to know the live run_id to inject. R3 closed structurally.
+4. **Reaper is operator-gated** — survivors are *reported* by closure-check but not auto-reaped. The reaper endpoint requires `confirm=true`. Worst case of any future bug: stale-report email to operator, not lost work.
+
+**Test:** start a brief run that triggers the gate, `kill -9` orchestrator mid-gate, restart orchestrator, observe `orchestrator.closure_violation kind=docker_container resource=<container-id>` events in the new run's log.
+
+**Effort:** ~60 LOC across the three parts. **Depends on Move 2** (closure_check primitive) landing first.
+
+---
+
+### A11 — R9 streaming-side gap deepens A8
+
+**Class:** `enforcement-gap` · **Invariant:** I-2 (doctrine is a contract). Same invariant as A8; deepens the gap rather than introducing a new one.
+
+**Evidence:** A8 closes the *post-validation* side of R9 (doctrine_validator opens retrieval.jsonl and counts graph_* calls). The *streaming* side (Tier 1.5 pre-modification kill in `claude_agent.stream_agent_task`) counts `GROUNDED_RETRIEVAL_TOOLS` as a single bucket — semantic_search + graph_* + target_status all count toward the same total. An agent making 3× `semantic_search` and 0× `graph_*` passes Tier 1.5 and writes a modification, only to be flagged later by the (new, A8) post-validator. The kill comes too late: code has already been written, the worktree mutated.
+
+**Cause:** `claude_agent.py` GROUNDED_RETRIEVAL_TOOLS is a flat list. R5 (total grounded count) and R9 (graph_* floor) share enforcement code but should split at this point.
+
+**Fix:** In `claude_agent.py`, replace the single `grounded_count` with a `dict[family, count]`: `{"semantic": …, "graph": …, "target": …}`. Tier 1.5 then asserts `grounded_total >= 3 AND graph_count >= 1` before allowing the first `Write`/`Edit`. The fix-prompt names which family is short. ~25 LOC.
+
+**Risk:** Pure-UI BLs (BL-0006 case) may legitimately have nothing to graph-traverse — the rule as documented in CLAUDE.md says it's a floor, but tightening the streaming side may produce a kill-then-retry pattern that wastes one agent attempt before the agent learns to make a token graph_* call.
+**Mitigations:**
+1. **Pair with A8** — A11 only lands once A8's post-validator is shipped, so the fix-prompt path is proven before pulling enforcement forward in time.
+2. **Telemetry first** — land an *observation-only* version (counts but does not kill) for one sprint. Confirm the streaming kill would have fired with the same frequency as A8's post-validation kill. Only flip to enforcement once data agrees.
+3. **Family-specific message** — when streaming kills for "no graph_* call yet," the agent's fix prompt names *which* graph_* tool (`graph_neighbors`, `graph_callers`, etc.) is most appropriate for the BL summary. Reduces wasted retries.
+4. **UI-only carve-out (defer decision)** — if telemetry shows BL-0006-class frontend BLs systematically fail R9, the doctrine-meta-agent (Move 1) is the right mechanism to propose softening R9 for that case — not a hardcoded exemption written by hand.
+
+**Test:** synthetic engineer flow making only `semantic_search` calls then attempting `Write` → expect Tier 1.5 kill with `pregrounding_violated reason=r9_graph_floor`.
+
+**Effort:** ~25 LOC. **Depends on A8** landing first.
+
+---
+
 ## Tier B — design shortcomings not previously surfaced
 
 These are deeper than Tier A. Numbered by severity (HIGH first within tier).
@@ -361,6 +439,9 @@ These are deeper than Tier A. Numbered by severity (HIGH first within tier).
 - [x] A6 — reader dumps full event on failure — `5e652ce`
 - [x] A7 — disk-persisted state — `a0deed3`
 - [ ] A8 — R9 graph-grounding hard enforcement *(new — surfaced Sprint 4 BL-0006)*
+- [ ] A9 — Gate subprocess pgroup leak *(new — surfaced Sprint 4; sibling-class of B1)*
+- [ ] A10 — Orphan docker container accumulation *(new — surfaced Sprint 4; depends on Move 2 closure-check)*
+- [ ] A11 — R9 streaming-side gap *(new — deepens A8; lands after A8)*
 - [x] B1 — kill subprocess on cancellation — `b0b3914`
 - [x] B2 — per-repo concurrency lock — `fe0a83b`
 - [x] B3 — graphify writes to shared cache (not worktree) — `0bf3afb` (+ target `418ed91`)
