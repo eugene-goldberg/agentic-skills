@@ -297,6 +297,54 @@ Plus tighten `_doctrine_meta_flow` to set `allowed_tools="Bash,Read,Write,Edit"`
 
 ---
 
+### A15 — R13: agents must not run history-rewriting git commands
+
+**Class:** `scope-creep + silent-failure` · **Invariant:** I-1 (agents own files, never refs) + I-7 (self-hardening surface). **Surfaced by:** doctrine-meta-agent against api-keys sprint (proposal `sprint-run-20260524T014937Z-agent-initiated-rebase.md`, 4 evidence citations). **Operator-approved 2026-05-24.**
+
+**Evidence:** Two QA agents (api-keys BL-0004 + BL-0006) ran `git rebase agentic-skills-work-v3` on their own `agent/<task_id>` branch during the doctrine-retry path. The rebase rewrote the SHAs the orchestrator was tracking; the subsequent FF-merge check failed with `HEAD is not a descendant of agentic-skills-work-v3 (agent rebased or reset history); merge would be non-ff`. The orchestrator caught the symptom via string-match in `missing`, but no R-rule prevented the cause. Identical pattern across two BLs → structural signal per I-6.
+
+**Cause:** Doctrine omission. The role SKILLS.md (engineer/QA/PO) didn't tell agents the orchestrator owns refs. Agents reaching for `git rebase` to fix their own branch is rational from the agent's perspective; from the orchestrator's it creates the exact non-FF state A1 exists to recover.
+
+**Fix:** Three-layer enforcement.
+1. **Runtime kill** (`0e6bab6`): new `FORBIDDEN_GIT_RE` in `claude_agent.py` matched against `Bash` tool_use `command`. Streaming-kill emits `phase=forbidden_git_op kind=killed` and `_kill_pgroup`s the agent. Anchored on the 7 history-rewriting verbs: rebase, reset --hard, push --force/-f/--force-with-lease, filter-branch, commit --amend, update-ref, tag -d, branch -D. Read-only git unaffected.
+2. **Role doctrine** (`68a1f11`): new `## Forbidden Tools (R13)` section added to engineer/QA/PO brownfield SKILLS.md naming the seven commands + pointing at the orchestrator's A1 auto-rebase as the correct path.
+3. **Binding doctrine** (`86afca7`): new R13 row in CLAUDE.md R-rule table + new "Tightened scope (post-R13)" section in ARCHITECTURE_INVARIANTS.md I-1 making the agent–orchestrator ref boundary explicit.
+
+**Risk:** false positives on benign uses; cross-platform regex behavior; agents may try to evade by chaining commands. **Mitigations:** anchored regex (18-case test passes); kill emits structured event so the trace explains the agent's exit; follow-up framework-reviewer (Batch C) can spot evasion patterns from `forbidden_git_op` events vs commit history.
+
+**Test:** synthetic engineer prompted to rebase → streaming-kill fires → `phase_events.jsonl` records `phase=forbidden_git_op kind=killed`. Regex unit tests pass (9 positive, 9 negative, `0e6bab6`).
+
+**Rollback:** revert the three commits. Pure runtime guard + doctrine text; no persistent state affected.
+
+---
+
+### A16 — R5b first-attempt pass rate at 38%; bake citation template into SKILLS.md
+
+**Class:** `enforcement-gap` (rule fires; prompt didn't teach the rule) · **Invariant:** I-2 (doctrine is a contract). **Surfaced by:** doctrine-meta-agent against api-keys sprint (proposal `sprint-run-20260524T014937Z-r5b-prompt-doctrine-drift.md`, 10 evidence citations). **Operator-approved 2026-05-24.**
+
+**Evidence:** Across 17 traces in the api-keys sprint, 10 hit `doctrine_check incomplete attempt=1` on the R5b citation requirement; 100% recovered on first retry. First-attempt pass rate 6/16 ≈ 38%. Cost: 30–90s per BL + a re-invocation with full context. The rule worked; the prompt didn't teach it. Honest waste.
+
+**Cause:** Engineer/QA/PO SKILLS.md described artifacts and rubrics but never said "every artifact must end with a `## Retrieval evidence` footer of ≥3 bullets." Agents learned R5b by failing it.
+
+**Fix:** Embedded artifact-template `## Required Retrieval Evidence Footer (R5b)` section in engineer/QA/PO brownfield SKILLS.md (`68a1f11`). Template:
+
+```
+## Retrieval evidence
+- [retrieval: <tool_name>] — <one-sentence summary>
+- [retrieval: <tool_name>] — <one-sentence summary>
+- [retrieval: <tool_name>] — <one-sentence summary>
+```
+
+Bullets must correspond to retrieval calls that actually appear in `retrieval.jsonl`; fabricated citations are blocker-grounds for the framework-reviewer (Batch C).
+
+**Risk:** template gaming (bullets without backing calls); over-prescriptive artifact shape; brownfield-vs-greenfield scoping. **Mitigations:** streaming-side R5/Tier-1.5 still counts actual grounded calls (template change only addresses the citation-in-artifact half); the rest of artifact-spec is unchanged; only brownfield SKILLS.md edited. Scorer has no SKILLS.md (its prompt comes from `build_score_prompt_brownfield` + rubric); scorer-side R5b reduction handled separately if its first-attempt rate also shows the pattern.
+
+**Test (named acceptance criterion):** next full sprint's R5b first-attempt pass rate rises from 38% to ≥80%. If it doesn't, the template wording is wrong, not the structural premise.
+
+**Rollback:** remove the `## Required Retrieval Evidence Footer (R5b)` section from the three SKILLS.md files. R5b rule and enforcement point unchanged.
+
+---
+
 ## Tier B — design shortcomings not previously surfaced
 
 These are deeper than Tier A. Numbered by severity (HIGH first within tier).
@@ -542,6 +590,8 @@ These are deeper than Tier A. Numbered by severity (HIGH first within tier).
 - [ ] A12 — Doctrine-meta input contract drift (`events.jsonl` vs `stream.jsonl`) *(new — promoted from doctrine-meta proposal; my own B-1 work failed I-2)*
 - [x] A13 — Doctrine enforcement events not in per-agent trace — `570b228` (M2-4 `phase_events.jsonl`). R13 doctrine codification deferred (operator's call; the mechanism is now in place).
 - [ ] A14 — Meta-agent SKILLS.md missing `forbidden_tools`; agent ran `git add -f` *(new — surfaced by smoke; sibling-class to A9)*
+- [x] A15 — R13: agents must not history-rewrite — `0e6bab6` (streaming kill) + `68a1f11` (SKILLS.md) + `86afca7` (CLAUDE.md + INVARIANTS)
+- [x] A16 — R5b citation template baked into SKILLS.md — `68a1f11`. Acceptance criterion measurable on next sprint (first-attempt pass rate ≥80%).
 - [x] B1 — kill subprocess on cancellation — `b0b3914`
 - [x] B2 — per-repo concurrency lock — `fe0a83b`
 - [x] B3 — graphify writes to shared cache (not worktree) — `0bf3afb` (+ target `418ed91`)
