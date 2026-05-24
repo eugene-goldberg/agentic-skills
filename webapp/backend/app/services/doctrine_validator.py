@@ -456,8 +456,15 @@ The webapp's pre-merge validator has REJECTED the commit. You are now being re-i
 1. Re-read the original prompt's doctrine + contract blocks. The required content of each artifact is defined there in detail.
 2. Use retrieval tools (`mcp__retrieval__semantic_search`, `mcp__retrieval__graph_summary`, `mcp__retrieval__graph_neighbors`) to ground the content in the actual target codebase — not just from memory.
 3. Write each missing/empty file with substantive content (≥120 characters; ideally the structure the doctrine specified). If the validator flagged "<source code change …>" as missing, you MUST also write the actual implementation source code (e.g. the SQLModel class, FastAPI route, dep, alembic migration, tests) — the artifact doc alone is not the deliverable.
-4. `git add -A` and `git commit --amend --no-edit` so the artifacts join the existing commit (do NOT create a separate commit).
-5. Print ONLY the same final JSON shape as your previous run, with the same `commit_sha` (it will change after --amend, use the new sha).
+4. `git add -A` and `git commit -m "fix: add doctrine-required artifacts"` to add a NEW commit on top of your previous work.
+
+   **R13 boundary:** the orchestrator owns refs. You must NOT run
+   `git commit --amend`, `git rebase`, or `git reset --hard` on your
+   branch. The streaming layer will kill any such command. Adding a
+   new commit is the only legitimate path; the orchestrator's
+   fast-forward merge handles the lineage.
+
+5. Print ONLY the same final JSON shape as your previous run. Use the NEW `commit_sha` (the tip of your branch after step 4).
 
 If any of the listed paths require parsing BACKLOG.md or another existing artifact to know what to write, do that first. Do NOT modify BACKLOG.md, do NOT change acceptance criteria — only add the missing companion artifacts.
 """
@@ -519,9 +526,10 @@ def build_gate_fix_prompt(
 ) -> str:
     """R10.1: delta prompt for an agent whose run failed the regression gate.
 
-    The agent is re-invoked in the SAME worktree. It must amend the existing
-    commit (do NOT create a separate commit) so that the branch stays a
-    fast-forward of target_ref (R9 still applies on retry).
+    The agent is re-invoked in the SAME worktree. It MUST add a new commit
+    on top of its prior work (R13: history-rewriting commands are blocked
+    at the streaming layer). The branch stays a fast-forward of target_ref
+    automatically; the orchestrator handles ref lineage.
     """
     role_label = role.upper()
     bl_clause = f" for {bl_id}" if bl_id else ""
@@ -553,8 +561,17 @@ These are the most-relevant blocks extracted from the gate's stdout (pytest + Pl
 1. Diagnose: read the failure blocks above. Identify whether the bug is in implementation, in tests, or in setup (fixtures, seed data, env).
 2. Fix in source: edit the implementation file(s) and/or test file(s) so the failing tests would pass against a real running stack. Do not delete failing tests just to make the gate green — fix them properly or document why they were wrong.
 3. Re-ground if needed: if your fix touches a different area than your original retrieval, call `mcp__retrieval__semantic_search` / `graph_*` again to make sure you understand the new area.
-4. `git add -A` and `git commit --amend --no-edit` so the fix joins the existing commit. The branch MUST remain a fast-forward of the target ref — do NOT rebase, do NOT reset to an older commit.
-5. Print ONLY the same final JSON shape as your previous run with the new `commit_sha` (post-amend).
+4. `git add -A` and `git commit -m "fix: <one-line summary of the regression fix>"` to add a NEW commit on top of your prior work.
+
+   **R13 boundary:** the orchestrator owns refs. You must NOT run
+   `git commit --amend`, `git rebase`, `git reset --hard`, or
+   `git push --force` on your branch. The streaming layer will kill
+   any such command. Adding a new commit is the only legitimate path;
+   the orchestrator's fast-forward merge (or A1 auto-rebase if
+   needed) handles the lineage. New commits are always a fast-forward
+   of your branch tip.
+
+5. Print ONLY the same final JSON shape as your previous run with the new `commit_sha` (your branch's new tip after step 4).
 
 Doctrine and gate will both re-run after this attempt. If both pass, the branch auto-merges. If either fails after {max_attempts} attempts, the branch is left in awaiting_review for operator decision.
 """
