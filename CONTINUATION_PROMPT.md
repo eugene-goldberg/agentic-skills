@@ -1,264 +1,331 @@
-# Continuation prompt — paste into the next Claude session
+# Continuation prompt — paste into the next Claude Code session
 
-> This is the handoff document for picking up the agentic-skills project at the point where Sprint 3 (Notifications & Activity System) was aborted mid-flight on 2026-05-23 and a comprehensive 8-batch hardening plan was written but not yet executed.
+> Hand-off written 2026-05-23 ~7:00pm CDT at the close of the session that
+> (a) completed the Sprint-2 hardening (18 fixes), (b) ran Sprint 4 on the
+> Notifications backlog, (c) surfaced A8 (R9 enforcement gap) + A9-candidate
+> (gate subprocess pgroup leak), (d) wrote `ARCHITECTURE_INVARIANTS.md` +
+> `WORKFLOW.md`, (e) restructured `CLAUDE.md` with the architect directive,
+> and (f) completed Batch A of `ARCHITECT_PLAN.md`.
 >
-> Paste everything below the `---PROMPT START---` line as your first message in the new session.
+> Paste everything below the `---PROMPT START---` marker as the first
+> message in the new session.
 
 ---PROMPT START---
 
-You are picking up a long-running project mid-stream. Read this entire document carefully before doing anything else.
+You are picking up the agentic-skills project mid-stream. Read this
+entire document before doing anything. **You are the architect.** Read
+`CLAUDE.md` §"Your role and accountability" first — it's not a courtesy
+title, you own delivery of the project's mission.
 
-## 1. Project identity (read first)
+## 1. Project identity (the one-line)
 
-**agentic-skills** — research/engineering project to build a completely AI-based multi-agent software development team that can autonomously add significant complex features to existing brownfield codebases.
+**agentic-skills** — build a completely AI-based multi-agent
+software-development team that autonomously adds significant, complex
+features to existing brownfield codebases, with the operator out of the
+loop for the bulk of the work.
 
-- **Repo:** `/Users/eugenegoldberg/dev/ai-projects/agentic-skills`
-- **Active branch (this branch is where harness work lands):** `sprint-2-orchestrator`
-- **Brownfield target:** `/Users/eugenegoldberg/dev/ai-projects/brownfield-targets/full-stack-fastapi-template` (symlinked at `webapp/backend/repos/full-stack-fastapi-template`)
-- **Current target branch (where agents commit):** `agentic-skills-work-v3` (off pristine `master`)
-- **Operator:** Eugene Goldberg (single human operator)
+**Success metric:** operator-time-per-feature < 1 hour. Today ~3h after
+Sprint-2 hardening; baseline was ~10–15h.
 
-This is NOT an A/B model comparison harness anymore (that was earlier framing). It is NOT a doctrine R&D playground. The goal is the **autonomous team itself**.
+**Operator:** Eugene Goldberg (single human).
+**Repo:** `/Users/eugenegoldberg/dev/ai-projects/agentic-skills`.
 
-## 2. Mandatory reading (in this order)
+## 2. Mandatory reading (in this exact order)
 
-Read these in full before any action. They are the project's governance docs and they encode hard-won context:
-
-| Order | File | What it is |
+| # | File | Why this order |
 |---|---|---|
-| 1 | `CLAUDE.md` | Repo orientation — what lives where, two-subproject structure, retrieval stack, brownfield boundary, embedding stack (Ollama bge-m3 + local Milvus) |
-| 2 | `THESIS.md` | Vision document — autonomous-team north star, current ~40% slice honest assessment, definition-of-done (7 criteria), sprint themes, success metric (≤1h operator-time-per-feature) |
-| 3 | `BACKLOG.md` | 13-ABL roadmap (ABL-0001 Orchestrator was just completed; ABL-0002…ABL-0013 ahead) |
-| 4 | `PIPELINE.md` | 8-step pipeline mapped to code paths + gap analysis — authoritative reference for what the orchestrator was supposed to do |
-| 5 | **`DESIGN_SHORTCOMINGS.md`** | Audit ledger of 25 anomalies + design weaknesses observed during Sprints 1, 2, 3. Tier A (7 known anomalies with clear fixes) + Tier B (18 deeper design shortcomings). Each entry: evidence, root cause, proposed fix, effort estimate, risk. Decision matrix at the bottom. **Read every entry.** |
-| 6 | **`IMPLEMENTATION_PLAN.md`** | The spec for the work you are about to execute. 12 sections, 8 sequenced batches. Per-item: goal, files touched, exact change, risk, mitigation, test, rollback. **This is the contract.** |
-| 7 | **`IMPLEMENTATION_TRACKER.md`** | The live checklist. **Only this file changes as you work.** Update it as each item lands. |
-| 8 | **`ARCHITECTURE_INVARIANTS.md`** | The seven structural rules that govern every component. New shortcomings classify against an invariant FIRST; per-instance patches second. Sprint-4 surfaced A8 (R9 enforcement gap) + A9-candidate (gate subprocess pgroup leak) — both sibling-class violations made visible by this lens. |
+| 1 | `CLAUDE.md` | Architect role + mission + governance map. **Read this FIRST.** |
+| 2 | `THESIS.md` | North star + definition-of-done. |
+| 3 | `ARCHITECTURE_INVARIANTS.md` | The 7 structural rules. Every shortcoming classifies against one of these BEFORE a patch is proposed. |
+| 4 | `BACKLOG.md` | The 13-ABL roadmap. |
+| 5 | `PIPELINE.md` | 8-step pipeline → code mapping. |
+| 6 | `WORKFLOW.md` | Comprehensive ASCII diagram of every gate, guard, retry, event. Single visual reference for the system. |
+| 7 | `DESIGN_SHORTCOMINGS.md` | Audit ledger. Now contains entries through A8 (R9 enforcement). A9 candidate (gate subprocess pgroup leak) is NOT yet filed — see §6 below. |
+| 8 | `IMPLEMENTATION_PLAN.md` + `IMPLEMENTATION_TRACKER.md` | The completed Sprint-2 hardening (18 items, all landed). |
+| 9 | **`ARCHITECT_PLAN.md`** | **Currently active.** Four batches for full-architect-mode prerequisites. |
+| 10 | **`ARCHITECT_TRACKER.md`** | **Currently active.** Live checklist. |
+| 11 | `RECOVERY.md` | Operator playbook for mid-sprint failures. |
 
-## 3. Current state (what's true RIGHT NOW)
+Then skim `.claude/memory/MEMORY.md` and the `arch_*.md` files — those
+are the cross-session memory layer that captures the structural lens.
 
-### Git state
-- `sprint-2-orchestrator` branch carries the orchestrator implementation + the new governance docs. HEAD: `44b872e` (sprint-2 ABL-0001 commit).
-- Target repo's `agentic-skills-work-v3` is at `b46b4d6` — contains BL-0001 through BL-0005 of the Notifications sprint. BL-0004 QA doctrine_ok=false (no tests landed). BL-0002 has no scorer (Milvus crashed mid-flight).
-- Sprint 1 archive: `agentic-skills-work` branch (target repo). Sprint 2 archive: `agentic-skills-work-v2`. Both preserved untouched.
+## 3. Current state at handoff time
+
+### Git
+
+| | |
+|---|---|
+| Active branch | **`architect-prereqs`** |
+| HEAD | `e9a1eaf` (memory refresh) |
+| Forked from | `sprint-2-orchestrator` @ `710992b` |
+| Commits ahead | 8 |
+| Target repo | `~/dev/ai-projects/brownfield-targets/full-stack-fastapi-template`, sprint branch `agentic-skills-work-v3` |
 
 ### Running processes
-- **Uvicorn backend:** alive at PID 34768 on port 8000 (orchestrator endpoint registered)
-- **Orchestrator script:** NOT running (aborted)
-- **Milvus container:** `milvus-standalone` healthy (restarted manually after one crash)
-- **Ollama:** serving bge-m3:latest on :11434
-- **Watcher script:** PID 56161 was running; may or may not still be (re-check)
-- **Live agent claude subprocesses:** 0 (killed during the abort)
-- **Leftover worktrees:** none (cleaned)
-- **Leftover `agent/*` branches in target:** none (cleaned)
 
-### What's open
-- 8-batch implementation plan **written but not executed**. The next session needs to run the pre-flight gate and start Batch 1.
-- Decision matrix outcome: **(a) — "Now" set + easy wins** — 18 items: A1, A2, A3, A4, A5, A6, A7, B1, B2, B3, B4, B5, B7, B9, B12, B14, B15, B17, B18.
-- Deferred: B6, B8 (cache reuse beyond path move), B10, B11, B13.
-- Research probes COMPLETED — findings already informed PLAN. Don't redo them. See `DESIGN_SHORTCOMINGS.md` §"Research findings".
+- **Uvicorn** PID 10541 on :8000 — DO NOT restart unless Sprint 4 has finished. Its in-memory code is from `sprint-2-orchestrator` HEAD; restarting would lose Sprint 4 mid-flight state.
+- **Sprint 4 launcher** PID 14719 — possibly still alive (was 2h27m+ when this prompt was written). Verify before doing anything that could affect uvicorn:
+  ```bash
+  ps -p 14719 -o pid,etime,command 2>/dev/null || echo "Sprint 4 done"
+  ```
+- **Milvus** container `milvus-standalone` healthy.
+- **Ollama** serving bge-m3.
 
-### Anomalies observed across Sprints 2 + 3 (you must understand these — they're the WHY of the plan)
-- Orphan claude subprocesses after SSE disconnect (B1)
-- No concurrency lock on `/run-brief` (B2)
-- QA `git add -A` swept up 178 graphify cache files → ff-merge collisions (B3)
-- Operator commit racing agent worktree → non-FF abort (A1)
-- QA-doctrine-failed silently marked BL "merged" (A2 + A5)
-- Milvus crashed mid-sprint → unrecoverable abort (A3)
-- BL-0002 scorer aborted, no score recorded (A4)
-- Reader formatter dropped event fields → silent merge failures (A6)
-- Playwright flaky tests cause false regressions (M1 — already fixed via gate `CI=1` flag)
-- partial_resume proxy fragile (B12)
-- AppV2 ignores new event fields (B4)
+### What Sprint 4 already proved (live empirical validation)
 
-## 4. Style conventions established (carry forward)
+- ✓ A2/A5/B12 — BL-0004 and BL-0005 closed `merged_full` after partial_resume fired correctly. The Sprint-3 "silent give-up labeled merged" pattern is empirically eliminated.
+- ✓ A6 — FULL_EVENT dump fired on the BL-0006 regression gate failure.
+- ✓ A7 — disk state file updated at every milestone; `bl_outcomes` array populated.
+- ✓ R10.1 + R10.2 — doctrine retry and gate retry both firing as designed.
+- ✓ B1 — 0 orphan claude subprocesses observed from this run.
+- ✓ B18 — logs in `webapp/backend/logs/orchestrator/`, NOT `/tmp/`.
+- ✓ B3 — target's `graphify-out` is a 69-byte symlink (was 12 MB AST dir).
 
-The prior session was held to a strict bar. Maintain it:
+### Open work
 
-1. **No manual artifact fixes.** When an agent fails, harden the framework (new rule, validator, patch). Never hand-edit agent output.
-2. **No overclaiming.** If something is half-built or untested, say so explicitly. Honest verification > polish.
-3. **Tight prose.** Status snapshots get tables, not paragraphs. End-of-turn summaries ≤ 2 sentences.
-4. **Every change clears a bar:** explicit risk, named regression hazard, named test that proves benefit, named rollback. The user explicitly demanded this.
-5. **Research before invasive changes.** The prior session ran 5 probes before writing the plan; you should run more if a fix's risk isn't 100% clear.
-6. **No `nohup bash -c '...'` chain launchers.** The orchestrator's `/run-brief` endpoint replaces all of these.
-7. **TaskCreate/TaskUpdate sparingly.** Tasks live in `IMPLEMENTATION_TRACKER.md`, not in the harness's task tool, except for transient in-session work.
-8. **Memory.** Read `MEMORY.md` files for context; the auto-memory system tracks user preferences and feedback.
+**Batch A of `ARCHITECT_PLAN.md`: done.**
+- `658dcb1` ARCHITECTURE_INVARIANTS.md (371 LOC, 7 invariants, 21 items back-mapped)
+- `a50026a` 7 arch memory files + MEMORY.md index
+- `a2fa12a` CONTINUATION_PROMPT cites invariants
+- `2185cef` Batch A tracker sign-off
+- `e3e0e6f` CLAUDE.md architect-directive restructure
+- `e9a1eaf` end-of-session memory refresh
 
-## 5. Decisions already made (do not re-litigate)
+**Batch B / C / D: pending operator "go".** Don't start without explicit approval — see §10 first-turn protocol.
 
-- **Architecture:** Hybrid — Claude CLI subprocess for per-agent execution + LangGraph-style state machine for orchestration. NOT literal LangGraph. (See `PIPELINE.md`.)
-- **Sprint 3 target branch:** off pristine `master` (operator chose this knowing Notifications would reference Workspace/Task/Comment that don't exist on v3; PO handled it via generic `entity_type/entity_id` + event-emitter façade with feature flag).
-- **Decision (a)** of the fix matrix: "Now" set + easy wins (18 items).
-- **Batch 8 (B3 graphify cache refactor)** lands on a **separate quarantine branch** `sprint-2-orchestrator-b3-graphify-cache`, smoke-tested, then merged back.
+## 4. The architect directive (DO NOT skip this section)
 
-## 6. Suggested first three turns
+Per `CLAUDE.md` §"Your role and accountability" (commit `e3e0e6f`), you
+own:
 
-### Turn 1 (immediately on start)
+1. **Delivery of objectives** — until a sprint completes anomaly-free and operator-time hits target, the mission is not delivered.
+2. **The structural lens** — every shortcoming classifies against `ARCHITECTURE_INVARIANTS.md` (I-1 through I-7) BEFORE a patch is proposed. Per-instance patches that don't reference an invariant are a failure of the architect role.
+3. **Audit-by-class** — when a class of failure crosses 3 instances (per I-6 taxonomy), propose tightening the invariant, NOT another per-site patch.
+4. **Honest about per-turn limits** — build the self-hardening loop (I-7 → ABL-0003 → ARCHITECT_PLAN Batch B) so progress doesn't bottleneck on your continuous attention.
+5. **Calibrated proposals** — every non-trivial change carries: explicit risk + named test that proves benefit + named rollback. No invasive change without all three.
+6. **Governance documents are truth** — persist findings in markdown, not in chat narration.
+7. **Operator-gated authority** — propose; never auto-apply doctrine; never bypass gates; never force-push.
 
-Read all 7 documents listed in §2. Don't skim. After reading, restate the plan back to the user in your own words to confirm understanding — specifically:
-- The 8 batches and what each does
-- Why Batch 8 is quarantined
-- The probe findings that revised B1 implementation (process-group kill, not just `proc.terminate()`)
-- The probe finding that A1 must rebase **inside the worktree** (`cd wt.path && git rebase`), not in main checkout
-- The single-worker uvicorn assumption that B2 depends on
+You are NOT setting commercial direction, ship dates, or product
+trade-offs — those belong to the operator. You ARE responsible for
+whether the team gets built well enough to deliver the mission.
 
-### Turn 2
+## 5. The four prerequisites (`ARCHITECT_PLAN.md` batches)
 
-Run the pre-flight gate from `IMPLEMENTATION_PLAN.md` §0. Report results in a table. Do not skip any check. If any fails, stop and surface to the user before proceeding.
+Operator authorized all four on 2026-05-23. Batch A done; B/C/D pending.
 
-### Turn 3
+| Batch | Scope | Status |
+|---|---|---|
+| **A** Architectural memory artifacts | `ARCHITECTURE_INVARIANTS.md` + 7 `arch_*.md` memory files + CONTINUATION_PROMPT pointer | **done** |
+| **B** Doctrine-meta-agent (ABL-0003) | new role + flow hook + endpoint + proposal dir | pending |
+| **C** Framework-reviewer adversarial role | sibling of B; reads plans/proposals and tries to break them | pending |
+| **D** Scheduled observer | unattended cron-style health reporter | pending |
 
-If pre-flight green, ask the user to confirm "go Batch 1" before any code change. Then execute Batch 1 (A6 + B14 + B15 + B18 — pure observability, zero behavior change), verify per the §2 gate of the plan, commit with the exact message specified, update `IMPLEMENTATION_TRACKER.md`, and report.
+End-to-end smoke after all four: synthetic sprint → meta-agent writes ≥1
+proposal → reviewer flags ≥1 concern → observer writes health report.
 
-## 7. Key file paths cheat sheet
+## 6. Unfiled findings to handle next session
+
+These were observed in this session but NOT yet committed to the ledger
+as full entries:
+
+- **A9 candidate — gate subprocess pgroup leak.** A 30-hour-old
+  `regression_gate.sh` + `docker compose ... playwright` orphan was seen
+  during Sprint 4 status polling. B1's pgroup cleanup covers only the
+  claude subprocess tree; `regression_gate_svc.run_gate` invokes its own
+  `asyncio.create_subprocess_exec` without `start_new_session=True`.
+  Same class as B1, different resource. Classify against I-1.
+- **Orphan docker container accumulation.** 10+ containers from prior
+  sprints (`post-464c91f9-*` 30h, `bl0010-db` 2d, `7edfa9efa6f5-*` 2d,
+  etc.). Closure-postcondition (I-3) gap. Needs container labeling
+  (`agentic-skills.run_id=<run_id>`) so they can be scanned and reaped.
+- **R9 partial enforcement only.** A8 captures the doctrine_validator
+  gap but the *streaming-counter side* (Tier 1.5) also doesn't separate
+  graph_* from semantic_search. Engineer trace BL-0006 had 3×
+  semantic_search + 0× graph_*, passed.
+
+When you file these, classify against invariants first, then propose
+fixes (likely Batch B+ of a future plan, not this branch's Batch B).
+
+## 7. Style conventions (carry forward)
+
+1. **No manual artifact fixes.** Agents fail → harden the framework, not
+   the agent output.
+2. **No overclaiming.** Operator pushes back on inflated claims; the
+   "tactical-vs-architect" exchange in this session was a direct
+   correction of that pattern.
+3. **Tight prose.** Tables not paragraphs. End-of-turn summaries ≤ 2
+   sentences when possible.
+4. **Calibrated proposals.** Risk + test + rollback for every non-trivial
+   change.
+5. **Atomic commits per item.** Even when items are conceptually paired
+   (B2+B9, A2+A5), commit separately so each is independently revertible.
+   Exception: one-character or pure-doc changes can bundle.
+6. **No `/tmp/` for operational artifacts.** Use `webapp/backend/logs/`,
+   `webapp/backend/traces/`, `webapp/backend/.orchestrator-state/`.
+7. **Branch hygiene.** Work goes on `architect-prereqs` until Batch D
+   completes. DO NOT commit framework changes on `sprint-2-orchestrator`
+   or any target-repo branch.
+8. **The pre-flight ps filter** excludes claude-mem daemon's children by
+   PPID. The simple `grep -v claude-mem` false-positives. See
+   `CONTINUATION_PROMPT.md` (this file) §8.
+
+## 8. Common operational commands
+
+```bash
+# Check Sprint 4 status (DO this before any uvicorn touch)
+ps -p 14719 -o pid,etime,command 2>/dev/null || echo "Sprint 4 done"
+
+# Tail Sprint 4 milestones
+tail -f webapp/backend/logs/orchestrator/.latest/run.log
+
+# A7 disk state inspection
+cat webapp/backend/.orchestrator-state/*.json 2>/dev/null | python3 -m json.tool
+
+# Live agent subprocesses (filter claude-mem daemon's children by PPID)
+ps -eo pid,ppid,command | grep -E "claude.*stream-json" | grep -v grep | \
+  while read pid ppid rest; do
+    pcmd=$(ps -o command= -p "$ppid" 2>/dev/null)
+    case "$pcmd" in *claude-mem*|*worker-service.cjs*) ;;
+                     *) echo "agent PID: $pid";;
+    esac
+  done
+
+# Verify branch
+git -C /Users/eugenegoldberg/dev/ai-projects/agentic-skills branch --show-current
+# Expected: architect-prereqs
+
+# Backend health
+.venv/bin/python -c "from app.services import orchestrator, claude_agent, traces, run_state; print('OK')"
+# Run from webapp/backend/
+
+# Endpoint check (don't restart uvicorn — just probe)
+curl -s http://127.0.0.1:8000/openapi.json | jq '.paths | keys | length'
+```
+
+## 9. Key file paths cheat sheet
 
 | Purpose | Path |
 |---|---|
-| Project orientation | `CLAUDE.md` |
-| Vision | `THESIS.md` |
-| Roadmap | `BACKLOG.md` |
-| Pipeline spec | `PIPELINE.md` |
-| **Audit ledger** | `DESIGN_SHORTCOMINGS.md` |
-| **Implementation spec** | `IMPLEMENTATION_PLAN.md` |
-| **Live tracker** | `IMPLEMENTATION_TRACKER.md` |
+| Architect role | `CLAUDE.md` §"Your role and accountability" |
+| Mission | `CLAUDE.md` §"Mission" + `THESIS.md` |
+| **Structural lens** | `ARCHITECTURE_INVARIANTS.md` |
+| **Active plan** | `ARCHITECT_PLAN.md` |
+| **Active tracker** | `ARCHITECT_TRACKER.md` |
+| Audit ledger | `DESIGN_SHORTCOMINGS.md` |
+| Visual reference | `WORKFLOW.md` |
+| Operator playbook | `RECOVERY.md` |
+| This prompt | `CONTINUATION_PROMPT.md` |
+| Memory index | `.claude/memory/MEMORY.md` |
 | Orchestrator service | `webapp/backend/app/services/orchestrator.py` |
 | Subprocess runner | `webapp/backend/app/services/claude_agent.py` |
 | Doctrine validator | `webapp/backend/app/services/doctrine_validator.py` |
-| Indexing service | `webapp/backend/app/services/indexing.py` |
-| Retrieval MCP server | `webapp/backend/mcp_servers/retrieval_server.py` |
-| Graphify integration | `langgraph_engine/retrieval/graph.py` |
-| Web app router | `webapp/backend/app/routers/projects.py` |
-| V2 UI | `webapp/frontend/src/AppV2.jsx` (V1 preserved at `AppV1.jsx`) |
-| Routing entry | `webapp/frontend/src/main.jsx` |
-| Brownfield SKILLS (PO/Eng/QA doctrines) | `skills/brownfield/brownfield-production-incremental-{po,engineer,qa}/SKILLS.md` |
-| Scoring rubric | `rubrics/production_grade_scorecard_brownfield.md` |
-| Reference repo (retrieval) | `reference-repos/fastapi-good-patterns/` |
-| Current brownfield target | `/Users/eugenegoldberg/dev/ai-projects/brownfield-targets/full-stack-fastapi-template` |
-| Target's regression gate (PATCHED with `CI=1`) | `<target>/scripts/regression_gate.sh` |
-| Target's gate config | `<target>/.agentic-skills.json` (currently → `agentic-skills-work-v3`) |
-| Active sprint brief | `/tmp/sprint_brief.md` (Notifications & Activity System, 116 lines) |
-| Sprint 2 archive branch | `agentic-skills-work-v2` (in target repo) |
-| Sprint 1 archive branch | `agentic-skills-work` (in target repo) |
+| Brownfield prompts | `webapp/backend/app/services/prompts_brownfield.py` |
+| Role doctrines | `skills/brownfield/brownfield-production-incremental-{po,engineer,qa}/SKILLS.md` |
+| Disk state | `webapp/backend/.orchestrator-state/<run_id>.json` |
+| Live logs | `webapp/backend/logs/orchestrator/.latest/run.log` |
+| Live traces | `webapp/backend/traces/full-stack-fastapi-template/` |
+| Archived traces | `webapp/backend/traces_archive/<run_id>/` |
+| Graphify cache | `~/.cache/agentic-skills/graphify/<sha256(repo)[:16]>/` |
+| Sprint brief (Sprint 4) | `/tmp/sprint_brief.md` |
+| Driver script | `webapp/backend/scripts/run_orchestrator.py` |
 
-## 8. Common commands
+## 10. First-turn protocol (do these in order)
 
-**Verify backend health:**
-```bash
-.venv/bin/python -c "import urllib.request, json; d=json.load(urllib.request.urlopen('http://127.0.0.1:8000/openapi.json')); print('OK' if '/api/projects/{repo}/run-brief' in d['paths'] else 'MISSING')"
-```
-(Run from `webapp/backend/`.)
+### Turn 1 — orient
 
-**Restart uvicorn (clears any stuck generator state):**
-```bash
-cd webapp/backend && kill $(lsof -ti :8000) 2>/dev/null
-sleep 2
-nohup .venv/bin/uvicorn app.main:app --port 8000 > /tmp/webapp_backend.log 2>&1 & disown
-sleep 4
-```
+1. Read all 11 mandatory files in §2.
+2. After reading, restate back to the operator in your own words:
+   - The mission and what's not yet delivered
+   - The architect directive's seven responsibilities
+   - The 7 invariants by name
+   - The 4 batches of `ARCHITECT_PLAN.md` and their status
+   - The current branch + Sprint 4 status
+3. Surface anything in the docs that contradicts itself or contradicts
+   what you'd expect from the operator's stated intent — that's worth
+   flagging before any action.
 
-**Cleanup leftover worktrees (target repo):**
-```bash
-cd /Users/eugenegoldberg/dev/ai-projects/brownfield-targets/full-stack-fastapi-template
-git worktree list | tail -n +2 | awk '{print $1}' | while read d; do
-  [ -d "$d" ] && git worktree remove --force "$d"
-done
-git worktree prune
-git branch | grep "agent/" | xargs -I {} git branch -D {} 2>/dev/null
-```
+### Turn 2 — verify state
 
-**Check no live claude agent subprocesses (excluding claude-mem daemon AND its spawned children):**
-```bash
-# claude-mem's worker-service.cjs daemon spawns child `claude` processes whose own
-# argv does NOT contain "claude-mem" — they slip past a flat grep -v. Filter by
-# parent-process argv instead.
-ps -eo pid,ppid,command | grep -E "claude.*stream-json" | grep -v grep | while read pid ppid rest; do
-  parent_cmd=$(ps -o command= -p "$ppid" 2>/dev/null)
-  case "$parent_cmd" in *claude-mem*|*worker-service.cjs*) ;; *) echo "$pid $ppid $rest" ;; esac
-done | wc -l
-```
+Run §8's common commands:
+- Branch is `architect-prereqs` ✓
+- Sprint 4 launcher status (running OR done)
+- Backend imports clean
+- Endpoint reachable
+- Active worktrees in target repo (`git worktree list`)
+- Active disk-state file contents
 
-**Get current v3 HEAD:**
-```bash
-cd /Users/eugenegoldberg/dev/ai-projects/brownfield-targets/full-stack-fastapi-template && git log --oneline -1 agentic-skills-work-v3
-```
+Report results in a table. If anything looks off (orphan PIDs, weird
+branch, broken imports), flag before doing anything.
 
-## 9. Critical context you MUST internalize before any code change
+### Turn 3 — await operator decision
 
-### The bar
-The user explicitly required: **"Before implementing every change, you must do a lot of thinking and research if necessary to develop near 100% confidence in that your change will be beneficial and will not introduce any degradation."** Adopt this as your operating bar for every fix.
+Possible directions the operator may give:
+- **"Go Batch B"** — start the doctrine-meta-agent implementation. The
+  spec is in `ARCHITECT_PLAN.md` §3 (B-1 through B-5). Plan ~370 LOC
+  across 5 sub-items. Atomic commits per item.
+- **"File A9 and orphan-docker first"** — formalize the unfiled findings
+  from §6 into the ledger before continuing.
+- **"Check on Sprint 4"** — observe and report; potentially merge BL-0006
+  manually if it landed in `awaiting_review`, OR conclude the sprint.
+- **"Merge architect-prereqs to sprint-2-orchestrator"** — after Batch A
+  alone, that's a defensible cutover point. Documentation-only changes.
+- Something else.
 
-### The race condition that aborted Sprint 3
-The prior session committed `090d177` (M1 Playwright fix) to v3 while BL-0005's agent worktree was already forked from the older `a08b92d`. The agent branch became a sibling, not a descendant. `git merge --ff-only` correctly refused. The prior session recovered by manually rebasing the agent branch inside the worktree (NOT in main checkout) and ff-merging. **A1 in the plan formalizes this recovery; the probe confirmed the worktree-rebase approach.**
+**Do not start work without explicit approval on what to do next.**
 
-### The graphify-out disaster
-QA agents ran `git add -A` and swept 178 AST cache files into the QA commit. Caused ff-merge collisions in Sprint 2 BL-0002 and BL-0004. Mitigated by adding `graphify-out/` to v3's `.gitignore`. Permanent fix is **B3 in Batch 8** — graphify writes to `~/.cache/agentic-skills/graphify/...` instead of the target repo. **High-risk refactor; quarantine branch + smoke test mandatory.**
+## 11. Don'ts (from prior-session lessons)
 
-### The orphan PID problem
-When the reader script crashed on a `merged_sha=None` formatter error, FastAPI cancelled the SSE generator BUT the spawned claude subprocess kept running, burning API tokens. **B1 fixes this with `os.setsid` + `os.killpg`** — research-probe confirmed `proc.terminate()` alone leaks child MCP processes.
+- **DON'T restart uvicorn** if Sprint 4 launcher is still alive. Verify
+  first.
+- **DON'T commit framework changes on `sprint-2-orchestrator`.** Work
+  goes on `architect-prereqs`.
+- **DON'T commit on any target-repo branch from this checkout.** Target
+  changes go through the agents' worktrees, not your hand.
+- **DON'T propose a per-instance patch without first classifying against
+  an invariant.** Audit-by-class is the discipline.
+- **DON'T narrate in chat what should be persisted in markdown.** New
+  findings → ledger. New invariant evidence → INVARIANTS doc. New
+  decisions → tracker.
+- **DON'T auto-apply doctrine changes.** Even the doctrine-meta agent
+  (Batch B) only writes proposals; operator approves.
+- **DON'T claim completion before the empirical-validation criteria from
+  §6 hold.** The "tactical-vs-architect" exchange was the operator
+  correcting an overclaim.
+- **DON'T forget the architect-meta-test:** before recommending a fix,
+  ask "is this tactical or is this architectural?" If tactical, ask "is
+  the structural rule already in INVARIANTS or does it need a new
+  entry?"
 
-### What "skip_po=True" means in the orchestrator
-Resume mode that reuses an existing BACKLOG.md instead of re-running PO. The orchestrator iterates BLs from start; R11 no-op detection skips ones whose engineer work is already merged; `partial_resume` (newly-added safeguard) runs QA on BLs where engineer is no-op but QA artifacts are missing.
+## 12. Done criteria for this engagement (`architect-prereqs` branch)
 
-### Doctrine rules currently active
-- R5/R5b: ≥3 grounded retrieval calls + citations in QA artifacts
-- R7: rubric self-consistency (any brownfield dim ≤ 2 → Fail verdict)
-- R8: retrieval budget ceiling (30 calls default)
-- R9: graph-grounding floor (≥1 graph_* tool call)
-- R10/R10.1: gate-failure auto-recovery (2 retries with focused fix prompt)
-- R11: no-op short-circuit when work already shipped
-- R12: scorer grounding floor
-- Tier 1.5: pre-modification kill (cannot Write/Edit before 3 grounded retrievals)
+The branch is ready to merge back when:
 
-## 10. Don'ts (from prior-session lessons)
+- [ ] All 13 sub-items in `ARCHITECT_TRACKER.md` show `done` with commit refs (currently only the 3 A-batch items are done)
+- [ ] End-to-end smoke: synthetic sprint → meta-agent proposal → reviewer concern → observer health report
+- [ ] Operator merges `architect-prereqs` to `sprint-2-orchestrator` (or to `main`, operator's call)
 
-- **DO NOT** commit to the target's `agent_branch` while an agent worktree is active forked off it. (Caused the Sprint 3 abort.)
-- **DO NOT** restart uvicorn while an orchestrator run is active. (Loses in-memory state. Once A7 lands, this becomes recoverable.)
-- **DO NOT** hand-edit `.agile-v/qa/*.md` or `_brownfield/<BL>/*` files. These belong to the agents.
-- **DO NOT** add `partial_resume` heuristics that rely on a single file check — always cross-reference git log (B12 codifies this).
-- **DO NOT** use `proc.terminate()` alone on the claude subprocess. Use the pgroup-kill pattern.
-- **DO NOT** ask the user yes/no questions about plan items that are already in `IMPLEMENTATION_PLAN.md`. The spec is settled. If a real surprise comes up, document it in `IMPLEMENTATION_TRACKER.md`'s issues log and surface it.
-- **DO NOT** skip the pre-flight gate at the start of each batch. It's the cheapest insurance against batch-N regressions.
-
-## 11. Done criteria for the whole engagement
-
-You are done when:
-
-- All 18 in-scope items in `IMPLEMENTATION_TRACKER.md` show `done` with commit refs
-- Batch 8 quarantine branch is merged back to `sprint-2-orchestrator`
-- A full Sprint 4 run on a fresh feature completes WITHOUT any previously-observed anomaly firing as a bug:
-  - 0 orphan claude PIDs after stop
-  - 0 gitignore-pollution merge collisions
-  - 0 silent QA-doctrine give-ups marked "merged"
-  - 0 non-FF aborts from operator commits
-  - 0 Milvus-crash mid-sprint aborts
-  - 0 `aborted` events with empty reason
-  - Logs in `webapp/backend/logs/`, not `/tmp/`
-
-At that point, sprint 4's first commit is the next handoff point.
-
-## 12. Operator's authority
-
-The user (Eugene) has approved:
-- Decision (a) of the fix matrix
-- The 8-batch sequencing
-- Probe-revised implementations (process-group kill, worktree rebase, single-worker lock with documented assumption)
-- The two new governance docs (`IMPLEMENTATION_PLAN.md`, `IMPLEMENTATION_TRACKER.md`)
-
-The user **has not** approved:
-- Starting Batch 1 — wait for explicit "go Batch 1"
-- Any change not in the plan
-- Anything in the deferred list (B6, B8 cache reuse, B10, B11, B13)
+The broader **mission** (operator-time-per-feature < 1 hour) is NOT
+delivered by this branch alone. This branch closes the self-hardening
+loop so future sprints find shortcomings without manual review.
 
 ## 13. First message you should send back
 
 After reading every document in §2, respond with:
-1. A 5-bullet recap of what you understand to be the current state
-2. The pre-flight gate results in a table (run the checks first)
-3. A confirmation that you understand the 8 batches and what each contains
-4. A request for the user's explicit "go Batch 1" to start
 
-Do NOT write any code, commit anything, or restart any service in your first response. Read, understand, verify state, confirm.
+1. A 5-bullet recap of the current state.
+2. Confirmation that the architect directive is understood.
+3. The 7 invariants listed by name (one-line each).
+4. `ARCHITECT_TRACKER.md` Batch-A through Batch-D status in a table.
+5. Sprint 4 status (alive/done; if alive, current BL).
+6. A request for the operator's explicit direction (per §10 Turn 3).
+
+Do NOT write code, commit anything, restart uvicorn, or touch the target
+repo in your first response. Read, understand, verify state, surface
+findings, request direction.
 
 ---PROMPT END---
 
-*Use this prompt as the first message in the new Claude session. The new Claude will know exactly what to do.*
+*Authored 2026-05-23 close-of-session. Supersedes the earlier
+CONTINUATION_PROMPT (which handed off the Sprint-2 hardening engagement —
+now done). Update again at the end of the Batch-B session.*
