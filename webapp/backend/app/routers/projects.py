@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from app.services import backlog as backlog_svc
 from app.services import orchestrator as orchestrator_svc
+from app.services import prompts_brownfield as prompts_brownfield_svc
 from app.services import run_state as run_state_svc
 from app.services.claude_agent import stream_agent_task
 from app.services.indexing import run_claude_context_index, run_graphify_update
@@ -926,6 +927,56 @@ def _brief_hash(brief: str, project_name: str, repo: str) -> str:
     return h.hexdigest()
 
 
+def _slugify(name: str, *, max_len: int = 40) -> str:
+    """Filesystem-safe slug for a project name. Lowercase, alphanumeric+hyphen."""
+    import re as _re
+    s = _re.sub(r"[^a-zA-Z0-9]+", "-", name.strip().lower()).strip("-")
+    return s[:max_len] or "untitled"
+
+
+def _persist_brief(
+    *,
+    brief: str,
+    run_id: str,
+    project_name: str,
+    repo: str,
+    brief_hash: str,
+    started_at: str,
+) -> Path:
+    """A17 / I-3 + I-4: write the verbatim brief to ``sprint_briefs/<run_id>-<slug>.md``
+    at run start so the operator's intent has a durable, version-controllable
+    record co-located with the doctrine and ledger. Self-describing YAML
+    frontmatter carries the run identity. Server never commits — that is the
+    operator's call (per R13-class architect-overreach prohibition).
+
+    Idempotent: if a file already exists at the target path (e.g. retry of the
+    same /run-brief), the existing file is left untouched and its path returned.
+    """
+    agentic_root = prompts_brownfield_svc.AGENTIC_ROOT
+    briefs_dir = agentic_root / "sprint_briefs"
+    briefs_dir.mkdir(parents=True, exist_ok=True)
+    slug = _slugify(project_name)
+    path = briefs_dir / f"{run_id}-{slug}.md"
+    if path.exists():
+        return path
+    header = (
+        f"---\n"
+        f"run_id: {run_id}\n"
+        f"project_name: {project_name}\n"
+        f"repo: {repo}\n"
+        f"started_at: {started_at}\n"
+        f"brief_hash: {brief_hash}\n"
+        f"---\n\n"
+    )
+    try:
+        path.write_text(header + brief, encoding="utf-8")
+    except OSError:
+        # Best-effort: don't block the sprint on persistence failure.
+        # The PO's trace still carries the brief verbatim.
+        pass
+    return path
+
+
 class RunBriefRequest(BaseModel):
     brief: str = Field(..., min_length=20)
     project_name: str | None = None
@@ -1029,11 +1080,34 @@ async def run_brief(repo: str, req: RunBriefRequest):
         "resumed_from_orphan": bool(orphan is not None and req.skip_po),
     }
 
+    # A17: persist the brief verbatim under sprint_briefs/<run_id>-<slug>.md
+    # before the orchestrator generator runs. The brief is the operator's
+    # primary intent record and must be reviewable apart from the PO trace.
+    _brief_path = _persist_brief(
+        brief=req.brief,
+        run_id=run_id,
+        project_name=project_name,
+        repo=repo,
+        brief_hash=brief_hash,
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+
     def _rk_builder(wt: Worktree, role: str, bl_id: str | None, trace: TraceWriter | None) -> dict:
         # Reuses the same preflight + path conventions as the per-role endpoints.
         return _retrieval_kwargs(wt, role=role, bl_id=bl_id, trace=trace)
 
     async def gen():
+        # A17: surface the persisted-brief path before any orchestrator events.
+        # UI/observer/doctrine-meta can correlate this run's outputs against
+        # the operator's original intent without grepping trace files.
+        yield _sse({
+            "type": "_meta",
+            "phase": "orchestrator.brief_persisted",
+            "run_id": run_id,
+            "path": str(_brief_path),
+            "exists": _brief_path.exists(),
+            "bytes": _brief_path.stat().st_size if _brief_path.exists() else 0,
+        })
         try:
             async for event in orchestrator_svc.run_brief(
                 repo_dir=repo_dir,

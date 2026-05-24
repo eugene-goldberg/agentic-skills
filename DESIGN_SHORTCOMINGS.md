@@ -318,6 +318,41 @@ Plus tighten `_doctrine_meta_flow` to set `allowed_tools="Bash,Read,Write,Edit"`
 
 ---
 
+### A17 — No durable record of the sprint brief (operator intent)
+
+**Class:** `observability-gap` · **Invariant:** I-3 (durability of artifacts intended to persist) + I-4 (single source of identity for a run). **Surfaced by:** operator question 2026-05-24 mid-RBAC-sprint — "which REQUIREMENTS.md file are you working with when implementing a new feature?"
+
+**Evidence:** The two real-sprint briefs I authored in this session (`/tmp/api-keys-brief.md`, `/tmp/rbac-brief.md`) live only on `/tmp/`. They were POSTed verbatim into the `brief` field of `/api/projects/<repo>/run-brief` and are now embedded inside each PO trace's `stream.jsonl` and `meta.json.prompt` field — but no canonical, version-controlled record exists at the agentic-skills repo root. Consequences:
+1. **No version history of what was asked for** beyond grepping trace archives.
+2. **No reviewable artifact before the sprint runs.** A bad brief is invisible until the PO has interpreted it.
+3. **Cross-sprint intent is invisible.** Two briefs that together imply a third gap don't surface that gap.
+4. **The PO's `BACKLOG.md` and `SPRINT_PLAN_CN.md` are the *interpretation*, not the *original*.** Drift between intent and interpretation is unreviewable.
+
+The current `briefs/` top-level dir holds **old-harness role-work-packets** (`engineering-work-packets/`, `qa-work-packets/`), not sprint briefs — overloading the name would conflate two unrelated artifacts.
+
+**Cause:** The orchestrator accepts the brief as an inline string (`RunBriefRequest.brief: str`) and never persists it. The PO trace is the only durable record, and it's inside `webapp/backend/traces/`, not in the agentic-skills source tree where governance lives.
+
+**Fix:** On every `/run-brief` invocation:
+1. Server writes the brief verbatim to `sprint_briefs/<run_id>-<slug>.md` at run start, before the orchestrator generator begins.
+2. The file carries a YAML frontmatter header with `run_id`, `project_name`, `repo`, `started_at`, `brief_hash` so each brief is self-describing.
+3. The orchestrator emits a new `orchestrator.brief_persisted` event carrying the path; UI + observer can surface it.
+4. The brief file is **tracked** (not gitignored). Operator commits it at the end of the sprint (or pre-emptively) so the requirements live in the same source tree as the doctrine and the ledger.
+5. The server does NOT auto-commit (R13-class architect overreach — agents/server don't run git mutations on the agentic-skills repo).
+
+**Risk:**
+1. **Brief size**: massive briefs (50+ KB) clutter the repo. Mitigation: leave it; large briefs are signal that scope is too big, not noise.
+2. **Naming collisions**: `<run_id>` is unique-by-construction (timestamp + 6-char hex), so collisions impossible. Mitigation: built-in.
+3. **Drift between persisted brief and PO interpretation**: by design — that's exactly the diff the operator would want to review. The persisted brief is the contract; the BACKLOG.md is the agent's reading of it.
+4. **Operator forgets to commit**: same risk as today's doctrine proposals. Mitigation: framework-reviewer (Batch C, future) can flag uncommitted briefs from completed runs.
+
+**Mitigations:** all four above are first-class addressed.
+
+**Test:** kick off a sprint with `curl -d '{"brief": "<text>", ...}'` and verify `sprint_briefs/<run_id>-<slug>.md` exists with correct frontmatter + content. SSE includes `orchestrator.brief_persisted` event before `index_initial.start`.
+
+**Effort:** ~30 LOC (router endpoint + slug helper) + `sprint_briefs/README.md` + `.gitignore` carve-out so accidental `*.md` rule additions don't sweep this directory.
+
+---
+
 ### A16 — R5b first-attempt pass rate at 38%; bake citation template into SKILLS.md
 
 **Class:** `enforcement-gap` (rule fires; prompt didn't teach the rule) · **Invariant:** I-2 (doctrine is a contract). **Surfaced by:** doctrine-meta-agent against api-keys sprint (proposal `sprint-run-20260524T014937Z-r5b-prompt-doctrine-drift.md`, 10 evidence citations). **Operator-approved 2026-05-24.**
