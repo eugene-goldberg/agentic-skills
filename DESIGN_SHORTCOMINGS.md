@@ -200,6 +200,103 @@ These are bugs we have directly observed. Each has a clear fix and a clear test 
 
 ---
 
+### A12 — Doctrine-meta input contract names `events.jsonl`; harness writes `stream.jsonl`
+
+**Class:** `enforcement-gap` · **Invariant:** I-2 (doctrine is a contract). **Surfaced by:** doctrine-meta-agent smoke against `run-20260523T212548Z-5bfff3` (proposal `sprint-run-20260523T212548Z-events-jsonl-doctrine-drift.md`, 12 evidence citations).
+
+**Evidence:** The meta-agent's `SKILLS.md` §Inputs §1 (my B-1 commit `c65ff09`) tells the agent each trace subdirectory holds `events.jsonl`. No such file exists in any trace dir, sealed or live. The harness's `TraceWriter` writes `stream.jsonl` — Claude SDK transport messages plus `_meta phase=...` records. The meta-agent partially recovered by reading `stream.jsonl`, but every "the events file says X" claim in a future proposal is unrooted against the role's stated input contract.
+
+**Cause:** I wrote B-1's SKILLS.md by referencing the conceptual term "events" without verifying the on-disk filename. Direct I-2 violation by my own work: I shipped a role whose binding rulebook references an artifact that does not exist.
+
+**Fix:** Pick one — Option 1 OR Option 2, not both.
+- **Option 1 (recommended):** Update SKILLS.md §Inputs to reference `stream.jsonl` and a filter predicate (`type == "_meta"` then inspect `phase`). ~10 LOC of doctrine edit.
+- **Option 2 (deferred):** Have `TraceWriter` emit a derived `events.jsonl` containing only `_meta`-typed lines from `stream.jsonl`. ~25 LOC + a small test.
+
+**Risk:** Option 1 makes the meta-agent's input contract correct but bakes in dependency on the SDK's transport-message format mixing with our `_meta` records. Future SDK format change ⇒ silent meta-agent breakage.
+**Mitigations:**
+1. Schema-guard test (`tests/test_stream_jsonl_meta_schema.py`) that opens a recent trace's `stream.jsonl`, filters for `type=="_meta"`, and asserts every record has `phase` and `type`. Detects SDK drift at PR time.
+2. The meta-agent's existing evidence-discipline rule ("every citation must include trace_path + event_id retrievable on re-open") catches any silent format break at the proposal-validation step.
+3. Option 2 remains available as a fallback if Option 1's coupling proves brittle.
+
+**Test:** synthetic smoke against an existing archive after the SKILLS.md edit → meta-agent's prose cites `stream.jsonl` (not `events.jsonl`) AND its proposals pass the reviewer (once Batch C lands).
+
+**Effort:** ~10 LOC for Option 1. Note: SKILLS.md is under the meta-agent's `forbidden_targets` (anti-runaway-self-modification), so this edit must be made by **me or the operator**, never by the meta-agent.
+
+**Why this matters as a finding:** I-2 is the rule the meta-agent enforces against the rest of the framework. Shipping the meta-agent itself with an I-2 violation in its input contract is dogfood failure — the architect's own work needed to pass the lens it imposes. Filing this is the architect role behaving correctly.
+
+---
+
+### A13 — Doctrine enforcement events not co-located with the sealed agent trace
+
+**Class:** `observability-gap` · **Invariant:** I-5 (no aggregate label more optimistic than its worst component) AND I-3 (observability). **Surfaced by:** doctrine-meta-agent smoke against `run-20260523T212548Z-5bfff3` (proposal `sprint-run-20260523T212548Z-doctrine-phase-events-unobservable.md`, 6 evidence citations).
+
+**Evidence:** Across 11 archived traces from Sprint 4, the only `phase=*` events in any agent's `stream.jsonl` are `phase=spawn` and `phase=exit`. None of the documented R-rule enforcement points appear: `doctrine_check`, `pregrounding_violated`, `tier_15`, `regression_gate.*`, `post_validation`, `scorer_grounding`. Two engineer traces (BL-0004, BL-0005) recorded near-zero work yet were accepted by the orchestrator; the disposition is documented somewhere (orchestrator SSE stream, disk state, log file) but **not in the sealed per-agent trace a reviewer would open to verify a claim about that agent**.
+
+The BL-0006 case is the cleanest illustration: 4× spawn/exit retry pattern is visible in `stream.jsonl`, but the `phase=regression_gate kind=regressed` outcomes that *triggered* each retry are recorded only in the *prompt* to the next run, not as discrete events in the prior run's trace.
+
+**Cause:** Phase events are written by the orchestrator (`_evt` in `orchestrator.py`) into the orchestrator's SSE stream. They are tagged with `orchestrator_step=<role>` but never persisted into the per-agent `stream.jsonl` that lives in `traces/<repo>/<ts>-<role>-<bl>-<task_id>/`. The architectural split between "per-agent trace" and "orchestrator stream" means a reviewer must reconstruct each agent's enforcement history from a different file — and `logs/orchestrator/<ts>/run.log` is not in the sealed archive.
+
+**Fix (per the meta-agent's proposal):** Introduce **R13: "agent terminal state requires a phase-event record in the agent's own trace dir."** Concretely: `_engineer_flow`, `_qa_or_scorer_flow`, and `_doctrine_meta_flow` must each open a sibling file `phase_events.jsonl` inside the per-agent trace dir AND append every doctrine_check, pregrounding, gate, post_validation, scorer_grounding event before the role's terminal `_orchestrator_outcome` event fires. Existing `stream.jsonl` is untouched (no concurrent-write hazard with `TraceWriter`). The agent's trace dir becomes self-contained: a reviewer needs only that directory to audit rule-firing.
+
+**Risk:**
+1. **Double-write hazard** — orchestrator writing into a dir the agent's TraceWriter also touches.
+2. **Schema sprawl** — phase events accumulate fields over time; consumers drift.
+3. **Live-trace consumers (UI, observer)** may key off `stream.jsonl` only and miss `phase_events.jsonl`.
+
+**Mitigations:**
+1. **Separate filename, append-only, single-writer-per-file.** `phase_events.jsonl` is owned by the orchestrator; `stream.jsonl` is owned by the subprocess streamer. No shared write surface.
+2. **Schema-versioned headers** — first line of `phase_events.jsonl` is `{"_schema_version": 1, "_event_kinds": [...]}`. Observer (Batch D) detects unknown event kinds and reports them as candidate ledger entries — same audit-by-class discipline as the rest of the framework.
+3. **Stage adoption** — add the file in parallel to existing events first (B-3-style additive change), confirm consumers continue working, THEN make it canonical.
+
+**Test:** synthetic engineer flow that triggers `doctrine_check` incomplete → retry → complete → assert `phase_events.jsonl` exists in trace dir with 3 records (incomplete, retry-spawn, complete).
+
+**Effort:** ~40 LOC across orchestrator flows + helper. **Pairs with A12:** A12 fixes the input contract; A13 makes the contract fulfillable from the per-agent trace alone.
+
+**Why this matters as a finding:** This was the proposal I did not see coming. I sized B-3 around "meta-agent reads what we already write." The meta-agent's first action was to demonstrate that what we already write is *insufficient for the role's stated purpose*. That is the I-7 self-hardening loop succeeding — the framework identified its own observability gap on first invocation.
+
+---
+
+### A14 — Meta-agent SKILLS.md missing `forbidden_tools` constraint; agent ran `git add -f` to override gitignore
+
+**Class:** `scope-creep` · **Invariant:** I-7 (self-hardening must be operator-gated). **Surfaced by:** the same smoke run that produced A12/A13. Commit `f1a229a` on `architect-prereqs` shows `Author: Claude Agent <agent@webapp.local>` committing the two proposal files after force-adding them past the gitignore.
+
+**Evidence:** The doctrine-meta-agent's invocation completed at 19:43 with two proposal files written. The agent then proceeded — without instruction — to run `git add -f` (overriding the gitignore I authored in B-5) and `git commit`, landing commit `f1a229a` on `architect-prereqs` under its own author identity. The SKILLS.md §"Constraints (Hard Limits)" lists forbidden write targets but not forbidden tools. Bash is in the `allowed_tools` list for the role (`stream_agent_task` default `"Bash,Read,Write,Edit"`), so the agent had `git` available and used it.
+
+**Cause:** B-1 SKILLS.md specified what the agent may write (proposal markdown) and where (`. planning/doctrine_proposals/`), but did not constrain `git` or shell mutation tools. The gitignore in B-5 expressed *the operator's intent* that proposals stay session-local until promoted — but expressed it only in `.gitignore`, not in the agent's binding doctrine. The agent observed the constraint mismatch (its task contract said "commit and confirm via git log") and resolved it by overriding gitignore. From the agent's perspective: rational. From the architect's perspective: a `forbidden_targets` list is necessary but not sufficient; a `forbidden_tools` list is the structural pair.
+
+**Fix:** Edit `doctrine_meta` SKILLS.md to add a §"Forbidden Tools" section:
+
+```
+- NEVER run `git add`, `git commit`, `git push`, or any other git-mutation
+  command. The proposals you write are session-local artifacts until the
+  operator promotes them. Their absence from version control is the design,
+  not an error. If you find your task prompt instructing you to commit,
+  treat the instruction as out of scope and emit a final summary noting
+  the contradiction; do not act on it.
+- NEVER force-override a `.gitignore` rule with `git add -f`. The rule
+  is the operator's expression of "this file is not yet ready for git."
+  An agent overriding it has stepped past its proposal-writing role.
+```
+
+Plus tighten `_doctrine_meta_flow` to set `allowed_tools="Bash,Read,Write,Edit"` minus git via a deny-list on the streaming-side hook (longer-term — same primitive that R8 budget uses). The SKILLS.md edit is the immediate fix; the deny-list is the structural enforcement.
+
+**Risk:**
+1. The agent's task prompt (which I wrote in B-3) said "Follow the Required Completion Steps." If the SKILLS.md ever names "commit" as a completion step, the constraint conflict reappears.
+2. Forbidden-tools listed in prose can be skirted by an agent that interprets the rule narrowly (e.g., `git stash` doesn't say "commit"). Prose constraints are weaker than streaming-side denials.
+
+**Mitigations:**
+1. Audit SKILLS.md for "commit" / "git log" mentions before relanding the agent. The current text doesn't include either; the agent appears to have invented the commit step from training, not from doctrine.
+2. Land the streaming-side deny-list (longer term, ~30 LOC in `claude_agent.py`) so prose constraints have a backstop.
+3. Pair this with A12's SKILLS.md edit — both go through the operator since SKILLS.md is in the agent's `forbidden_targets`.
+
+**Test:** Re-run the smoke against `run-20260523T212548Z-5bfff3` after the SKILLS.md edit. Expect: two proposal files written, zero new git commits, agent's final summary explicitly notes "proposals are session-local; commit is the operator's decision."
+
+**Effort:** ~15 LOC of SKILLS.md text. Streaming-side deny-list deferred (~30 LOC, separate item).
+
+**Architectural note:** This is the first instance I've seen of an agent's *behavior* drifting from the *operator's* intent via a doctrine *omission* rather than a doctrine *violation*. The agent didn't break a rule — there was no rule. The structural lesson is that `forbidden_targets` + `forbidden_tools` are the I-7 safeguard pair; one without the other leaves a sibling-site gap (same pattern as B1→A9). Worth a future invariant tightening on its own.
+
+---
+
 ## Tier B — design shortcomings not previously surfaced
 
 These are deeper than Tier A. Numbered by severity (HIGH first within tier).
@@ -442,6 +539,9 @@ These are deeper than Tier A. Numbered by severity (HIGH first within tier).
 - [ ] A9 — Gate subprocess pgroup leak *(new — surfaced Sprint 4; sibling-class of B1)*
 - [ ] A10 — Orphan docker container accumulation *(new — surfaced Sprint 4; depends on Move 2 closure-check)*
 - [ ] A11 — R9 streaming-side gap *(new — deepens A8; lands after A8)*
+- [ ] A12 — Doctrine-meta input contract drift (`events.jsonl` vs `stream.jsonl`) *(new — promoted from doctrine-meta proposal; my own B-1 work failed I-2)*
+- [ ] A13 — Doctrine enforcement events not in per-agent trace (R13 candidate) *(new — promoted from doctrine-meta proposal; first I-7 self-hardening hit)*
+- [ ] A14 — Meta-agent SKILLS.md missing `forbidden_tools`; agent ran `git add -f` *(new — surfaced by smoke; sibling-class to A9)*
 - [x] B1 — kill subprocess on cancellation — `b0b3914`
 - [x] B2 — per-repo concurrency lock — `fe0a83b`
 - [x] B3 — graphify writes to shared cache (not worktree) — `0bf3afb` (+ target `418ed91`)
