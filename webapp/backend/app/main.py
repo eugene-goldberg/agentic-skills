@@ -4,6 +4,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 
 def _autoload_env() -> str | None:
@@ -64,3 +66,22 @@ def health() -> dict:
         "embedding_provider": os.environ.get("EMBEDDING_PROVIDER"),
         "milvus": os.environ.get("MILVUS_ADDRESS"),
     }
+
+
+# Serve the built React bundle at the FastAPI root so the UI is reachable
+# at http://127.0.0.1:8000/ without a second process. Falls back gracefully
+# when the dist/ has not been built yet — devs running `npm run dev` on
+# :5173 continue to work via the CORS middleware above.
+_FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if (_FRONTEND_DIST / "index.html").exists():
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
+
+    @app.get("/")
+    @app.get("/{path:path}")
+    def _serve_spa(path: str = "") -> FileResponse:
+        # SPA fallback: any non-/api/* path returns index.html so the
+        # client-side router (TanStack / hash params) takes over.
+        if path.startswith("api/") or path.startswith("assets/"):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404)
+        return FileResponse(str(_FRONTEND_DIST / "index.html"))
