@@ -39,7 +39,41 @@ Canonical statement: [`THESIS.md`](THESIS.md).
 
 ---
 
-## 2. Why this and not the other AI-coding tools
+## 2. The team
+
+The "AI multi-agent team" is not a metaphor — it's a literal cast of
+specialized agents, each driven by its own `SKILLS.md` doctrine
+document, each with a defined input contract, output contract, and
+quality gate. Every agent runs as an isolated `claude` subprocess in
+its own git worktree.
+
+| Role | What it does | Doctrine source | Output |
+|---|---|---|---|
+| **Product Owner (PO)** | Reads the operator's brief, performs codebase intelligence (graphify + claude-context retrieval), decomposes the feature into per-BL backlog items with REQ mappings, impacted components, risk levels, and acceptance criteria. Authors the sprint plan. | `skills/brownfield/.../po/SKILLS.md` | `_brownfield/features/<slug>/{BACKLOG.md, CODEBASE_CONTEXT.md, SPRINT_PLAN_C1.md, BL-XXXX/codebase_context.md}` |
+| **Engineer** | Implements ONE backlog item against the real codebase. Required to ground every change with ≥3 retrieval calls before any Write/Edit. Produces source code commit + pattern analysis artifact. | `skills/brownfield/.../engineer/SKILLS.md` | Source code commit + `BL-XXXX/eng_patterns.md` |
+| **QA** | Validates the engineer's commit against the acceptance criteria. Runs target tests, writes impact analysis, identifies regressions and missed cases. | `skills/brownfield/.../qa/SKILLS.md` | `BL-XXXX/qa_impact.md` + `.agile-v/qa/BL-XXXX.md` |
+| **Scorer** | Applies the Production-Grade Brownfield Scorecard (Pattern Fidelity, Regression Coverage, Characterization Tests, Invariant Preservation, Blast Radius + core role dimensions). Single brownfield-axis ≤2 forces Fail. | `rubrics/production_grade_scorecard_brownfield.md` | `.agile-v/scores/BL-XXXX.md` |
+| **Doctrine-Meta** | Runs ONCE at sprint completion. Reads every trace from the sprint, identifies failure patterns, proposes new R-rules or amendments. Output is operator-approval-gated; never auto-applies. This is the self-hardening loop. | `skills/brownfield/.../doctrine-meta/SKILLS.md` | `.planning/doctrine_proposals/<run_id>.md` |
+
+The five agents are coordinated by a **non-agent Orchestrator**
+(`webapp/backend/app/services/orchestrator.py`) — a deterministic
+Python state machine that owns the pipeline, spawns each agent in its
+worktree, enforces doctrine via `doctrine_validator`, runs the
+regression gate, handles retries (R10.1 doctrine retry × 2, R10.2
+gate retry × 2), performs fast-forward merge to the target's agent
+branch, and emits structured events. The orchestrator is intentionally
+NOT an agent — it's the substrate that makes the agent cast reliable.
+
+**What's still missing from the team:** Sprint Planner (product-level
+brief → multi-sprint roadmap), Triage (resolves `awaiting_review`
+outcomes), Retrospective (cross-sprint memory), Escalation Bridge
+(focused human questions via Slack/Linear), and a Framework-Reviewer
+adversarial role (ARCHITECT_PLAN Batch C). These are the ~50%
+remainder of the thesis.
+
+---
+
+## 3. Why this and not the other AI-coding tools
 
 | Tool / approach | What it does | What it doesn't |
 |---|---|---|
@@ -48,7 +82,7 @@ Canonical statement: [`THESIS.md`](THESIS.md).
 | Devin (Cognition) | Own VM, autonomous; uses repo's CI | Closed system, opaque enforcement |
 | SWE-agent (Princeton, OSS) | Benchmark-focused (SWE-bench) | Doesn't deal with real e2e suites |
 | Sweep AI / similar PR bots | Issue → PR, defers to repo CI | Single-agent, no role separation |
-| **agentic-skills** | Multi-role crew (PO/Engineer/QA/Scorer) with retrieval grounding, doctrine-enforced quality gates, regression-gated auto-merge, and a self-hardening loop | Slow per-BL gate cycle (see §8 throughput) |
+| **agentic-skills** | Multi-role crew (PO/Engineer/QA/Scorer) with retrieval grounding, doctrine-enforced quality gates, regression-gated auto-merge, and a self-hardening loop | Slow per-BL gate cycle (see §9 throughput) |
 
 agentic-skills sits at the most conservative end of the autonomy
 spectrum: full e2e regression gate per BL, hard doctrine validation, no
@@ -58,7 +92,7 @@ of the loop.
 
 ---
 
-## 3. Definition of done
+## 4. Definition of done
 
 The thesis ships when an operator can run:
 
@@ -82,7 +116,7 @@ Detailed acceptance criteria in [`THESIS.md` §3](THESIS.md#3-definition-of-auto
 
 ---
 
-## 4. What's true today (the ~50% slice)
+## 5. What's true today (the ~50% slice)
 
 Sprint 1 (Team Collaboration on `full-stack-fastapi-template`, 12 merged
 BLs + 1 no-op, mean score ~92/100) and subsequent api-keys + RBAC
@@ -110,7 +144,7 @@ Roughly **50% of the full thesis is operational.** Detail in
 
 ---
 
-## 5. Architecture in one page
+## 6. Architecture in one page
 
 ### 5.1 The pipeline (8 steps per BL)
 
@@ -210,7 +244,7 @@ Deeper webapp reference:
 
 ---
 
-## 6. Branches and lineage
+## 7. Branches and lineage
 
 ```
 main                       ← initial harness snapshot
@@ -226,7 +260,7 @@ where the current work lives. All branches are present on the remote.
 
 ---
 
-## 7. Sprint scoreboard (real production runs)
+## 8. Sprint scoreboard (real production runs)
 
 | Sprint | Target | Brief | Outcome |
 |---|---|---|---|
@@ -244,7 +278,7 @@ the doctrine-meta-agent's proposals landed.
 
 ---
 
-## 8. What's known broken
+## 9. What's known broken
 
 Every observed defect is classified in
 [`DESIGN_SHORTCOMINGS.md`](DESIGN_SHORTCOMINGS.md). Highlights as of
@@ -289,7 +323,7 @@ Detail in [`.claude/memory/arch_gate_throughput.md`](.claude/memory/arch_gate_th
 
 ---
 
-## 9. The architect's plan (what's being built next)
+## 10. The architect's plan (what's being built next)
 
 [`ARCHITECT_PLAN.md`](ARCHITECT_PLAN.md) defines four prerequisites for
 the project to operate at full-architect autonomy:
@@ -310,7 +344,7 @@ downstream value.
 
 ---
 
-## 10. How to read this project (reviewer's reading order)
+## 11. How to read this project (reviewer's reading order)
 
 If you're a reviewer with 30-60 min, read these in order:
 
@@ -354,7 +388,7 @@ For per-sprint detail of a real run, look at:
 
 ---
 
-## 11. Repository contents
+## 12. Repository contents
 
 ```
 agentic-skills/
@@ -389,7 +423,7 @@ agentic-skills/
 
 ---
 
-## 12. License
+## 13. License
 
 Project source code is unpublished; documentation in this repository is
 for review purposes only. Contact the operator (Eugene Goldberg) for
