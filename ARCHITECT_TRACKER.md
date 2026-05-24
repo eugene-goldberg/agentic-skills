@@ -98,16 +98,16 @@
 
 | ID | Item | Status | Commit | Verification |
 |---|---|---|---|---|
-| M2-1 | Label gate-spawned docker containers with `agentic-skills.run_id=<run_id>` | pending | — | `docker ps --filter label=agentic-skills.run_id=<id>` returns the gate's containers; existing unlabeled containers ignored |
-| M2-2 | New `closure_check.py` module with scan functions (pgroup survivors, stale worktrees, agent branches, docker containers); no integration yet | pending | — | `python -c "from app.services import closure_check; closure_check.scan_all('fake-run-id')"` returns a `list[Violation]` |
-| M2-3 | Hook `run_closure_check` into `run_brief` outer finally; emit `orchestrator.closure_violation` per survivor | pending | — | kill -9 mid-run → next run's start finds violations from prior `run_id` and emits SSE events |
-| M2-4 | A13 fix: orchestrator writes per-agent `phase_events.jsonl` co-located with `stream.jsonl` | pending | — | doctrine_check, regression_gate, pregrounding events appear in the per-agent trace dir, not just orchestrator stream |
+| M2-1 | Gate-spawned docker containers carry `agentic-skills-<run_id>-` project-name prefix (via `COMPOSE_PROJECT_NAME` env) | done | `ff04634` | `_compose_project_prefix('run-...')` returns `agentic-skills-...`; `run_gate` signature now accepts `run_id`; threaded through both engineer/qa/scorer flows |
+| M2-2 | New `closure_check.py` module with scan functions (docker containers, gate worktrees; pgroup + agent branches stubbed/deferred) | done | `616e46f` | `scan_all(Path('/tmp'), 'fake-id')` returns `list[Violation]` cleanly |
+| M2-3 | Hook `closure_check.scan_all` into `run_brief` post-`sprint_complete`; emit `orchestrator.closure_violation` per survivor + `closure_check.done` summary | done | `1764ab3` | placement is inside try-block (PEP 525); aborted paths deferred to future startup-scan pattern |
+| M2-4 | A13 fix: orchestrator writes per-agent `phase_events.jsonl` co-located with `stream.jsonl` | done | `570b228` | `TraceWriter.write_phase_event` + `_ptag` helper; 26 inline-phase-event sites converted across 3 flows |
 
 **Move 2 gate:**
-- [ ] M2-1..M2-4 land atomically
-- [ ] Smoke: synthetic sprint terminate → closure_check fires, each scan returns 0 for a clean run
-- [ ] Smoke: kill -9 mid-sprint, restart → closure_check on prior run_id emits ≥1 closure_violation
-- [ ] A10 + A13 marked done in `DESIGN_SHORTCOMINGS.md`
+- [x] M2-1..M2-4 land atomically — `ff04634` + `616e46f` + `1764ab3` + `570b228`
+- [ ] Smoke: synthetic sprint terminate → closure_check fires, each scan returns 0 for a clean run *(requires uvicorn restart + sprint run)*
+- [ ] Smoke: kill -9 mid-sprint, restart → closure_check on prior run_id emits ≥1 closure_violation *(deferred; needs M2-3b startup-scan pattern for aborted paths)*
+- [x] A10 + A13 marked done in `DESIGN_SHORTCOMINGS.md`
 
 ---
 

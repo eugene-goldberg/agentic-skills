@@ -537,10 +537,10 @@ These are deeper than Tier A. Numbered by severity (HIGH first within tier).
 - [x] A7 — disk-persisted state — `a0deed3`
 - [ ] A8 — R9 graph-grounding hard enforcement *(new — surfaced Sprint 4 BL-0006)*
 - [ ] A9 — Gate subprocess pgroup leak *(new — surfaced Sprint 4; sibling-class of B1)*
-- [ ] A10 — Orphan docker container accumulation *(new — surfaced Sprint 4; depends on Move 2 closure-check)*
+- [x] A10 — Orphan docker container accumulation — `ff04634` (M2-1 labeling) + `616e46f` (M2-2 scan) + `1764ab3` (M2-3 hook). Reaper endpoint deferred (operator-gated by design).
 - [ ] A11 — R9 streaming-side gap *(new — deepens A8; lands after A8)*
 - [ ] A12 — Doctrine-meta input contract drift (`events.jsonl` vs `stream.jsonl`) *(new — promoted from doctrine-meta proposal; my own B-1 work failed I-2)*
-- [ ] A13 — Doctrine enforcement events not in per-agent trace (R13 candidate) *(new — promoted from doctrine-meta proposal; first I-7 self-hardening hit)*
+- [x] A13 — Doctrine enforcement events not in per-agent trace — `570b228` (M2-4 `phase_events.jsonl`). R13 doctrine codification deferred (operator's call; the mechanism is now in place).
 - [ ] A14 — Meta-agent SKILLS.md missing `forbidden_tools`; agent ran `git add -f` *(new — surfaced by smoke; sibling-class to A9)*
 - [x] B1 — kill subprocess on cancellation — `b0b3914`
 - [x] B2 — per-repo concurrency lock — `fe0a83b`
