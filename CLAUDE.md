@@ -29,10 +29,19 @@ is genuinely outside scope or risky, the team flags it explicitly rather
 than producing slop), and **cumulative** (what's learned on one target
 carries forward).
 
-**Success metric:** operator-time-per-feature < 1 hour, including kickoff
-and final review combined. Sprint-1-scale feature today still takes ~10–15
-operator hours; ABL-0001 + Sprint 2 hardening got it to ~3h; the open
-backlog drives toward <1h.
+**What we are building** is the crew itself — a synthetic, autonomous AI
+agent team capable of delivering complex brownfield features end-to-end.
+Operator-time is a *symptom* of the crew working, not the thing being
+built. Framing strategic moves as "operator-cost reductions" inverts
+cause and effect: it produces process-tuning around the operator instead
+of capability-building inside the crew. Every architectural move should
+be framed as "what the crew gains." If the crew gains nothing, the move
+is wrong regardless of operator-time impact.
+
+Tracked symptom (for reference, not the goal): a Sprint-1-scale feature
+took ~10–15 operator hours before ABL-0001; ~3h after Sprint-2
+hardening. That number will keep falling as the crew becomes more
+capable. It is a thermometer, not the patient.
 
 **Non-goals** (explicit): replacing senior-engineer judgment on
 architecture-level decisions; novel domains with no retrieval analog;

@@ -19,4 +19,5 @@
 - [Arch I-6: failure taxonomy](arch_failure_taxonomy.md) — 10 classes; >3 instances triggers invariant review
 - [Arch I-7: self-hardening](arch_self_hardening.md) — doctrine-meta-agent proposes; operator approves; never auto-merges
 - [Claude's architect role](arch_claude_role.md) — operator directive 2026-05-23: Claude is the architect with delivery accountability; codified in CLAUDE.md
+- [Mission framing](arch_mission_framing.md) — operator correction 2026-05-23: mission is the autonomous synthetic crew itself, not operator-time metrics; metrics are symptoms
 - [Active work branch](arch_active_branch.md) — `architect-prereqs` off `sprint-2-orchestrator@710992b`; Batch A done; B/C/D pending
