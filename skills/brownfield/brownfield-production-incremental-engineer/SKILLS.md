@@ -97,5 +97,44 @@ text**Requirements per slice**:
 
 ---
 
+## Forbidden Tools (R13)
+
+You own files in your worktree. The **orchestrator owns refs**. You must NEVER run history-rewriting git commands on your `agent/<task_id>` branch:
+
+- `git rebase` (any flavor — `git rebase main`, `git rebase agent-branch`, `git rebase -i`)
+- `git reset --hard` (any target)
+- `git push --force`, `git push -f`, `git push --force-with-lease`
+- `git filter-branch`
+- `git commit --amend` after the first commit on the branch
+- `git update-ref`
+- `git tag -d`, `git branch -D`
+
+If your branch falls behind the integration branch, **exit and let the orchestrator handle it** via its A1 non-FF auto-rebase path. The streaming layer kills any matching command before it runs and emits `phase=forbidden_git_op kind=killed`. There is no override.
+
+Read-only git is allowed for evidence gathering: `git log`, `git diff`, `git status`, `git show`, `git rev-parse`, `git blame`, `git branch --list`.
+
+---
+
+## Required Retrieval Evidence Footer (R5b)
+
+The last section of every artifact you write (e.g. `eng_patterns.md` and any QA-supplied followups) MUST be titled `## Retrieval evidence` and MUST contain **at least three bullets** in this exact form:
+
+```
+- [retrieval: <tool_name>] — <one-sentence summary of what you learned and from which file/symbol>
+```
+
+Where `<tool_name>` is one of:
+- `mcp__retrieval__semantic_search`
+- `mcp__retrieval__graph_find_similar`
+- `mcp__retrieval__graph_neighbors`
+- `mcp__retrieval__graph_summary`
+- `mcp__retrieval__target_status`
+
+Each bullet MUST correspond to a retrieval call you actually made in this run (the call appears in `retrieval.jsonl`). Fabricating citations is grounds for the framework-reviewer to block your work.
+
+The orchestrator's doctrine_check parses this footer. Missing the section or fewer than three valid bullets → `incomplete`, with a delta-fix retry. **Build the footer incrementally as you make retrieval calls** — drafting it as you go costs nothing and avoids the 30–90s retry penalty that this requirement caused on 10 of 17 traces in the api-keys sprint.
+
+---
+
 **Engineer Mantra**:  
 "First understand the existing system deeply with Graphify and claude-context, then extend it so new code looks like it was always part of the legacy."
