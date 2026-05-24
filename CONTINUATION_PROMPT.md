@@ -27,6 +27,50 @@ crew gains," never "what the operator saves."
 
 **Operator:** Eugene Goldberg. **Repo:** `/Users/eugenegoldberg/dev/ai-projects/agentic-skills`.
 
+## 1a. WHAT IS HAPPENING IN THIS SESSION (read this carefully)
+
+The operator has authorized exactly this sequence at session-start:
+
+1. **The operator will open `http://localhost:5173/` in a browser**, fill the
+   "Feature name" input + brief textarea on the AppV2 UI, and click
+   "Run pipeline". This submits a brand-new feature request through the
+   web UI (NOT through curl, NOT via you). This will be the **first real
+   end-to-end exercise of the A18 per-feature isolation layout** —
+   neither prior sprint (api-keys, RBAC) used it.
+
+2. **Your job for the bulk of this session is to TAIL the backend
+   event log** for that sprint and report progress:
+   ```bash
+   python scripts/tail_feature.py full-stack-fastapi-template <feature-slug>
+   ```
+   The `<feature-slug>` will appear in the `orchestrator.brief_persisted`
+   event emitted by `_po_flow` shortly after sprint start; you can also
+   read it directly from `webapp/backend/.orchestrator-state/*.json`
+   (the disk state file's path won't carry the slug but the trace dirs
+   and the new `_brownfield/features/<slug>/` dir on the target will).
+
+3. **DO NOT** kick off the sprint yourself. **DO NOT** suggest curl
+   commands as a substitute. The operator is driving the submission
+   from the browser. You are the architect watching the team work.
+
+4. **Verifications to make during the run** (NOT in addition to a
+   pre-existing approved scope — this IS your scope):
+   - PO decomposes the brief into ≥1 BLs within ~10 min of start.
+   - Per-feature dir `<target>/_brownfield/features/<slug>/` exists
+     with `brief.md` + `events.jsonl` + (eventually) `BACKLOG.md`.
+   - R5b first-try pass rate stays at ≥80% (was 100% in RBAC).
+   - Zero R13 `forbidden_git_op` events.
+   - Closure_check runs at sprint_complete with violation_count=0
+     (or any violations get reported, not silently swallowed).
+   - Doctrine_meta proposes ≥0 reasonable proposals post-sprint.
+
+5. **Report milestones to the operator** as the sprint progresses. Use
+   the tailer's rendered output as the source of truth. Schedule
+   wakeups for long gaps; don't poll in tight loops.
+
+If any of the above fails or surprises you, surface it immediately
+with the structural lens (which invariant the failure violates).
+
 ## 2. Mandatory reading order
 
 | # | File | Why |
