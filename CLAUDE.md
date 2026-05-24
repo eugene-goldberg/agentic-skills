@@ -284,6 +284,7 @@ Endpoints:
 | R10.2 | up to 2 retries on gate fail | orchestrator | re-spawns with failure detail in prompt |
 | R11 | no-op short-circuit | engineer flow | if work already on agent_branch |
 | R12 | scorer grounding floor | streaming (same Tier 1.5) | |
+| R13 | no agent-initiated history-rewriting git commands | streaming (Tier 1.5-style kill on Bash tool_use) | rebase / reset --hard / push -f / filter-branch / commit --amend / update-ref / tag -d / branch -D blocked by `FORBIDDEN_GIT_RE`; orchestrator owns refs (A1 auto-rebase) |
 | Tier 1.5 | pre-modification kill | streaming | <3 grounded calls before Write/Edit → kill |
 
 Each rule has an enforcement-point assignment under

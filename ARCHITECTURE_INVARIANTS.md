@@ -53,6 +53,23 @@
 - **A9 candidate** (gate subprocess pgroup-kill) — same class, different resource.
 - **B3** (graphify cache pollution) — adjacent: a write that escaped its
   intended location. The fix made the write safe, not the cleanup.
+- **R13** (agent-initiated git history rewriting) — surfaced api-keys sprint;
+  scope-creep/silent-failure pair. Agents reach across the boundary and
+  mutate refs the orchestrator owns. R13 is the streaming-kill guard;
+  ARCHITECT_TRACKER + SKILLS.md updates carry the role-side discipline.
+
+### Tightened scope (post-R13)
+
+The agent–orchestrator resource boundary is now explicit: **agents own
+the *files* in their worktree, never the *refs*.** The orchestrator
+owns:
+- branch creation/deletion (`create_worktree`, `remove_worktree`)
+- merge / fast-forward into the integration branch (`fast_forward_target`)
+- non-FF recovery via auto-rebase in the orchestrator's own worktree (A1)
+- tag and branch lifecycle
+
+Any agent attempt to perform these operations on its own is a boundary
+violation enforced by R13 (streaming-kill) + SKILLS.md Forbidden Tools.
 
 ### Architectural mandate
 
@@ -104,6 +121,7 @@ Failures here become structured `closure_violation` events, not silent leaks.
 | R10.2 (gate retry with focused prompt) | code | `orchestrator` retry loop with fix prompt | no | ✓ |
 | R11 (no_op short-circuit) | code | `_engineer_flow` outcome | no | ✓ |
 | R12 (scorer grounding floor) | SKILLS.md | `streaming` (same Tier 1.5) | no | ⚠ |
+| R13 (no agent-initiated history-rewriting git) | SKILLS.md (Forbidden Tools) + code | `streaming` (`forbidden_git_op`) | regex unit tests | ✓ |
 | Tier 1.5 (pre-modification kill) | code | `streaming` (`pregrounding_violated`) | no | ✓ |
 
 ### Architectural mandate
@@ -323,6 +341,11 @@ never auto-merge.
 | B15 (trace archive) | I-1 (lifecycle), I-3 (closure) | observability-gap |
 | B17 (UI Stop) | I-1 (closes via B1) | resource-leak |
 | B18 (logs out of /tmp/) | I-3 (durability) | data-loss |
+| A12 (events.jsonl vs stream.jsonl drift) | I-2 | enforcement-gap |
+| A13 (phase events not in per-agent trace) | I-3 + I-5 | observability-gap |
+| A14 (meta-agent forbidden_tools gap) | I-7 | scope-creep |
+| R13 (agent-initiated history rewriting) | I-1 (refs are orchestrator-owned) | scope-creep + silent-failure |
+| R5b prompt drift (first-attempt fails) | I-2 (rule fires; prompt didn't teach it) | enforcement-gap |
 
 ---
 
