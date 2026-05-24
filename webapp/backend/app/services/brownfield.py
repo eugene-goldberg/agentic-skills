@@ -61,6 +61,28 @@ def classify_target(repo_root: Path, max_files: int = 5000) -> dict:
     return {"kind": "brownfield" if n > 0 else "greenfield", "source_file_count": n, "exists": True}
 
 
+def feature_artifact_dir(repo_root: Path, feature_slug: str | None) -> str:
+    """A18: per-feature isolation. Each /run-brief produces artifacts inside
+    its own ``_brownfield/features/<feature_slug>/`` subtree on the target,
+    so multiple features don't share BL numbering, BACKLOG.md, or codebase
+    context. Operator-flagged 2026-05-24: previous per-sprint layout
+    (BL-0001..BL-0006 from api-keys mashed with BL-0007..BL-0012 from RBAC)
+    blurred feature boundaries.
+
+    Returns the relative artifact dir path (rooted at repo_root) that ALL
+    role flows + doctrine validators + prompt builders should use:
+
+        feature_slug="api-keys-feature" → "_brownfield/features/api-keys-feature"
+
+    Falls back to the legacy ``pick_artifact_dir`` behavior when
+    ``feature_slug`` is None (preserves backward compatibility with any
+    /run-brief invocations that predate A18).
+    """
+    if feature_slug:
+        return f"_brownfield/features/{feature_slug}"
+    return pick_artifact_dir(repo_root)
+
+
 def pick_artifact_dir(repo_root: Path) -> str:
     """Return the directory name the agents should write artifacts into.
 

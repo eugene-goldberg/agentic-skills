@@ -33,11 +33,22 @@ class BacklogItem:
     meta: dict[str, str]
 
 
-def find_backlog(repo_path: Path) -> Path | None:
-    candidate = repo_path / ".agile-v" / "BACKLOG.md"
-    if candidate.is_file():
-        return candidate
-    # Fallback: search shallow.
+def find_backlog(repo_path: Path, feature_slug: str | None = None) -> Path | None:
+    """Locate the BACKLOG.md for this sprint.
+
+    Resolution order:
+    1. If feature_slug is given: ``_brownfield/features/<slug>/BACKLOG.md``
+       (A18 per-feature isolation — canonical location going forward).
+    2. Legacy: ``.agile-v/BACKLOG.md`` (pre-A18 sprints used this).
+    3. Shallow filesystem walk for any BACKLOG.md (last resort).
+    """
+    if feature_slug:
+        feat = repo_path / "_brownfield" / "features" / feature_slug / "BACKLOG.md"
+        if feat.is_file():
+            return feat
+    legacy = repo_path / ".agile-v" / "BACKLOG.md"
+    if legacy.is_file():
+        return legacy
     for p in repo_path.glob("**/BACKLOG.md"):
         if ".venv" in p.parts or "node_modules" in p.parts:
             continue

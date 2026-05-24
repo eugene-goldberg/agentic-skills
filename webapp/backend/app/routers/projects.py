@@ -953,6 +953,13 @@ class RunBriefRequest(BaseModel):
     # False for short test runs where the post-sprint analysis adds latency
     # without value.
     run_doctrine_meta: bool = True
+    # A18: per-feature isolation. Operator-supplied feature name; server
+    # slugifies it and creates <target>/_brownfield/features/<slug>/ which
+    # holds the brief, BACKLOG.md, CODEBASE_CONTEXT.md, SPRINT_PLAN.md, the
+    # per-BL artifacts, and the tailable events.jsonl. Required for new
+    # sprints; legacy /run-brief invocations that omit this field fall back
+    # to the pre-A18 path layout.
+    feature_name: str | None = Field(None, min_length=1, max_length=120)
 
 
 @router.post("/{repo}/run-brief")
@@ -1036,20 +1043,48 @@ async def run_brief(repo: str, req: RunBriefRequest):
         "resumed_from_orphan": bool(orphan is not None and req.skip_po),
     }
 
-    # A17 brief persistence happens inside orchestrator._po_flow now, writing
-    # to the PO worktree's brownfield artifact dir so the brief flows onto the
-    # target's agent branch alongside BACKLOG.md and per-BL contexts. The
-    # router no longer touches the brief on disk — the target is the right
-    # location, not agentic-skills.
+    # A18: derive feature_slug from feature_name; create the per-feature
+    # artifact dir on the target so the events.jsonl appender can write to
+    # it from the very first event. Falls back to None (legacy layout) when
+    # the caller omitted feature_name.
+    feature_slug: str | None = None
+    feature_dir_abs: Path | None = None
+    if req.feature_name:
+        from app.services.orchestrator import _slugify as _orch_slugify
+        feature_slug = _orch_slugify(req.feature_name)
+        feature_dir_abs = repo_dir / "_brownfield" / "features" / feature_slug
+        feature_dir_abs.mkdir(parents=True, exist_ok=True)
 
     def _rk_builder(wt: Worktree, role: str, bl_id: str | None, trace: TraceWriter | None) -> dict:
         # Reuses the same preflight + path conventions as the per-role endpoints.
         return _retrieval_kwargs(wt, role=role, bl_id=bl_id, trace=trace)
 
     async def gen():
-        # A17: the per-role brief_persisted SSE event is now emitted from
+        # A18: tailable per-feature event log. Open in append mode so re-runs
+        # of the same feature accumulate history. The framework / harness can
+        # `tail -F` this file to follow sprint progress regardless of whether
+        # the run was kicked off via webapp UI or curl.
+        events_fh = None
+        if feature_dir_abs is not None:
+            try:
+                events_fh = open(feature_dir_abs / "events.jsonl", "a", buffering=1, encoding="utf-8")
+            except OSError:
+                events_fh = None
+
+        def _persist_event(evt: dict) -> None:
+            if events_fh is None:
+                return
+            try:
+                rec = dict(evt)
+                rec.setdefault("_persisted_at", datetime.now(timezone.utc).isoformat())
+                rec.setdefault("run_id", run_id)
+                events_fh.write(json.dumps(rec, default=str) + "\n")
+            except (ValueError, TypeError, OSError):
+                pass
+
+        # A17/A18: the per-role brief_persisted SSE event is emitted from
         # inside _po_flow once the worktree exists and the brief has been
-        # written under the target's brownfield artifact dir.
+        # written under <target>/_brownfield/features/<slug>/brief.md.
         try:
             async for event in orchestrator_svc.run_brief(
                 repo_dir=repo_dir,
@@ -1068,12 +1103,14 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 brief_hash=brief_hash,
                 start_bl=req.start_bl,
                 run_doctrine_meta=req.run_doctrine_meta,
+                feature_slug=feature_slug,
             ):
                 # Track current_bl from bl.start so 409 responses can name it.
                 if event.get("phase") == "orchestrator.bl.start":
                     meta = _RUN_META.get(repo)
                     if meta is not None:
                         meta["current_bl"] = event.get("bl_id")
+                _persist_event(event)
                 yield _sse(event)
         except RetrievalUnavailable as e:
             yield _sse({"type": "_meta", "phase": "orchestrator.aborted",
@@ -1087,6 +1124,11 @@ async def run_brief(repo: str, req: RunBriefRequest):
             _RUN_META.pop(repo, None)
             if lock.locked():
                 lock.release()
+            if events_fh is not None:
+                try:
+                    events_fh.close()
+                except OSError:
+                    pass
 
     return StreamingResponse(
         gen(),

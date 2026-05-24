@@ -35,7 +35,7 @@ from app.services import regression_gate as regression_gate_svc
 from app.services import repo_config as repo_config_svc
 from app.services import run_state as run_state_svc
 from app.services import closure_check as closure_check_svc
-from app.services.brownfield import classify_target
+from app.services.brownfield import classify_target, feature_artifact_dir
 from app.services.claude_agent import stream_agent_task
 from app.services.git_worktree import (
     Worktree,
@@ -274,10 +274,11 @@ async def _po_flow(
     *,
     run_id: str | None = None,
     brief_hash: str | None = None,
+    feature_slug: str | None = None,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
-    prompt = prompts_svc.build_po(family, brief, project_name, repo_dir)
+    prompt = prompts_svc.build_po(family, brief, project_name, repo_dir, feature_slug=feature_slug)
     wt: Worktree | None = None
     trace: TraceWriter | None = None
     try:
@@ -286,15 +287,14 @@ async def _po_flow(
         yield _ptag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
                     "branch": wt.branch, "role": "po", "trace_dir": str(trace.dir)}, "po", trace=trace)
 
-        # A17: persist the operator's verbatim brief into the worktree's
-        # brownfield artifact dir BEFORE the PO subprocess spawns. The PO's
-        # existing copy-back (wt/<art> → repo_dir/<art>) and git-add carry
-        # it onto the target's agent branch naturally. Located in the target
-        # repo (NOT in agentic-skills) because the brief describes the
-        # TARGET's feature, alongside BACKLOG.md and per-BL artifacts.
+        # A17 + A18: persist the operator's verbatim brief into the worktree's
+        # per-feature artifact dir BEFORE the PO subprocess spawns. The PO's
+        # copy-back (wt/_brownfield → repo_dir/_brownfield, dirs_exist_ok=True)
+        # + git-add carry it onto the target's agent branch naturally.
+        # Located inside _brownfield/features/<feature_slug>/ so each feature
+        # has its own self-contained artifact tree.
         if run_id:
-            from app.services.brownfield import pick_artifact_dir
-            _art_for_brief = pick_artifact_dir(repo_dir)
+            _art_for_brief = feature_artifact_dir(repo_dir, feature_slug)
             _brief_path = _persist_brief_in_worktree(
                 wt_path=wt.path,
                 artifact_dir=_art_for_brief,
@@ -309,13 +309,14 @@ async def _po_flow(
                 yield _ptag({"type": "_meta", "phase": "brief_persisted",
                             "path": str(_brief_path.relative_to(wt.path)),
                             "bytes": _brief_path.stat().st_size,
-                            "run_id": run_id}, "po", trace=trace)
+                            "run_id": run_id,
+                            "feature_slug": feature_slug}, "po", trace=trace)
 
         rk = retrieval_kwargs_builder(wt, "po", None, trace)
         async for event in stream_agent_task(prompt, wt.path, timeout_seconds=timeout, trace=trace, **rk):
             yield _tag(event, "po")
         # doctrine
-        validation = doctrine_svc.validate_po(wt.path)
+        validation = doctrine_svc.validate_po(wt.path, feature_slug=feature_slug)
         attempt = 0
         while not validation["ok"] and attempt < 2:
             attempt += 1
@@ -325,28 +326,38 @@ async def _po_flow(
             async for event in stream_agent_task(fix, wt.path, timeout_seconds=max(300, timeout // 2),
                                                   trace=trace, **rk):
                 yield _tag(event, "po")
-            validation = doctrine_svc.validate_po(wt.path)
+            validation = doctrine_svc.validate_po(wt.path, feature_slug=feature_slug)
         yield _ptag({"type": "_meta", "phase": "doctrine_check",
                     "kind": "complete" if validation["ok"] else "give_up",
                     "attempts": attempt, "summary": validation["summary"]}, "po", trace=trace)
-        # import artifacts back to repo if doctrine passed
+        # A18: import artifacts back to repo if doctrine passed.
+        # Copy-back uses dirs_exist_ok=True so the events.jsonl and brief.md
+        # that already exist in <target>/_brownfield/features/<slug>/ (written
+        # by the router and by _persist_brief_in_worktree) are preserved.
         if validation["ok"]:
-            from shutil import copy2, copytree
-            import shutil, subprocess
-            src_bl = wt.path / ".agile-v" / "BACKLOG.md"
-            if src_bl.exists():
-                dst_bl = repo_dir / ".agile-v" / "BACKLOG.md"
-                dst_bl.parent.mkdir(parents=True, exist_ok=True)
-                copy2(src_bl, dst_bl)
-            from app.services.brownfield import pick_artifact_dir
-            art = pick_artifact_dir(wt.path)
-            src_bf = wt.path / art
+            from shutil import copytree
+            import subprocess
+            # Pre-A18 sprints used .agile-v/BACKLOG.md; keep it as a fallback
+            # copy when no feature_slug is set.
+            if not feature_slug:
+                from shutil import copy2
+                src_bl = wt.path / ".agile-v" / "BACKLOG.md"
+                if src_bl.exists():
+                    dst_bl = repo_dir / ".agile-v" / "BACKLOG.md"
+                    dst_bl.parent.mkdir(parents=True, exist_ok=True)
+                    copy2(src_bl, dst_bl)
+            # Always copy the whole _brownfield/ subtree (carries A18
+            # features/<slug>/{brief.md, BACKLOG.md, CODEBASE_CONTEXT.md, …}
+            # plus any pre-A18 legacy artifacts).
+            src_bf = wt.path / "_brownfield"
             if src_bf.exists():
-                dst_bf = repo_dir / art
-                if dst_bf.exists():
-                    shutil.rmtree(dst_bf)
-                copytree(src_bf, dst_bf)
-            subprocess.run(["git", "add", ".agile-v/", art + "/"], cwd=repo_dir, check=False)
+                dst_bf = repo_dir / "_brownfield"
+                dst_bf.parent.mkdir(parents=True, exist_ok=True)
+                copytree(src_bf, dst_bf, dirs_exist_ok=True)
+            add_paths = ["_brownfield/"]
+            if not feature_slug:
+                add_paths.insert(0, ".agile-v/")
+            subprocess.run(["git", "add", *add_paths], cwd=repo_dir, check=False)
             subprocess.run(["git", "commit", "-m", f"po: import backlog from {wt.branch}",
                            "--author", "Claude PO Agent <po@webapp.local>"],
                           cwd=repo_dir, check=False)
@@ -369,12 +380,13 @@ async def _engineer_flow(
     retrieval_kwargs_builder,
     *,
     run_id: str | None = None,
+    feature_slug: str | None = None,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
-    bf = backlog_svc.find_backlog(repo_dir)
+    bf = backlog_svc.find_backlog(repo_dir, feature_slug=feature_slug)
     section = backlog_svc.extract_section(bf.read_text(encoding="utf-8"), bl_id)
-    prompt = prompts_svc.build_engineer(family, bl_id, section, repo_dir)
+    prompt = prompts_svc.build_engineer(family, bl_id, section, repo_dir, feature_slug=feature_slug)
 
     wt: Worktree | None = None
     trace: TraceWriter | None = None
@@ -392,7 +404,7 @@ async def _engineer_flow(
             yield _tag(event, "engineer", bl_id)
 
         validation = doctrine_svc.validate_engineer(wt.path, bl_id, base_ref=cfg.agent_branch,
-                                                    retrieval_log=trace.retrieval_path)
+                                                    retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
         if validation.get("no_op"):
             yield _ptag({"type": "_meta", "phase": "no_op", "bl_id": bl_id,
                         "summary": validation["summary"]}, "engineer", bl_id, trace=trace)
@@ -411,7 +423,7 @@ async def _engineer_flow(
                                                   trace=trace, **rk):
                 yield _tag(event, "engineer", bl_id)
             validation = doctrine_svc.validate_engineer(wt.path, bl_id, base_ref=cfg.agent_branch,
-                                                        retrieval_log=trace.retrieval_path)
+                                                        retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
         yield _ptag({"type": "_meta", "phase": "doctrine_check",
                     "kind": "complete" if validation["ok"] else "give_up",
                     "attempts": attempt, "summary": validation["summary"]}, "engineer", bl_id, trace=trace)
@@ -434,7 +446,7 @@ async def _engineer_flow(
                     yield _tag(event, "engineer", bl_id)
                 validation = doctrine_svc.validate_engineer(wt.path, bl_id,
                                                             base_ref=cfg.agent_branch,
-                                                            retrieval_log=trace.retrieval_path)
+                                                            retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
                 if not validation["ok"]:
                     break
                 gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
@@ -511,15 +523,16 @@ async def _qa_or_scorer_flow(
     retrieval_kwargs_builder,
     *,
     run_id: str | None = None,
+    feature_slug: str | None = None,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
-    bf = backlog_svc.find_backlog(repo_dir)
+    bf = backlog_svc.find_backlog(repo_dir, feature_slug=feature_slug)
     section = backlog_svc.extract_section(bf.read_text(encoding="utf-8"), bl_id)
     if role == "qa":
-        prompt = prompts_svc.build_qa(family, bl_id, section, repo_dir)
+        prompt = prompts_svc.build_qa(family, bl_id, section, repo_dir, feature_slug=feature_slug)
     else:
-        prompt = prompts_svc.build_score(family, bl_id, section, repo_dir)
+        prompt = prompts_svc.build_score(family, bl_id, section, repo_dir, feature_slug=feature_slug)
 
     wt: Worktree | None = None
     trace: TraceWriter | None = None
@@ -538,10 +551,10 @@ async def _qa_or_scorer_flow(
 
         if role == "qa":
             validation = doctrine_svc.validate_qa(wt.path, bl_id, base_ref=cfg.agent_branch,
-                                                  retrieval_log=trace.retrieval_path)
+                                                  retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
         else:
             validation = doctrine_svc.validate_scorer(wt.path, bl_id, base_ref=cfg.agent_branch,
-                                                     retrieval_log=trace.retrieval_path)
+                                                     retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
         attempt = 0
         while not validation["ok"] and attempt < 2:
             attempt += 1
@@ -553,10 +566,10 @@ async def _qa_or_scorer_flow(
                 yield _tag(event, role, bl_id)
             if role == "qa":
                 validation = doctrine_svc.validate_qa(wt.path, bl_id, base_ref=cfg.agent_branch,
-                                                      retrieval_log=trace.retrieval_path)
+                                                      retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
             else:
                 validation = doctrine_svc.validate_scorer(wt.path, bl_id, base_ref=cfg.agent_branch,
-                                                         retrieval_log=trace.retrieval_path)
+                                                         retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
         yield _ptag({"type": "_meta", "phase": "doctrine_check",
                     "kind": "complete" if validation["ok"] else "give_up",
                     "attempts": attempt, "summary": validation["summary"]}, role, bl_id, trace=trace)
@@ -578,7 +591,7 @@ async def _qa_or_scorer_flow(
                                                       trace=trace, **rk):
                     yield _tag(event, role, bl_id)
                 validation = doctrine_svc.validate_qa(wt.path, bl_id, base_ref=cfg.agent_branch,
-                                                      retrieval_log=trace.retrieval_path)
+                                                      retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
                 if not validation["ok"]:
                     break
                 gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
@@ -799,6 +812,7 @@ async def run_brief(
     brief_hash: str | None = None,
     start_bl: str | None = None,
     run_doctrine_meta: bool = True,
+    feature_slug: str | None = None,
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -858,7 +872,8 @@ async def run_brief(
             yield _evt("po.start")
             async for e in _po_flow(repo_dir, repo_name, brief, project_name,
                                     timeout_per_role, retrieval_kwargs_builder,
-                                    run_id=run_id, brief_hash=brief_hash):
+                                    run_id=run_id, brief_hash=brief_hash,
+                                    feature_slug=feature_slug):
                 if "_orchestrator_outcome" in e:
                     summary["po"] = e
                     po_ok = e.get("doctrine_ok", False)
@@ -870,7 +885,7 @@ async def run_brief(
                 return
 
         # ── Step 4 cont: parse backlog ─────────────────────────────────────────
-        bf = backlog_svc.find_backlog(repo_dir)
+        bf = backlog_svc.find_backlog(repo_dir, feature_slug=feature_slug)
         if bf is None:
             yield _evt("aborted", reason="no BACKLOG.md found after PO phase")
             return
@@ -907,7 +922,7 @@ async def run_brief(
             eng_outcome = None
             async for e in _engineer_flow(repo_dir, repo_name, bl_id,
                                            timeout_per_role, retrieval_kwargs_builder,
-                                           run_id=run_id):
+                                           run_id=run_id, feature_slug=feature_slug):
                 if "_orchestrator_outcome" in e:
                     eng_outcome = e
                     continue
@@ -968,7 +983,7 @@ async def run_brief(
             qa_outcome = None
             async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "qa",
                                                 timeout_per_role, retrieval_kwargs_builder,
-                                                run_id=run_id):
+                                                run_id=run_id, feature_slug=feature_slug):
                 if "_orchestrator_outcome" in e:
                     qa_outcome = e
                     continue
@@ -1006,7 +1021,7 @@ async def run_brief(
             score_outcome = None
             async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "scorer",
                                                 timeout_per_role, retrieval_kwargs_builder,
-                                                run_id=run_id):
+                                                run_id=run_id, feature_slug=feature_slug):
                 if "_orchestrator_outcome" in e:
                     score_outcome = e
                     continue

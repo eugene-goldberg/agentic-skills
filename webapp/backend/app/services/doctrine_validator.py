@@ -34,7 +34,7 @@ import subprocess
 from pathlib import Path
 
 from app.services import backlog as backlog_svc
-from app.services.brownfield import pick_artifact_dir
+from app.services.brownfield import feature_artifact_dir, pick_artifact_dir
 
 
 MIN_ARTIFACT_BYTES = 120  # below this, the file is "empty" (e.g. just a heading)
@@ -138,11 +138,14 @@ def _finalize(role: str, acc: dict) -> dict:
     return acc
 
 
-def validate_po(repo_root: Path) -> dict:
-    art = pick_artifact_dir(repo_root)
+def validate_po(repo_root: Path, feature_slug: str | None = None) -> dict:
+    art = feature_artifact_dir(repo_root, feature_slug)
     acc = {"missing": [], "empty": [], "dangling_refs": []}
 
-    backlog_path = ".agile-v/BACKLOG.md"
+    # A18: when feature_slug is set, BACKLOG.md lives inside the feature dir
+    # alongside CODEBASE_CONTEXT.md and SPRINT_PLAN.md. Pre-A18 sprints used
+    # the legacy `.agile-v/BACKLOG.md` path.
+    backlog_path = f"{art}/BACKLOG.md" if feature_slug else ".agile-v/BACKLOG.md"
     _check(repo_root, backlog_path, acc)
     _check(repo_root, f"{art}/_codebase_context/CODEBASE_CONTEXT.md", acc)
     _check(repo_root, f"{art}/SPRINT_PLAN_C1.md", acc)
@@ -171,6 +174,7 @@ def validate_engineer(
     bl_id: str,
     base_ref: str | None = None,
     retrieval_log: Path | None = None,
+    feature_slug: str | None = None,
 ) -> dict:
     """Engineer doctrine: artifact, non-empty source diff, AND retrieval grounding.
 
@@ -193,7 +197,7 @@ def validate_engineer(
     This handles the legitimately-redundant-backlog-item case (e.g. BL-0003
     after BL-0005 cascaded the workspace router in early).
     """
-    art = pick_artifact_dir(repo_root)
+    art = feature_artifact_dir(repo_root, feature_slug)
     acc = {"missing": [], "empty": [], "dangling_refs": []}
     artifact_rel = f"{art}/{bl_id}/eng_patterns.md"
 
@@ -288,8 +292,9 @@ def validate_qa(
     bl_id: str,
     base_ref: str | None = None,
     retrieval_log: Path | None = None,
+    feature_slug: str | None = None,
 ) -> dict:
-    art = pick_artifact_dir(repo_root)
+    art = feature_artifact_dir(repo_root, feature_slug)
     acc = {"missing": [], "empty": [], "dangling_refs": []}
     qa_impact_rel = f"{art}/{bl_id}/qa_impact.md"
     _check(repo_root, qa_impact_rel, acc)
@@ -373,6 +378,7 @@ def validate_scorer(
     bl_id: str,
     base_ref: str | None = None,
     retrieval_log: Path | None = None,
+    feature_slug: str | None = None,
 ) -> dict:
     """Scorer doctrine: scorecard exists, brownfield-axis rubric self-consistent,
     fast-forward to target, AND ≥3 grounded retrieval calls (R12).

@@ -176,6 +176,13 @@ Halt conditions (do NOT commit):
 """
     if artifact_dir != "_brownfield":
         body = body.replace("_brownfield/", f"{artifact_dir}/").replace("`_brownfield`", f"`{artifact_dir}`")
+    # A18 per-feature isolation: when artifact_dir routes through
+    # _brownfield/features/<slug>, BACKLOG.md also moves into the feature
+    # dir (not the legacy .agile-v/ top-level). Rewrite the hardcoded
+    # references in the PO prompt so the agent writes BACKLOG.md alongside
+    # CODEBASE_CONTEXT.md and SPRINT_PLAN_C1.md.
+    if "/features/" in artifact_dir:
+        body = body.replace(".agile-v/BACKLOG.md", f"{artifact_dir}/BACKLOG.md")
     return body
 
 
