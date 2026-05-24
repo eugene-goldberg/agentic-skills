@@ -154,6 +154,23 @@ def validate_po(repo_root: Path, feature_slug: str | None = None) -> dict:
     bf = repo_root / backlog_path
     if bf.exists():
         items = backlog_svc.parse(bf.read_text(encoding="utf-8"))
+        # A19: per-feature BL numbering must reset to BL-0001 for every new
+        # feature. When `feature_slug` is set, the first item MUST be BL-0001
+        # (regardless of BL-IDs that exist under sibling
+        # `_brownfield/features/<other>/` dirs — those belong to other
+        # features and are not part of this feature's numbering). Catch
+        # global-counter continuation at the doctrine layer so the operator
+        # never sees `documents_1` accidentally start at BL-0212.
+        if feature_slug and items:
+            first = items[0]
+            first_id = first.get("id") if isinstance(first, dict) else getattr(first, "id", None)
+            if first_id and first_id != "BL-0001":
+                acc["missing"].append(
+                    f"<BACKLOG.md first item must be BL-0001 for feature "
+                    f"'{feature_slug}', got {first_id}. Per-feature BL "
+                    f"numbering must reset to BL-0001 — ignore sibling-feature "
+                    f"BL-IDs when numbering this feature's backlog.>"
+                )
         for it in items:
             # backlog_svc.parse returns BacklogItem objects/dicts; tolerate both.
             bl_id = it.get("id") if isinstance(it, dict) else getattr(it, "id", None)
@@ -231,6 +248,26 @@ def validate_engineer(
             )
 
         changed = _changed_files(repo_root, base_ref)
+        # WI 3A: sibling-feature touch guard. When feature_slug is set, the
+        # engineer is only allowed to modify its own feature dir and the real
+        # source tree — NOT sibling `_brownfield/features/<other>/...`. A
+        # commit that edits another feature's artifacts contaminates that
+        # feature's history (e.g. someone "fixing" stale BACKLOG.md in a
+        # parallel feature). Reject at doctrine; orchestrator refuses to
+        # merge a branch whose doctrine check failed.
+        if feature_slug:
+            sibling_touches = [
+                f for f in changed
+                if f.startswith("_brownfield/features/")
+                and not f.startswith(f"{art}/")
+            ]
+            if sibling_touches:
+                acc["missing"].append(
+                    f"<sibling-feature contamination ({bl_id}): commit touched "
+                    f"{len(sibling_touches)} file(s) under sibling-feature dirs "
+                    f"(e.g. {sibling_touches[0]}). Engineer must only modify "
+                    f"its own feature dir ({art}/) and real source code.>"
+                )
         # Source-y files = anything outside the artifact dir that isn't pure markdown.
         # We deliberately don't enumerate "code extensions" because brownfield targets
         # vary wildly (Python, TS, Go, etc.) — exclusion is the safer floor.
@@ -486,19 +523,74 @@ _PLAYWRIGHT_FAIL_HDR = re.compile(
     r"^\s*\d+\)\s+\[\S+\]\s+›\s+(?P<spec>[\w./:-]+)\s+›\s+(?P<title>[^\n]+)$",
     re.MULTILINE,
 )
+# A25a: gate-wrapper pseudo-tests like `tests/frontend::lint_typecheck_build FAILED`
+# and `tests/gate::stack_healthy FAILED`. These aren't real pytest results — they
+# are shell-script wrapper labels emitted by regression_gate.sh and friends.
+# Without a dedicated extractor, the engineer never sees the wrapped tool's
+# actual error message.
+_GATE_WRAPPER_FAIL = re.compile(
+    r"^(?P<name>tests?/[\w./-]+::[\w./.-]+)\s+FAILED\b.*$", re.MULTILINE,
+)
+# A25a: TypeScript compiler errors — file(line,col): error TSnnnn: ...
+_TS_ERROR = re.compile(r"^.+?\(\d+,\d+\):\s+error\s+TS\d+:.*$", re.MULTILINE)
+# A25a: infra exhaustion markers that mean the gate failure is NOT a code bug.
+# When any of these fire, the agent cannot fix it via code — the operator
+# must reclaim resources. Bubble the matching line(s) verbatim into the
+# excerpt so the engineer's prompt makes the situation visible.
+_INFRA_MARKERS = re.compile(
+    r"(?im)^.*(?:"
+    r"ENOSPC|No space left on device|out of (?:disk|memory)|OOMKilled|killed:\s*9|"
+    r"^Killed$|MemoryError|exit code 137|cannot allocate memory|"
+    r"docker:\s*Error response from daemon|"
+    r"failed to (?:copy|extract|mount)|"
+    r"connection refused.*postgres|database \".*\" does not exist"
+    r").*$",
+)
 
 
 def _extract_test_failures(text: str, *, max_blocks: int = 8, max_block_lines: int = 18) -> str:
-    """Pull pytest + Playwright failure blocks out of a noisy gate stdout dump.
+    """Pull failure blocks out of a noisy gate stdout dump.
 
-    Returns a markdown-ready string. If no structured failures are detected,
-    returns the last ~60 lines of the input as a fallback.
+    A25a: extractors run in priority order. Infrastructure markers (ENOSPC,
+    OOM, container crashes) come FIRST because they tell the agent the
+    failure is not its to fix. Then gate-wrapper pseudo-tests, then TS
+    compiler diagnostics, then pytest, then Playwright. Fallback is the
+    last ~60 lines.
     """
     if not text:
         return "(no gate output captured)"
 
     lines = text.splitlines()
     blocks: list[str] = []
+
+    # A25a (priority 1): infra-failure markers — these mean the agent can't
+    # fix it via code, so they must surface first and verbatim.
+    infra_hits = [(m.start(), m.group(0).strip()) for m in _INFRA_MARKERS.finditer(text)]
+    if infra_hits:
+        rendered = "\n".join(f"  {line}" for _, line in infra_hits[:max_blocks])
+        blocks.append(
+            "⚠ INFRASTRUCTURE FAILURE DETECTED — this is NOT a code regression.\n"
+            "The following infra markers appeared in gate stdout:\n\n" + rendered +
+            "\n\nThe gate cannot pass until the operator reclaims resources or "
+            "restarts the affected service. Do NOT attempt to fix this via "
+            "code edits. Emit your standard JSON output with the existing "
+            "commit_sha; the orchestrator will route this to operator review."
+        )
+
+    # A25a (priority 2): gate-wrapper pseudo-tests — surface the FAILED line
+    # plus the next ~max_block_lines so adjacent stderr (TS errors, build
+    # output) comes with it.
+    for m in _GATE_WRAPPER_FAIL.finditer(text):
+        if len(blocks) >= max_blocks:
+            break
+        start = text[: m.start()].count("\n")
+        chunk = lines[start : start + max_block_lines]
+        blocks.append("\n".join(chunk))
+
+    # A25a (priority 3): TS compiler errors — one line each.
+    ts_hits = [m.group(0).strip() for m in _TS_ERROR.finditer(text)][:max_blocks]
+    if ts_hits:
+        blocks.append("TypeScript errors:\n\n" + "\n".join(f"  {h}" for h in ts_hits))
 
     # pytest: "____ name ____" + body up to next blank-then-non-indented line
     for m in _PYTEST_FAIL_HDR.finditer(text):
@@ -520,6 +612,17 @@ def _extract_test_failures(text: str, *, max_blocks: int = 8, max_block_lines: i
         return "\n\n---\n\n".join(blocks)
     # Fallback — last 60 lines of input
     return "\n".join(lines[-60:])
+
+
+def detect_infra_failure(post_tail: str) -> str | None:
+    """A25b/A26: return the first infra-failure marker if post_tail indicates
+    an infrastructure problem rather than a code regression. Used by the
+    orchestrator to short-circuit engineer retries that cannot help.
+    """
+    if not post_tail:
+        return None
+    m = _INFRA_MARKERS.search(post_tail)
+    return m.group(0).strip() if m else None
 
 
 def build_gate_fix_prompt(

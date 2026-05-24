@@ -238,6 +238,12 @@ def _persist_brief_in_worktree(
             f"---\n\n"
         )
         target.write_text(header + brief, encoding="utf-8")
+        # A20: also write a canonical `brief.md` at the feature dir root so
+        # operators and tooling can find the brief without knowing the run_id.
+        # Overwrites on resubmit (latest run wins). The run_id-keyed file
+        # above remains as the audit/history copy.
+        canonical = wt_path / artifact_dir / "brief.md"
+        canonical.write_text(header + brief, encoding="utf-8")
     except OSError:
         return None
     return target
@@ -436,6 +442,10 @@ async def _engineer_flow(
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
                        "engineer", bl_id)
             gate_attempt = 0
+            # A25b: only retry on regressed (code regression the engineer can
+            # plausibly fix). For infra_fail / inconclusive / error, retries
+            # cannot help — break out and let awaiting_review surface the
+            # operator-actionable reason.
             while not gate.get("ok") and gate.get("kind") == "regressed" and gate_attempt < 2:
                 gate_attempt += 1
                 fix = doctrine_svc.build_gate_fix_prompt("engineer", gate, bl_id=bl_id,
@@ -582,6 +592,10 @@ async def _qa_or_scorer_flow(
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
                        role, bl_id)
             gate_attempt = 0
+            # A25b: only retry on regressed (code regression the engineer can
+            # plausibly fix). For infra_fail / inconclusive / error, retries
+            # cannot help — break out and let awaiting_review surface the
+            # operator-actionable reason.
             while not gate.get("ok") and gate.get("kind") == "regressed" and gate_attempt < 2:
                 gate_attempt += 1
                 fix = doctrine_svc.build_gate_fix_prompt("qa", gate, bl_id=bl_id,

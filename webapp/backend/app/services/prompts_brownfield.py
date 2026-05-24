@@ -160,6 +160,25 @@ at the root of the target repo:
 
 - `_brownfield/SPRINT_PLAN_C1.md` — sprint plan covering Legacy Impact, Risk Register, Capacity Adjustment, Spike Tasks (as required by the doctrine).
 
+## Per-feature isolation (A19 + sibling-feature guard)
+
+This feature has its own dedicated artifact directory under
+`_brownfield/features/<this-feature>/`. Other features may exist in
+sibling `_brownfield/features/<other>/` directories — **they belong to
+other ongoing or completed sprints and are not your concern**.
+
+**BL numbering MUST reset to BL-0001 for THIS feature.** The first item
+in your BACKLOG.md is `BL-0001`, the second is `BL-0002`, and so on —
+regardless of what BL-IDs appear in sibling-feature backlogs. Do NOT
+continue a "global" counter from looking at sibling features. The
+doctrine validator will reject a BACKLOG.md whose first BL is not
+`BL-0001`.
+
+**Do NOT edit, rename, or delete any files under sibling-feature dirs.**
+You may read them for context if helpful, but commits that modify
+`_brownfield/features/<other>/...` will be rejected by the doctrine
+validator and the orchestrator will refuse to merge your branch.
+
 ## Required completion steps
 
 1. Confirm all four artifacts exist (CODEBASE_CONTEXT.md, every per-BL codebase_context.md, BACKLOG.md, SPRINT_PLAN_C1.md).
