@@ -169,6 +169,33 @@ GROUNDED_RETRIEVAL_TOOLS = {
 }
 MUTATING_TOOLS = {"Write", "Edit", "NotebookEdit"}
 
+# R13: history-rewriting git commands the agent must NEVER run on its own
+# branch. The orchestrator owns ref lineage (A1 non-FF auto-rebase exists);
+# agents trying to do it themselves create the exact non-FF state A1 is meant
+# to recover from. Surfaced by doctrine-meta-agent against the api-keys sprint
+# (proposal: sprint-run-20260524T014937Z-agent-initiated-rebase.md), where
+# QA agents in BL-0004 and BL-0006 both rebased mid-retry and produced
+# doctrine_check incomplete attempt=2 with "agent rebased or reset history".
+#
+# Anchored on the mutation verbs only — read-only git (log/diff/status/show/
+# blame/rev-parse/branch --list) is unaffected. Tier-1.5-style streaming kill
+# on the Bash tool_use BEFORE the command executes.
+import re as _re
+
+FORBIDDEN_GIT_RE = _re.compile(
+    r"\bgit\s+("
+    r"rebase\b"
+    r"|reset\s+--hard\b"
+    r"|push\s+(--force\b|--force-with-lease\b|-f\b)"
+    r"|filter-branch\b"
+    r"|commit\s+--amend\b"
+    r"|update-ref\b"
+    r"|tag\s+-d\b"
+    r"|branch\s+-D\b"
+    r")",
+    _re.IGNORECASE,
+)
+
 
 def _tool_uses_in_event(evt: dict) -> list[dict]:
     """Extract tool_use blocks from an assistant event. Returns [] for non-assistant events."""
@@ -288,6 +315,7 @@ async def stream_agent_task(
     retrieval_call_count = 0  # ALL mcp__retrieval__* calls (incl. target_status)
     pregrounding_violated = False
     budget_exceeded = False
+    forbidden_git_op: str | None = None  # R13: captures the offending command for the kill event
     try:
         assert proc.stdout is not None
         try:
@@ -351,6 +379,13 @@ async def stream_agent_task(
                     ):
                         pregrounding_violated = True
                         break
+                    elif name == "Bash":
+                        # R13: streaming-kill on history-rewriting git commands.
+                        # Agents own files in their worktree, never refs.
+                        cmd = (tu.get("input") or {}).get("command", "")
+                        if isinstance(cmd, str) and FORBIDDEN_GIT_RE.search(cmd):
+                            forbidden_git_op = cmd[:500]  # cap for the event
+                            break
 
                 if trace is not None:
                     trace.write_event(evt)
@@ -392,6 +427,31 @@ async def stream_agent_task(
                     if trace is not None:
                         trace.write_event(viol_evt)
                     yield viol_evt
+                    return
+
+                if forbidden_git_op is not None:
+                    # R13: streaming-kill on history-rewriting git command.
+                    # The orchestrator owns ref lineage (A1 non-FF auto-rebase).
+                    # Agents own files in their worktree, not refs.
+                    await _kill_pgroup(proc)
+                    git_evt = {
+                        "type": "_meta",
+                        "phase": "forbidden_git_op",
+                        "kind": "killed",
+                        "command": forbidden_git_op,
+                        "reason": (
+                            "Agent attempted a history-rewriting git command on its "
+                            "own branch (rebase / reset --hard / push -f / "
+                            "commit --amend / filter-branch / update-ref / "
+                            "tag -d / branch -D). The orchestrator owns ref "
+                            "lineage and handles non-FF state via the A1 "
+                            "auto-rebase path; agents own only files in the "
+                            "worktree. See R13 in CLAUDE.md."
+                        ),
+                    }
+                    if trace is not None:
+                        trace.write_event(git_evt)
+                    yield git_evt
                     return
         finally:
             # B1: if proc is still alive when we hit finally (cancelled,
