@@ -174,6 +174,26 @@ def _tag(event: dict, step: str, bl_id: str | None = None) -> dict:
     return event
 
 
+def _ptag(event: dict, step: str, bl_id: str | None = None, *, trace=None) -> dict:
+    """M2-4 / A13: like _tag, but ALSO persists the event into the per-agent
+    trace dir's ``phase_events.jsonl`` when a TraceWriter is given.
+
+    Use for orchestrator-constructed ``_meta phase=...`` events. The
+    streaming forward case (passing through agent SDK events) keeps using
+    ``_tag`` — those are not phase events from the orchestrator's
+    perspective, so they belong only in the agent's stream.jsonl.
+
+    Closes A13's primary failure mode (sealed agent traces lacked the
+    enforcement-phase events a reviewer would re-open to verify the
+    orchestrator's decisions).
+    """
+    if (trace is not None
+            and event.get("type") == "_meta"
+            and "phase" in event):
+        trace.write_phase_event(event)
+    return _tag(event, step, bl_id)
+
+
 async def _run_indexers(repo_dir: Path, label: str) -> AsyncIterator[dict]:
     """Run claude-context + graphify, in parallel. Incremental by provider design."""
     yield _evt(f"{label}.start")
@@ -211,8 +231,8 @@ async def _po_flow(
     try:
         wt = await create_worktree(repo_dir, base_ref=cfg.agent_branch)
         trace = TraceWriter(repo=repo_name, role="po", task_id=wt.task_id)
-        yield _tag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
-                    "branch": wt.branch, "role": "po", "trace_dir": str(trace.dir)}, "po")
+        yield _ptag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
+                    "branch": wt.branch, "role": "po", "trace_dir": str(trace.dir)}, "po", trace=trace)
         rk = retrieval_kwargs_builder(wt, "po", None, trace)
         async for event in stream_agent_task(prompt, wt.path, timeout_seconds=timeout, trace=trace, **rk):
             yield _tag(event, "po")
@@ -221,16 +241,16 @@ async def _po_flow(
         attempt = 0
         while not validation["ok"] and attempt < 2:
             attempt += 1
-            yield _tag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
-                        "attempt": attempt, **validation}, "po")
+            yield _ptag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
+                        "attempt": attempt, **validation}, "po", trace=trace)
             fix = doctrine_svc.build_fix_prompt("po", validation)
             async for event in stream_agent_task(fix, wt.path, timeout_seconds=max(300, timeout // 2),
                                                   trace=trace, **rk):
                 yield _tag(event, "po")
             validation = doctrine_svc.validate_po(wt.path)
-        yield _tag({"type": "_meta", "phase": "doctrine_check",
+        yield _ptag({"type": "_meta", "phase": "doctrine_check",
                     "kind": "complete" if validation["ok"] else "give_up",
-                    "attempts": attempt, "summary": validation["summary"]}, "po")
+                    "attempts": attempt, "summary": validation["summary"]}, "po", trace=trace)
         # import artifacts back to repo if doctrine passed
         if validation["ok"]:
             from shutil import copy2, copytree
@@ -285,9 +305,9 @@ async def _engineer_flow(
     try:
         wt = await create_worktree(repo_dir, base_ref=cfg.agent_branch)
         trace = TraceWriter(repo=repo_name, role="engineer", bl_id=bl_id, task_id=wt.task_id)
-        yield _tag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
+        yield _ptag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
                     "branch": wt.branch, "bl_id": bl_id, "role": "engineer",
-                    "trace_dir": str(trace.dir)}, "engineer", bl_id)
+                    "trace_dir": str(trace.dir)}, "engineer", bl_id, trace=trace)
         rk = retrieval_kwargs_builder(wt, "engineer", bl_id, trace)
         async for event in stream_agent_task(prompt, wt.path, timeout_seconds=timeout,
                                               trace=trace, min_pregrounding=3, **rk):
@@ -296,8 +316,8 @@ async def _engineer_flow(
         validation = doctrine_svc.validate_engineer(wt.path, bl_id, base_ref=cfg.agent_branch,
                                                     retrieval_log=trace.retrieval_path)
         if validation.get("no_op"):
-            yield _tag({"type": "_meta", "phase": "no_op", "bl_id": bl_id,
-                        "summary": validation["summary"]}, "engineer", bl_id)
+            yield _ptag({"type": "_meta", "phase": "no_op", "bl_id": bl_id,
+                        "summary": validation["summary"]}, "engineer", bl_id, trace=trace)
             no_op = True
             yield {"_orchestrator_outcome": True, "role": "engineer", "bl_id": bl_id,
                    "merged": False, "no_op": True}
@@ -306,23 +326,23 @@ async def _engineer_flow(
         attempt = 0
         while not validation["ok"] and attempt < 2:
             attempt += 1
-            yield _tag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
-                        "attempt": attempt, **validation}, "engineer", bl_id)
+            yield _ptag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
+                        "attempt": attempt, **validation}, "engineer", bl_id, trace=trace)
             fix = doctrine_svc.build_fix_prompt("engineer", validation, bl_id=bl_id)
             async for event in stream_agent_task(fix, wt.path, timeout_seconds=max(300, timeout // 2),
                                                   trace=trace, **rk):
                 yield _tag(event, "engineer", bl_id)
             validation = doctrine_svc.validate_engineer(wt.path, bl_id, base_ref=cfg.agent_branch,
                                                         retrieval_log=trace.retrieval_path)
-        yield _tag({"type": "_meta", "phase": "doctrine_check",
+        yield _ptag({"type": "_meta", "phase": "doctrine_check",
                     "kind": "complete" if validation["ok"] else "give_up",
-                    "attempts": attempt, "summary": validation["summary"]}, "engineer", bl_id)
+                    "attempts": attempt, "summary": validation["summary"]}, "engineer", bl_id, trace=trace)
 
         new_commits = await has_new_commits(wt, base_ref="HEAD~1")
         if validation["ok"] and new_commits > 0:
             gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                      target_ref=cfg.agent_branch, run_id=run_id)
-            yield _tag({"type": "_meta", "phase": "regression_gate",
+            yield _ptag({"type": "_meta", "phase": "regression_gate",
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
                        "engineer", bl_id)
             gate_attempt = 0
@@ -341,7 +361,7 @@ async def _engineer_flow(
                     break
                 gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                          target_ref=cfg.agent_branch, run_id=run_id)
-                yield _tag({"type": "_meta", "phase": "regression_gate",
+                yield _ptag({"type": "_meta", "phase": "regression_gate",
                             "gate_attempt": gate_attempt,
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
                            "engineer", bl_id)
@@ -359,16 +379,16 @@ async def _engineer_flow(
                 # branch in its OWN worktree onto target_ref, re-run the
                 # gate (the new SHA wasn't tested), and re-attempt the ff.
                 if not merge.get("ok") and merge.get("kind") == "non_ff":
-                    yield _tag({"type": "_meta", "phase": "merge_rebase_attempt",
+                    yield _ptag({"type": "_meta", "phase": "merge_rebase_attempt",
                                 "branch": wt.branch, "target_ref": cfg.agent_branch},
                                "engineer", bl_id)
                     rebase = await _rebase_in_worktree(wt.path, cfg.agent_branch)
                     if rebase.get("ok"):
-                        yield _tag({"type": "_meta", "phase": "merge_rebase_succeeded",
-                                    "branch": wt.branch}, "engineer", bl_id)
+                        yield _ptag({"type": "_meta", "phase": "merge_rebase_succeeded",
+                                    "branch": wt.branch}, "engineer", bl_id, trace=trace)
                         gate2 = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                                    target_ref=cfg.agent_branch, run_id=run_id)
-                        yield _tag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
+                        yield _ptag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
                                     **{k: gate2.get(k) for k in ("ok","kind","regressions","reason","post_tail")}},
                                    "engineer", bl_id)
                         if gate2.get("ok"):
@@ -379,17 +399,17 @@ async def _engineer_flow(
                             merge = {"ok": False, "kind": "non_ff_gate_failed_post_rebase",
                                      "error": gate2.get("reason")}
                     else:
-                        yield _tag({"type": "_meta", "phase": "merge_rebase_failed",
+                        yield _ptag({"type": "_meta", "phase": "merge_rebase_failed",
                                     "error": rebase.get("error"), "branch": wt.branch},
                                    "engineer", bl_id)
                 merged = bool(merge.get("ok"))
-                yield _tag({"type": "_meta", "phase": "merge_to_target",
+                yield _ptag({"type": "_meta", "phase": "merge_to_target",
                             "ok": merge.get("ok"), "merged_sha": merge.get("merged_sha"),
                             "kind": merge.get("kind"), "error": merge.get("error"),
                             "branch": wt.branch},
                            "engineer", bl_id)
             else:
-                yield _tag({"type": "_meta", "phase": "awaiting_review",
+                yield _ptag({"type": "_meta", "phase": "awaiting_review",
                             "reason": gate.get("reason") or "doctrine incomplete"},
                            "engineer", bl_id)
         yield {"_orchestrator_outcome": True, "role": "engineer", "bl_id": bl_id,
@@ -429,9 +449,9 @@ async def _qa_or_scorer_flow(
     try:
         wt = await create_worktree(repo_dir, base_ref=cfg.agent_branch)
         trace = TraceWriter(repo=repo_name, role=role, bl_id=bl_id, task_id=wt.task_id)
-        yield _tag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
+        yield _ptag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
                     "branch": wt.branch, "bl_id": bl_id, "role": role,
-                    "trace_dir": str(trace.dir)}, role, bl_id)
+                    "trace_dir": str(trace.dir)}, role, bl_id, trace=trace)
         rk = retrieval_kwargs_builder(wt, role, bl_id, trace)
         pregrounding = 3 if role == "qa" else 0
         async for event in stream_agent_task(prompt, wt.path, timeout_seconds=timeout,
@@ -447,8 +467,8 @@ async def _qa_or_scorer_flow(
         attempt = 0
         while not validation["ok"] and attempt < 2:
             attempt += 1
-            yield _tag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
-                        "attempt": attempt, **validation}, role, bl_id)
+            yield _ptag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
+                        "attempt": attempt, **validation}, role, bl_id, trace=trace)
             fix = doctrine_svc.build_fix_prompt(role, validation, bl_id=bl_id)
             async for event in stream_agent_task(fix, wt.path, timeout_seconds=max(300, timeout // 2),
                                                   trace=trace, **rk):
@@ -459,15 +479,15 @@ async def _qa_or_scorer_flow(
             else:
                 validation = doctrine_svc.validate_scorer(wt.path, bl_id, base_ref=cfg.agent_branch,
                                                          retrieval_log=trace.retrieval_path)
-        yield _tag({"type": "_meta", "phase": "doctrine_check",
+        yield _ptag({"type": "_meta", "phase": "doctrine_check",
                     "kind": "complete" if validation["ok"] else "give_up",
-                    "attempts": attempt, "summary": validation["summary"]}, role, bl_id)
+                    "attempts": attempt, "summary": validation["summary"]}, role, bl_id, trace=trace)
 
         new_commits = await has_new_commits(wt, base_ref="HEAD~1")
         if role == "qa" and validation["ok"] and new_commits > 0:
             gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                      target_ref=cfg.agent_branch, run_id=run_id)
-            yield _tag({"type": "_meta", "phase": "regression_gate",
+            yield _ptag({"type": "_meta", "phase": "regression_gate",
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
                        role, bl_id)
             gate_attempt = 0
@@ -485,7 +505,7 @@ async def _qa_or_scorer_flow(
                     break
                 gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                          target_ref=cfg.agent_branch, run_id=run_id)
-                yield _tag({"type": "_meta", "phase": "regression_gate",
+                yield _ptag({"type": "_meta", "phase": "regression_gate",
                             "gate_attempt": gate_attempt,
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
                            role, bl_id)
@@ -499,16 +519,16 @@ async def _qa_or_scorer_flow(
                 # A1: same non_ff auto-rebase as the engineer flow — operator
                 # commits race QA worktrees too.
                 if not merge.get("ok") and merge.get("kind") == "non_ff":
-                    yield _tag({"type": "_meta", "phase": "merge_rebase_attempt",
+                    yield _ptag({"type": "_meta", "phase": "merge_rebase_attempt",
                                 "branch": wt.branch, "target_ref": cfg.agent_branch},
                                role, bl_id)
                     rebase = await _rebase_in_worktree(wt.path, cfg.agent_branch)
                     if rebase.get("ok"):
-                        yield _tag({"type": "_meta", "phase": "merge_rebase_succeeded",
-                                    "branch": wt.branch}, role, bl_id)
+                        yield _ptag({"type": "_meta", "phase": "merge_rebase_succeeded",
+                                    "branch": wt.branch}, role, bl_id, trace=trace)
                         gate2 = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                                    target_ref=cfg.agent_branch, run_id=run_id)
-                        yield _tag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
+                        yield _ptag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
                                     **{k: gate2.get(k) for k in ("ok","kind","regressions","reason","post_tail")}},
                                    role, bl_id)
                         if gate2.get("ok"):
@@ -518,18 +538,18 @@ async def _qa_or_scorer_flow(
                             merge = {"ok": False, "kind": "non_ff_gate_failed_post_rebase",
                                      "error": gate2.get("reason")}
                     else:
-                        yield _tag({"type": "_meta", "phase": "merge_rebase_failed",
+                        yield _ptag({"type": "_meta", "phase": "merge_rebase_failed",
                                     "error": rebase.get("error"), "branch": wt.branch},
                                    role, bl_id)
                 merged = bool(merge.get("ok"))
-                yield _tag({"type": "_meta", "phase": "merge_to_target",
+                yield _ptag({"type": "_meta", "phase": "merge_to_target",
                             "ok": merge.get("ok"), "merged_sha": merge.get("merged_sha"),
                             "kind": merge.get("kind"), "error": merge.get("error"),
                             "branch": wt.branch},
                            role, bl_id)
             else:
-                yield _tag({"type": "_meta", "phase": "awaiting_review",
-                            "reason": gate.get("reason")}, role, bl_id)
+                yield _ptag({"type": "_meta", "phase": "awaiting_review",
+                            "reason": gate.get("reason")}, role, bl_id, trace=trace)
         yield {"_orchestrator_outcome": True, "role": role, "bl_id": bl_id,
                "merged": merged, "doctrine_ok": validation["ok"],
                # A2: surface doctrine summary so the per-BL loop can emit

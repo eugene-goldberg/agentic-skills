@@ -102,6 +102,29 @@ class TraceWriter:
         self._meta["cmd"] = list(cmd)
         self._write_meta()
 
+    def write_phase_event(self, event: dict) -> None:
+        """M2-4 / A13: append a phase event to ``phase_events.jsonl`` sibling
+        of ``stream.jsonl``.
+
+        Single-writer-per-file by convention: the orchestrator owns this
+        file; the agent's own SDK transport stream goes to ``stream.jsonl``.
+        No locking; if the orchestrator is the only caller (which it is by
+        design), append-mode writes are atomic per-line on POSIX.
+
+        The event dict is the same shape ``_evt`` produces in orchestrator —
+        ``{type, phase, ...}``. A ``_ts`` field is added if not present.
+        """
+        rec = dict(event)
+        rec.setdefault("_ts", datetime.now(timezone.utc).isoformat())
+        path = self.dir / "phase_events.jsonl"
+        try:
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, default=str) + "\n")
+        except (OSError, ValueError, TypeError):
+            # Defensive: phase event persistence is observability, not
+            # correctness. Never block the sprint on disk I/O.
+            pass
+
     def write_event(self, event: dict) -> None:
         self._n_events += 1
         t = event.get("type")
