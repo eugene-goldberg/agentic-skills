@@ -34,6 +34,7 @@ from app.services import prompts_brownfield as prompts_brownfield_svc
 from app.services import regression_gate as regression_gate_svc
 from app.services import repo_config as repo_config_svc
 from app.services import run_state as run_state_svc
+from app.services import closure_check as closure_check_svc
 from app.services.brownfield import classify_target
 from app.services.claude_agent import stream_agent_task
 from app.services.git_worktree import (
@@ -949,6 +950,28 @@ async def run_brief(
                     yield evt
             except Exception as exc:
                 yield _evt("doctrine_meta.error", error=str(exc))
+
+        # M2-3 / I-3: closure_check fires AFTER sprint_complete (and after
+        # doctrine_meta when enabled). Yields one orchestrator.closure_violation
+        # event per resource that survived past its intended scope; emits
+        # closure_check.summary at the end. Lives INSIDE the try block (not in
+        # finally) because yielding from an async generator's finally during
+        # aclose() is illegal — PEP 525, see B15 comment below. This means
+        # aborted paths currently don't surface violations live; a future
+        # startup-scan pattern (M2-3b) can read disk state and report at the
+        # next run's start.
+        try:
+            yield _evt("closure_check.start", run_id=run_id)
+            violations = await closure_check_svc.scan_all(repo_dir, run_id)
+            for v in violations:
+                yield _evt("closure_violation", kind=v.kind, resource=v.resource,
+                           detail=v.detail, run_id=run_id)
+            yield _evt("closure_check.done",
+                       violation_count=len(violations),
+                       by_kind={k: sum(1 for v in violations if v.kind == k)
+                                for k in {v.kind for v in violations}})
+        except Exception as exc:
+            yield _evt("closure_check.error", error=str(exc))
     finally:
         # A7: move the disk state file into done/ tagged with how the run ended.
         try:
