@@ -99,6 +99,82 @@ Read-only git is allowed: `git log`, `git diff`, `git status`, `git show`, `git 
 
 ---
 
+## R14 — Test design constraints (prevent regression-gate hangs)
+
+QA tests run inside the regression gate's pytest invocation alongside
+the engineer's tests AND all vanilla template tests. A single
+deadlock-prone test in your suite can hang the entire gate for hours.
+The per-test timeout (120 s, `--timeout-method=signal`) added in A32
+will fail-fast deadlocks — but you MUST still follow these rules so
+your tests fail as TEST results, not as opaque hangs.
+
+### R14.1 — Never instantiate `TestClient(app)` outside `with`
+
+The shared `client` fixture in `tests/conftest.py` is module-scoped and
+properly cleans up via context manager. Helpers and per-test client
+creation are forbidden because each `TestClient(app)` instance:
+
+- Spawns an anyio thread for the sync→async bridge
+- Opens ASGI lifespan-bound DB connections
+- Does NOT release them unless used inside `with TestClient(app) as c:`
+
+These leaked connections accumulate across tests and exhaust the DB
+connection pool, deadlocking later tests (especially DDL/migration
+tests). **Use the shared `client` fixture from `conftest.py`.** If you
+need an additional client for a different lifespan, wrap it in `with`.
+
+**Wrong:**
+```python
+def _add_member(db, workspace, role):
+    headers = authentication_token_from_email(
+        client=TestClient(app),   # ← leaks ASGI lifespan; never closed
+        email=random_email(), db=db,
+    )
+```
+
+**Right:**
+```python
+def _add_member(client, db, workspace, role):  # accept the fixture
+    headers = authentication_token_from_email(
+        client=client, email=random_email(), db=db,
+    )
+```
+
+### R14.2 — No Alembic DDL (downgrade / upgrade) when the session-scoped `db` fixture is open
+
+`tests/conftest.py` opens a session-scoped `Session(engine)` that persists
+for the entire pytest session. If your test calls `alembic.command.downgrade()`
+or `command.upgrade()`, the DDL needs `AccessExclusiveLock` on the
+target tables, which conflicts with any open transaction. The conftest
+session — plus any leaked `TestClient(app)` connections (see R14.1) —
+WILL block the DDL forever.
+
+If you genuinely need to validate migrations end-to-end:
+
+- Put the test in its own module with `@pytest.fixture(scope="module")`
+  and explicit teardown that closes the conftest session
+- OR test migration logic via the script_directory walker without
+  hitting the live engine (`script.get_revision()`, no `command.run`)
+- OR mark it `@pytest.mark.skip(reason="alembic round-trip requires isolated DB")`
+  and rely on a separate CI job
+
+### R14.3 — Per-test timeout discipline
+
+If your test legitimately takes >60 s (e.g. e2e flow with multiple HTTP
+calls), explicitly opt out with `@pytest.mark.timeout(N)` and document
+why. Otherwise the default 120 s applies. **Never write a test that
+relies on long-running fixture setup without bounding it.**
+
+### Failure mode this prevents
+
+Sprint `run-20260524T220528Z-f56070` (documents_1 BL-0001 QA gate) hung
+for 30+ min on `test_alembic_upgrade_downgrade_upgrade_round_trip` —
+exact pattern: leaked `TestClient(app)` instances in `_add_member`
+held DB connections open; downgrade() blocked on `AccessExclusiveLock`;
+gate hung; sprint aborted.
+
+---
+
 ## Required Retrieval Evidence Footer (R5b)
 
 The last section of every artifact you write (e.g. `qa_impact.md`) MUST be titled `## Retrieval evidence` and MUST contain **at least three bullets** in this exact form:
