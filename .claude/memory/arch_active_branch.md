@@ -1,73 +1,86 @@
 ---
 name: arch-active-branch
-description: Active work location as of 2026-05-24 — branch architect-prereqs at 60e5557; 38 commits ahead of sprint-2-orchestrator. Three production sprints validated; A18 per-feature isolation live.
+description: Active work location as of 2026-05-24 EOD — branch architect-prereqs at 7ffad52; pushed to public GitHub https://github.com/eugene-goldberg/agentic-skills. Target repo wiped and re-cloned to vanilla; first BL ever merged through full A18+A19+A20+A21+A22+A24+A25+A26+WI3A+A32 stack.
 metadata:
   type: project
 ---
 
-Active work branch: **`architect-prereqs`** (off `sprint-2-orchestrator@710992b`). Tip at memory-write time: **`60e5557`**, 38 commits ahead.
+Active work branch: **`architect-prereqs`** (off `sprint-2-orchestrator@710992b`). Tip at memory-write time: **`7ffad52`**, 45+ commits ahead. **Pushed to `origin` (public GitHub).**
 
-## What landed on this branch (2026-05-23 → 2026-05-24)
+## Public GitHub
 
-**Batch A — Architectural memory** (done): `658dcb1` ARCHITECTURE_INVARIANTS.md, `a50026a` 7 arch_*.md memory files, `a2fa12a` continuation prompt cites, `2185cef` tracker, `e3e0e6f` CLAUDE.md architect directive.
+- URL: https://github.com/eugene-goldberg/agentic-skills (PUBLIC)
+- Default branch: `architect-prereqs` (the current frontier)
+- 6 branches mirrored: `main`, `skills_with_graphs`, `webapp`, `brownfield-production`, `sprint-2-orchestrator`, `architect-prereqs`
+- README at repo root is the synthesized reviewer entry (13 sections, ~400 lines).
 
-**Mission reframing** (`fcb6d41`): crew is the goal, operator-time is a symptom.
+## What landed today (2026-05-24)
 
-**Sprint 4 unfiled findings filed** (`7820f8b`): A9, A10, A11.
+### Framework hardening — committed on architect-prereqs
 
-**Batch B — Doctrine-meta-agent / I-7** (done, validated end-to-end):
-- `c65ff09`..`d5c17f3` B-1..B-5 (SKILLS.md + SKILL_PATHS wiring + `_doctrine_meta_flow` + endpoint + `.planning/doctrine_proposals/`).
-- `fc094f8` tracker.
-- `f1a229a` agent's own commit (caught + addressed via A14).
-- `1b95955` A12/A13/A14 ledger entries.
-- `d126bd4` doctrine_meta SKILLS.md fixes (events.jsonl → stream.jsonl + Forbidden Tools).
-
-**Move 2 — closure_check / I-3** (done): `ff04634` M2-1 docker prefix, `616e46f` M2-2 scan primitives, `1764ab3` M2-3 hook into run_brief, `570b228` M2-4 per-agent phase_events.jsonl. `5c85dd3` tracker + A10/A13 closed.
-
-**R13 + R5b (operator-approved doctrine-meta proposals)**:
-- `0e6bab6` R13 streaming-kill on history-rewriting git commands.
-- `68a1f11` SKILLS.md updates (Forbidden Tools + Required Retrieval Evidence Footer).
-- `86afca7` CLAUDE.md + INVARIANTS codification.
-- `4db55cd` A15+A16 ledger + accepted proposals archived.
-- `8087c4b` doctrine retry prompts switched from --amend to new-commit per R13.
-
-**A17 sprint brief persistence**: `9594558` → `d929973` relocated from agentic-skills to target's `_brownfield/` after operator correction.
-
-**A18 per-feature isolation** (current canonical layout):
-- `165bbe1` backend across 7 files (RunBriefRequest.feature_name, feature_artifact_dir helper, feature-aware backlog/validators/prompts/orchestrator, per-feature events.jsonl tailable log, PO copy-back switched to dirs_exist_ok=True).
-- `1279f69` UI feature_name input in AppV2.jsx + scripts/tail_feature.py CLI.
-- `5727cb4` + `60e5557` static-mount attempt + revert (8000=backend, 5173=frontend per operator's correction).
-
-## Production sprints validated on this branch
-
-| Sprint | Brief | Outcome |
+| Commit | Item | Effect |
 |---|---|---|
-| api-keys (run-20260524T014937Z-e74aff) | personal API key system | 5 merged_full + 1 no_op; doctrine_meta produced 2 valid proposals (A12 + A13) post-sprint |
-| RBAC (run-20260524T144409Z-90e234) | Phase 1 RBAC (roles + permissions + middleware + admin UI + Playwright e2e) | killed mid-flight at BL-0010 by operator to land A18; BL-0007/8/9 merged_full; **11/11 R5b first-try pass** (100%, up from 38% in api-keys); **0 R13 trips** |
+| `9142263` | gate(A21/A22/A25b/A26) | Truthful aggregation + lowercase compose name + infra_fail kind + 5GB disk pre-flight |
+| `58d9468` | brownfield(A25a/A19/A20/WI3A) | Infra-aware extractor + per-feature BL-0001 reset + canonical brief.md + sibling-feature touch guard |
+| `b2ed5c4` | docs(ledger+memory) | A19-A26 marked done; A27 (per-feature branch), A28-A31 (gate throughput) filed; arch_gate_throughput.md memory |
+| `839cc67` | chore(lg-SKILLS) | Pre-existing dirty briefs/skills committed (Group A) |
+| `d0d33d9` | docs(README) | Reviewer entry point ~400 lines synthesizing 8 governance docs |
+| `3c64b43` | docs(README §2) | Added "The team" section up front |
+| `7ffad52` | doctrine(qa): R14 | Test design constraints to prevent gate hangs (R14.1 TestClient, R14.2 Alembic DDL, R14.3 timeout discipline) |
 
-## Open ledger items
+### Target repo (full-stack-fastapi-template)
+
+Wiped + re-cloned from upstream FastAPI on 2026-05-24 PM (operator approved). Lost: 4 sprints' worth of prior work (Team Collaboration, Notifications, api-keys, RBAC) + 47 agent branches. Preserved & restored:
+- `.agentic-skills.json` (agent_branch=`agentic-skills-work`, NOT `-v3`)
+- `scripts/regression_gate.sh`
+- `compose.gate.yml`
+- `.git/info/exclude` entry for events.jsonl
+
+Target's `agentic-skills-work` branch tip: **`c7ea13e`** (A32 gate fix). Above it: `801847d` (BL-0001 — first crew code shipped on fresh target).
+
+## Sprints run today on fresh target
+
+| Sprint | Run ID | Outcome |
+|---|---|---|
+| documents (1st) | run-20260524T173501Z-653b2f | Aborted — events.jsonl tracked → merge blocker (A24) |
+| documents (resubmit) | run-20260524T180834Z-3bbf81 | Aborted on BL-0201 engineer_unmerged — A21/A22/A25/A26 root causes |
+| documents_1 (1st) | run-20260524T200334Z-1b6c40 | Aborted — QA-side gate inconclusive on baseline test failures (A19 first-real test) |
+| documents_1 (clean) | run-20260524T220528Z-f56070 | **BL-0001 merged successfully** (sha `801847d5`); QA-side gate hung 30+ min on `test_alembic_upgrade_downgrade_upgrade_round_trip` → operator killed → A32 root-cause + two-layer fix shipped |
+
+**First BL-0001 production merge against the fresh, clean baseline** = `801847d` on target's `agentic-skills-work`.
+
+## Open ledger items (architect-prereqs DESIGN_SHORTCOMINGS.md)
 
 | ID | Class | Status |
 |---|---|---|
 | A8 | enforcement-gap (R9 post-validator) | open |
-| A9 | resource-leak (gate subprocess pgroup leak) | open; closes structurally in Move 3 |
+| A9 | resource-leak (gate subprocess pgroup leak) | open; closes in Move 3 |
 | A11 | enforcement-gap (R9 streaming-side) | open; depends on A8 |
+| A27 | per-feature branch isolation | deferred until parallel sprints justify |
+| A28 | Playwright --workers 1 → 4 | one-line fix, defer until first clean green sprint |
+| A29 | PRE-phase result cache | ~50% gate speedup per sprint after first BL |
+| A30 | Test Impact Analysis | 5-20× reduction on focused changes |
+| A31 | Tiered gate (per-BL fast, sprint-end full) | restructures merge contract |
+| **A32** | **gate-hang from QA test bugs** | **CLOSED** by c7ea13e (target) + 7ffad52 (doctrine R14) |
+| A33 | `.latest` symlink not pointing at current run | minor, deferred |
 
-**Closed**: A10, A12, A13, A14, A15, A16. A17 closed by `d929973`. A18 closed by `165bbe1`+`1279f69`.
+## Process state at handoff
 
-## Pending follow-up
-
-- Migrate two backfilled briefs in `sprint_briefs/` → `<target>/_brownfield/features/<slug>/` and delete `sprint_briefs/` from agentic-skills. Held for after next clean sprint.
-- Move 3 (ManagedSubprocess primitive / I-1) — closes A9 structurally.
-- Batches C (framework-reviewer) and D (scheduled observer) of `ARCHITECT_PLAN.md` — pending operator authorization.
-
-## Live process state at handoff
-
-| | |
+| Process | State |
 |---|---|
-| uvicorn (backend API) | port 8000, PID 39374 |
-| vite (frontend dev server) | port 5173, PID 39736, HMR live |
-| Open in browser | `http://localhost:5173/` |
-| Active sprint | none |
+| uvicorn | PID 98752 alive on port 8000 |
+| vite | port 5173 |
+| docker stack | torn down clean (no orphan containers) |
+| Active sprints | none (last killed by operator after A32 investigation) |
+| Worktrees on target | main checkout only (`agentic-skills-work` @ c7ea13e) |
+| Free disk | ~50 GB |
 
-Source: `ARCHITECT_PLAN.md`, `ARCHITECT_TRACKER.md`, `DESIGN_SHORTCOMINGS.md`, commit log on `architect-prereqs`.
+## Pending for next session
+
+1. **Test the A32 fix end-to-end.** Submit a fresh sprint that includes a Q&A pattern → confirm pytest timeout fires at 120s rather than hanging.
+2. **A18-followup migration** — relocate the two `<agentic-skills>/sprint_briefs/` files to `<target>/_brownfield/features/<slug>/`, delete `sprint_briefs/` dir.
+3. **Move 3** (ManagedSubprocess for A9) — closes structurally.
+4. **Batches C + D** of ARCHITECT_PLAN — framework-reviewer + scheduled observer.
+5. **A28** — one-line fix to playwright workers=4 once green-path proven.
+
+Source: commit log on `architect-prereqs`, target commit log on `agentic-skills-work`, `DESIGN_SHORTCOMINGS.md`, `ARCHITECT_PLAN.md`.

@@ -22,3 +22,4 @@
 - [Mission framing](arch_mission_framing.md) — operator correction 2026-05-23: mission is the autonomous synthetic crew itself, not operator-time metrics; metrics are symptoms
 - [Active work branch](arch_active_branch.md) — `architect-prereqs` off `sprint-2-orchestrator@710992b`; Batch A done; B/C/D pending
 - [Gate throughput bottleneck](arch_gate_throughput.md) — playwright 79-test gate at 1 worker, PRE+POST per BL = 80-160 min/BL; A28-A31 in ledger for workers/sharding/TIA/tiered gates
+- [Test hygiene (A32 resolved)](arch_test_hygiene.md) — QA test design caused 30-min gate hang; fixed defense-in-depth at framework (pytest --timeout=120) + doctrine (R14 in QA SKILLS.md); template for future hang-class diagnoses
