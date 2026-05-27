@@ -119,7 +119,8 @@ Read these in this order on any non-trivial session:
 | 10 | [`ARCHITECT_PLAN.md`](ARCHITECT_PLAN.md) | The four prerequisites for full architect-mode operation (memory layer, doctrine-meta-agent, framework-reviewer, scheduled observer). Currently active on branch `architect-prereqs`. |
 | 11 | [`ARCHITECT_TRACKER.md`](ARCHITECT_TRACKER.md) | Live checklist for `ARCHITECT_PLAN.md`. |
 | 12 | [`RECOVERY.md`](RECOVERY.md) | Operator playbook for mid-sprint failures (crash-restart, score-only backfill, conflict resolution, Milvus restart). |
-| 13 | [`CONTINUATION_PROMPT.md`](CONTINUATION_PROMPT.md) | The handoff document for the next session. Update when context changes. |
+| 13 | [`RUNBOOK_clean_brownfield_reset.md`](RUNBOOK_clean_brownfield_reset.md) | 10-step procedure to launch a new brownfield feature on a target that already hosted a prior sprint, with no cross-contamination (branch fork, `_brownfield/` strip, graphify+Milvus purge, orchestrator-state sweep, docker `-v` restart). |
+| 14 | [`CONTINUATION_PROMPT.md`](CONTINUATION_PROMPT.md) | The handoff document for the next session. Update when context changes. |
 
 The `.claude/memory/` directory carries cross-session memory files (see
 `MEMORY.md` index). Architectural memory entries (`arch_*.md`) summarize
