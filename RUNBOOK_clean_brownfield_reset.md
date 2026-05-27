@@ -70,8 +70,23 @@ git fetch origin
 git checkout "$MAIN_REF"
 git pull --ff-only
 git checkout -b "$NEW_AGENT_BRANCH"
-git push -u origin "$NEW_AGENT_BRANCH"
 ```
+
+**Push only if the target has a writable fork remote.** Most brownfield
+targets have a single `origin` pointing at the upstream repository,
+which the operator does not own — push will 403. The orchestrator
+operates on the local checkout and does not require the agent branch
+to be on a remote. Check first:
+
+```bash
+# Inspect remotes
+git remote -v
+# Push only if a writable remote exists (e.g., a personal fork):
+# git push -u <fork-remote> "$NEW_AGENT_BRANCH"
+```
+
+If you skip the push, document it; the branch lives only locally and
+will not survive a reclone.
 
 Update `.agentic-skills.json` at target root:
 
@@ -79,15 +94,63 @@ Update `.agentic-skills.json` at target root:
 {
   "agent_branch": "agentic-skills-work-documents_2",
   "main_ref": "master",
-  "doctrine": "brownfield"
+  "doctrine": "brownfield",
+  "test_cmd": ["sh", "scripts/regression_gate.sh"]
 }
 ```
 
-Commit and push that change on `$NEW_AGENT_BRANCH`.
+Note: `.agentic-skills.json` is typically **not present on `main_ref`**
+— it lived only on the prior agent branch. Create it fresh on
+`$NEW_AGENT_BRANCH`, then commit.
 
 **Verify:** `git log --oneline -5` shows only `$MAIN_REF` history plus
 the `.agentic-skills.json` edit. No `BL-0001..BL-000N` commits from the
 prior feature should appear.
+
+---
+
+## Step 1.5 — Cherry-pick harness commits onto the new branch
+
+The agentic-skills harness adds files that are required for the
+orchestrator to function but are **not on `main_ref`** — they only
+ever lived on prior agent branches. At minimum:
+
+- `scripts/regression_gate.sh` — the test runner the orchestrator's
+  regression gate invokes (`.agentic-skills.json::test_cmd`)
+- `compose.gate.yml` — docker compose overlay used by the gate script
+- Any harness fixes layered on top (e.g., A32's per-test pytest
+  timeout)
+
+Without these, the gate phase fails-fast on every BL and no work
+merges. Locate them on the prior agent branch and cherry-pick:
+
+```bash
+cd "$TARGET_PATH"
+PRIOR_AGENT_BRANCH=agentic-skills-work   # whatever the prior run used
+
+# Find the harness-bringup commit and any harness fixes
+git log "$PRIOR_AGENT_BRANCH" --oneline -- \
+    scripts/regression_gate.sh compose.gate.yml
+
+# Cherry-pick in chronological order (oldest first)
+git cherry-pick <bringup-sha> <fix-sha-1> <fix-sha-2> ...
+```
+
+**Conflict on `.agentic-skills.json`** is expected — both your Step 1
+commit and the harness bringup commit add this file. Resolve by
+keeping your Step 1 version (with the new `agent_branch`), then
+`git add .agentic-skills.json && git cherry-pick --continue`.
+
+**Verify:** `scripts/regression_gate.sh` and `compose.gate.yml` exist
+on disk, `.agentic-skills.json::test_cmd` resolves to a file that
+exists, and `git log --oneline -10` shows the harness commits on top
+of your config commit.
+
+> **Future fix.** Harness infrastructure on every brownfield branch is
+> a structural smell — these commits should live on a long-lived
+> `harness/*` branch that gets merged into each new agent branch,
+> rather than being cherry-picked by hand each time. Filed as a
+> follow-up under the runbook's "open gaps" section.
 
 ---
 
@@ -298,6 +361,16 @@ once the operator confirms it's no longer needed.
 - **Feature-key registry** doesn't exist; Step 9 is a grep. A real
   registry with `register / list / archive` operations would make
   collisions impossible.
+- **Harness commits live only on agent branches.** Step 1.5
+  cherry-picks `regression_gate.sh`, `compose.gate.yml`, and any
+  layered fixes by hand. Structural fix: a long-lived `harness/*`
+  branch on the target that is merged into each new agent branch,
+  removing the per-reset cherry-pick. Until then, Step 1.5 is
+  mandatory on every reset.
+- **Fork remote.** Step 1's push assumes a writable remote. Most
+  brownfield targets have only an upstream remote with no push
+  access. Until operators configure a per-target fork remote
+  convention, the agent branch lives only locally.
 
 ---
 
