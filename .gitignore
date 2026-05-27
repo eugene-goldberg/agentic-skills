@@ -16,8 +16,8 @@ reference-repos/*/graphify-out/cache/
 briefs/engineering-work-packets/
 briefs/qa-work-packets/
 *_api*.md
-.spike-node/node_modules/
-.spike-node/package-lock.json
+.spike-node/
+.clinerules
 ab_runs/
 
 # B-5: doctrine-meta-agent writes session-local proposals here.

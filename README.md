@@ -11,7 +11,11 @@ governance documents listed throughout.
 
 ---
 
+
+
 ## 1. The vision
+
+The main goal of this project is to build a completely autonomous AI multi-agent software-development team capable of adding significant, complex features to existing brownfield codebases — with no human in the loop for the bulk of the work.
 
 An organization should be able to:
 

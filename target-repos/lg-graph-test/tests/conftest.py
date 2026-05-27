@@ -1,34 +1,21 @@
-from collections.abc import Generator
-
+import os
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
+from fastapi.testclient import TestClient
 
-from app.database import Base, get_db
-from app.main import app
+# Force a per-test sqlite file before app modules import the engine.
+os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
 
-TEST_DATABASE_URL = "sqlite://"
+from app.database import Base, get_db  # noqa: E402
+from app.main import app  # noqa: E402
 
-engine = create_engine(
-    TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-@pytest.fixture(autouse=True)
-def reset_db() -> Generator[None, None, None]:
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
+TEST_DATABASE_URL = "sqlite:///./test.db"
+test_engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
+TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 
-@pytest.fixture()
-def db_session() -> Generator[sessionmaker, None, None]:
+def override_get_db():
     db = TestSessionLocal()
     try:
         yield db
@@ -36,15 +23,16 @@ def db_session() -> Generator[sessionmaker, None, None]:
         db.close()
 
 
-@pytest.fixture()
-def client(db_session) -> Generator[TestClient, None, None]:
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
+app.dependency_overrides[get_db] = override_get_db
 
-    app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
-        yield test_client
-    app.dependency_overrides.clear()
+
+@pytest.fixture(autouse=True)
+def _reset_db():
+    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.create_all(bind=test_engine)
+    yield
+
+
+@pytest.fixture
+def client():
+    return TestClient(app)
