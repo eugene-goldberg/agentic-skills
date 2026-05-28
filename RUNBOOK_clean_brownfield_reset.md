@@ -152,6 +152,26 @@ of your config commit.
 > rather than being cherry-picked by hand each time. Filed as a
 > follow-up under the runbook's "open gaps" section.
 
+**Also append `graphify-out` to `.gitignore` if not already present.**
+Earlier sprints (documents_2 BL-0002/BL-0007) had QA-merge errors when
+the indexer's `graphify-out` symlink got swept into agent-branch commits
+via `git add -A`. The orchestrator's `fast_forward_target` now does
+pre-merge symlink cleanup (A35 fix #2 in agentic-skills commit
+`0cddb43`) so the main-checkout side is handled — but for belt-and-
+suspenders defense, also gitignore the symlink on the new agent branch:
+
+```bash
+cd "$TARGET_PATH"
+if ! grep -q '^graphify-out$' .gitignore 2>/dev/null; then
+  echo 'graphify-out' >> .gitignore
+  git add .gitignore
+  git commit -m "harness: ignore graphify-out indexer symlink (A35)"
+fi
+```
+
+This prevents the symlink from EVER being tracked on any future
+agent worktree's commit.
+
 ---
 
 ## Step 2 — Strip `_brownfield/` from the new branch
