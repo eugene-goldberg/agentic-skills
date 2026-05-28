@@ -1026,6 +1026,32 @@ async def run_brief(
                                reason=f"QA doctrine failed for {bl_id} (stop_on_qa_doctrine_failure)")
                     return
 
+            # A37: QA merge failed independent of doctrine. Engineer-merge-
+            # failure aborts under stop_on_failure by symmetry — QA must too,
+            # otherwise the branch ships engineer code without QA's
+            # reinforcement tests. Common trigger before A35 fix #2 landed:
+            # graphify-out symlink collision on the target checkout when the
+            # agent branch's tracked copy can't FF over an untracked
+            # working-tree symlink (documents_2 BL-0002 + BL-0007 forensic).
+            # Skip reindex_after_qa + scorer when QA didn't merge — there is
+            # no QA-added content to reindex against, and scoring an unmerged
+            # QA would record metrics that don't reflect the agent_branch.
+            if qa_doc_ok and not qa_merged:
+                yield _evt(
+                    "qa_merge_failed",
+                    bl_id=bl_id,
+                    summary=(qa_outcome or {}).get("doctrine_summary"),
+                )
+                summary["bls"].append(per_bl)
+                bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "merged_no_qa"})
+                _checkpoint(current_bl=None)  # A7
+                yield _evt("bl.done", bl_id=bl_id, outcome="merged_no_qa")
+                if stop_on_failure:
+                    yield _evt("aborted",
+                               reason=f"QA did not merge {bl_id} despite passing doctrine")
+                    return
+                continue
+
             # Reindex post-QA (QA may add characterization tests)
             async for e in _run_indexers(repo_dir, f"reindex_after_qa.{bl_id}"):
                 yield e
