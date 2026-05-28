@@ -283,6 +283,10 @@ def validate_engineer(
                 f"{', '.join(changed[:5]) or '(no files)'}>"
             )
 
+        # A36 fix #4: tablename consistency between new SQLModel classes
+        # and the migrations that create their tables.
+        _check_tablename_consistency(repo_root, changed, acc)
+
     if retrieval_log is not None:
         n = _count_grounded_retrieval(retrieval_log)
         if n < MIN_GROUNDED_RETRIEVAL_CALLS:
@@ -292,6 +296,140 @@ def validate_engineer(
             )
 
     return _finalize("engineer", acc)
+
+
+_SQLMODEL_TABLE_RE = re.compile(
+    r"^class\s+([A-Za-z_]\w*)\s*\([^)]*\btable\s*=\s*True\b[^)]*\)\s*:",
+    re.MULTILINE,
+)
+_TABLENAME_RE = re.compile(
+    r'__tablename__\s*=\s*["\']([^"\']+)["\']',
+)
+_OP_CREATE_TABLE_RE = re.compile(
+    r"""op\.create_table\s*\(\s*["']([^"']+)["']""",
+)
+
+
+def _parse_models_for_tables(content: str) -> dict[str, str]:
+    """Extract {class_name: tablename} mapping from a models.py file body.
+
+    - If a class with `table=True` sets `__tablename__`, that string is the
+      tablename.
+    - Otherwise, SQLModel/SQLAlchemy default is the lowercased class name
+      with no separator (e.g., WorkspaceMember -> workspacemember).
+
+    The __tablename__ assignment must appear within the class body (i.e.
+    between this class and the next top-level `class` definition). We use
+    a coarse split on `^class ` to scope.
+    """
+    result: dict[str, str] = {}
+    # Split file into segments at top-level `class ` boundaries; first
+    # segment is module-prelude, then one segment per class.
+    segments = re.split(r"(?m)(?=^class\s+[A-Za-z_]\w*\s*\()", content)
+    for seg in segments:
+        cls_match = _SQLMODEL_TABLE_RE.search(seg)
+        if not cls_match:
+            continue
+        cls_name = cls_match.group(1)
+        # __tablename__ inside this class segment?
+        tn_match = _TABLENAME_RE.search(seg)
+        if tn_match:
+            result[cls_name] = tn_match.group(1)
+        else:
+            result[cls_name] = cls_name.lower()
+    return result
+
+
+def _parse_migration_table_names(content: str) -> set[str]:
+    """Extract the set of table names created by op.create_table calls."""
+    return set(_OP_CREATE_TABLE_RE.findall(content))
+
+
+def _check_tablename_consistency(
+    repo_root: Path, changed_files: list[str], acc: dict
+) -> None:
+    """A36 fix #4: assert new SQLModel tables match their migration names.
+
+    If the engineer's commit adds/modifies BOTH a models file AND an
+    alembic migration in the same diff, ensure every newly-table=True
+    class has a corresponding op.create_table call with the matching
+    name (either the class's __tablename__ if set, or the SQLModel
+    default of lowercased class name).
+
+    Records a `missing` violation per mismatch — triggers doctrine_check
+    incomplete → R10.1 retry with the focused fix prompt.
+
+    Tolerant by design:
+    - If only models OR only migrations changed (not both), skip.
+    - If a model class is modified but not newly table=True, the
+      mismatch may be pre-existing — we still report it (defense vs
+      drift), but only against the files in the diff.
+    - Path tolerance: walks any `models*.py` under the diff and any
+      `alembic/versions/*.py` under the diff. No assumption about
+      `backend/app/` prefix (some templates use `app/`).
+    """
+    model_files = [
+        f for f in changed_files
+        if (f.endswith("models.py") or "/models/" in f) and f.endswith(".py")
+    ]
+    migration_files = [
+        f for f in changed_files
+        if "alembic/versions/" in f and f.endswith(".py")
+    ]
+    if not model_files or not migration_files:
+        return
+
+    declared: dict[str, str] = {}  # class_name -> expected tablename
+    for rel in model_files:
+        path = repo_root / rel
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        declared.update(_parse_models_for_tables(content))
+
+    migration_names: set[str] = set()
+    for rel in migration_files:
+        path = repo_root / rel
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        migration_names |= _parse_migration_table_names(content)
+
+    if not declared or not migration_names:
+        return
+
+    # For every declared model whose expected tablename is NOT in the
+    # migration name set, look for a close-by mismatched name (snake_case
+    # variant) to give a useful error message.
+    for cls_name, expected in declared.items():
+        if expected in migration_names:
+            continue
+        # Try to find a snake_case variant in the migration names
+        snake = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", cls_name).lower()
+        if snake in migration_names and snake != expected:
+            acc["missing"].append(
+                f"<tablename mismatch (A36): SQLModel class `{cls_name}` "
+                f"resolves to table `{expected}` (default lowercased class "
+                f"name, no __tablename__ override), but the migration "
+                f"creates `{snake}`. Either set `__tablename__ = \"{snake}\"` "
+                f"on the model OR change the migration to "
+                f"`op.create_table(\"{expected}\", ...)`. The project's "
+                f"existing convention (per other migrations) determines "
+                f"which side to fix.>"
+            )
+        # If the expected name is just absent and no near-miss either,
+        # it could be that the engineer wrote a partial migration. Still
+        # report it.
+        elif not any(expected in n or n in expected for n in migration_names):
+            acc["missing"].append(
+                f"<missing migration table (A36): SQLModel class `{cls_name}` "
+                f"with `table=True` declares table `{expected}`, but no "
+                f"`op.create_table(\"{expected}\", ...)` call is present in "
+                f"the migration files in this commit. Migration tables found: "
+                f"{sorted(migration_names) or '(none)'}.>"
+            )
 
 
 def _changed_files(repo_root: Path, base_ref: str) -> list[str]:
