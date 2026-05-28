@@ -1,86 +1,94 @@
 ---
 name: arch-active-branch
-description: Active work location as of 2026-05-24 EOD — branch architect-prereqs at 7ffad52; pushed to public GitHub https://github.com/eugene-goldberg/agentic-skills. Target repo wiped and re-cloned to vanilla; first BL ever merged through full A18+A19+A20+A21+A22+A24+A25+A26+WI3A+A32 stack.
+description: Active work location as of 2026-05-28 morning — branch architect-prereqs at 05e8451. A36 (4-part), A35 fix #2, A37, A40 all shipped + validated against documents_2 (full 8-BL sprint) and documents_3 (clean 3-BL validation). doctrine_meta + closure_check confirmed operational. 1 meta-agent proposal pending rejection (R9 graph-payload — evidence contradicted by citations).
 metadata:
   type: project
 ---
 
-Active work branch: **`architect-prereqs`** (off `sprint-2-orchestrator@710992b`). Tip at memory-write time: **`7ffad52`**, 45+ commits ahead. **Pushed to `origin` (public GitHub).**
+Active work branch: **`architect-prereqs`** (off `sprint-2-orchestrator@710992b`). Tip: **`05e8451`**, in sync with origin. **Public GitHub:** https://github.com/eugene-goldberg/agentic-skills.
 
-## Public GitHub
+## What landed this session (2026-05-27 PM → 2026-05-28 morning)
 
-- URL: https://github.com/eugene-goldberg/agentic-skills (PUBLIC)
-- Default branch: `architect-prereqs` (the current frontier)
-- 6 branches mirrored: `main`, `skills_with_graphs`, `webapp`, `brownfield-production`, `sprint-2-orchestrator`, `architect-prereqs`
-- README at repo root is the synthesized reviewer entry (13 sections, ~400 lines).
-
-## What landed today (2026-05-24)
-
-### Framework hardening — committed on architect-prereqs
+### Framework hardening — 11 commits on architect-prereqs
 
 | Commit | Item | Effect |
 |---|---|---|
-| `9142263` | gate(A21/A22/A25b/A26) | Truthful aggregation + lowercase compose name + infra_fail kind + 5GB disk pre-flight |
-| `58d9468` | brownfield(A25a/A19/A20/WI3A) | Infra-aware extractor + per-feature BL-0001 reset + canonical brief.md + sibling-feature touch guard |
-| `b2ed5c4` | docs(ledger+memory) | A19-A26 marked done; A27 (per-feature branch), A28-A31 (gate throughput) filed; arch_gate_throughput.md memory |
-| `839cc67` | chore(lg-SKILLS) | Pre-existing dirty briefs/skills committed (Group A) |
-| `d0d33d9` | docs(README) | Reviewer entry point ~400 lines synthesizing 8 governance docs |
-| `3c64b43` | docs(README §2) | Added "The team" section up front |
-| `7ffad52` | doctrine(qa): R14 | Test design constraints to prevent gate hangs (R14.1 TestClient, R14.2 Alembic DDL, R14.3 timeout discipline) |
+| `911d099` | docs: RUNBOOK_clean_brownfield_reset.md | Procedural map for fresh-fork brownfield runs |
+| `a093109` | docs(runbook): Step 1.5 harness cherry-pick + conditional push | Captures real gaps hit during documents_2 reset |
+| `116cce4` | ledger(A36) | PO retrieval-coverage gap forensic |
+| `bd00b34` | ledger(A37-A41) | 4 findings + A38 withdrawal |
+| `16d148c` | docs(CLAUDE.md) | Correct doctrine_meta + closure_check claims (both operational, not pending) |
+| `6f0551c` | fix(A36.2) | PO prompt layer-coverage requirement |
+| `1167300` | fix(A36.3 + A40) | Engineer prompt tablename rule + auto-fix tooling |
+| `660efd0` | fix(A36.4) | Pre-merge SQLModel/migration tablename validator + 14 tests |
+| `0cddb43` | fix(A35.2) | fast_forward_target pre-merge graphify-out cleanup + 3 tests |
+| `7faaf37` | fix(A37) | qa_merge_failed handler in run_brief + 3 tests |
+| `05e8451` | docs(runbook) | Step 1.5 graphify-out gitignore belt-and-suspenders |
 
-### Target repo (full-stack-fastapi-template)
+**23 unit tests added across the session.** All pass.
 
-Wiped + re-cloned from upstream FastAPI on 2026-05-24 PM (operator approved). Lost: 4 sprints' worth of prior work (Team Collaboration, Notifications, api-keys, RBAC) + 47 agent branches. Preserved & restored:
-- `.agentic-skills.json` (agent_branch=`agentic-skills-work`, NOT `-v3`)
-- `scripts/regression_gate.sh`
-- `compose.gate.yml`
-- `.git/info/exclude` entry for events.jsonl
+### Target repo state
 
-Target's `agentic-skills-work` branch tip: **`c7ea13e`** (A32 gate fix). Above it: `801847d` (BL-0001 — first crew code shipped on fresh target).
+- `agentic-skills-work` (documents_1 era) — preserved
+- `agentic-skills-work-documents_2` — 8 BLs landed (1 silent QA-merge incident on BL-0002/BL-0007 → root-caused as A35+A37 → fixed)
+- `agentic-skills-work-documents_3` — 3 BLs landed clean (validation sprint, zero R10 retries)
 
-## Sprints run today on fresh target
+## Sprints run this session
 
 | Sprint | Run ID | Outcome |
 |---|---|---|
-| documents (1st) | run-20260524T173501Z-653b2f | Aborted — events.jsonl tracked → merge blocker (A24) |
-| documents (resubmit) | run-20260524T180834Z-3bbf81 | Aborted on BL-0201 engineer_unmerged — A21/A22/A25/A26 root causes |
-| documents_1 (1st) | run-20260524T200334Z-1b6c40 | Aborted — QA-side gate inconclusive on baseline test failures (A19 first-real test) |
-| documents_1 (clean) | run-20260524T220528Z-f56070 | **BL-0001 merged successfully** (sha `801847d5`); QA-side gate hung 30+ min on `test_alembic_upgrade_downgrade_upgrade_round_trip` → operator killed → A32 root-cause + two-layer fix shipped |
+| documents_2 | `run-20260527T160519Z-9811fa` | 8/8 BLs merged, ~7h wall, 1 silent QA-merge degradation (BL-0002/BL-0007) → A35/A37 root cause |
+| documents_3 | `run-20260528T013535Z-ed1a60` | 3/3 BLs merged clean, ~2.5h wall, zero R10 retries; engineer pre-emptively wrote A36-compliant migration guards (prompt-layer awareness reached subprocess); doctrine_meta produced 1 novel proposal (rejected on operator review) |
 
-**First BL-0001 production merge against the fresh, clean baseline** = `801847d` on target's `agentic-skills-work`.
+### documents_3 validation results (all four A-fix checkpoints passed)
 
-## Open ledger items (architect-prereqs DESIGN_SHORTCOMINGS.md)
+1. **PO layer-coverage:** 6/6 layer citations per BL × 3 BLs
+2. **graphify-out merge errors:** 0
+3. **qa_merge_failed events:** 0
+4. **Tablename validator triggers:** 0 needed (engineer prevented the bug proactively)
 
-| ID | Class | Status |
+## Open ledger items (DESIGN_SHORTCOMINGS.md)
+
+| ID | Status | Notes |
 |---|---|---|
-| A8 | enforcement-gap (R9 post-validator) | open |
-| A9 | resource-leak (gate subprocess pgroup leak) | open; closes in Move 3 |
-| A11 | enforcement-gap (R9 streaming-side) | open; depends on A8 |
-| A27 | per-feature branch isolation | deferred until parallel sprints justify |
-| A28 | Playwright --workers 1 → 4 | one-line fix, defer until first clean green sprint |
-| A29 | PRE-phase result cache | ~50% gate speedup per sprint after first BL |
-| A30 | Test Impact Analysis | 5-20× reduction on focused changes |
-| A31 | Tiered gate (per-BL fast, sprint-end full) | restructures merge contract |
-| **A32** | **gate-hang from QA test bugs** | **CLOSED** by c7ea13e (target) + 7ffad52 (doctrine R14) |
-| A33 | `.latest` symlink not pointing at current run | minor, deferred |
+| A8 / A9 / A11 | open (carry-forward) | R9 post-validator gaps; gate pgroup leak |
+| A27 / A28 / A29 / A30 / A31 | open (carry-forward) | branch isolation; gate throughput tier |
+| A32 | CLOSED 2026-05-25 | test hang via R14 + pytest timeout |
+| A33 | minor open | `.latest` symlink |
+| **A35** | **fix #2 CLOSED 2026-05-28** | graphify-out pre-merge cleanup in fast_forward_target |
+| **A36** | **CLOSED 2026-05-28** | Three-layer defense: PO grounding + engineer prompt + pre-merge validator |
+| **A37** | **CLOSED 2026-05-28** | qa_merge_failed handler symmetric with engineer-merge path |
+| A38 | withdrawn | subsumed by A36 fix #2 (route layer covered) |
+| **A39** | new this session, open | regression_gate parser conflates build-failure with all-tests-regressed |
+| **A40** | **CLOSED 2026-05-28** | Engineer prompt directs use of formatter --apply/--fix |
+| **A41** | new this session, open | meta-agent prompt git contradiction + 0-proposals observability gap |
+| **A43 candidate** | new this session, not yet filed | meta-agent verify-before-claim discipline (R9 proposal evidence contradicted by citations) |
 
-## Process state at handoff
+## What's operational (corrected this session)
+
+- ✅ **doctrine_meta** — `webapp/backend/app/services/orchestrator.py::_doctrine_meta_flow` + `skills/brownfield/brownfield-production-incremental-doctrine-meta/SKILLS.md`. Confirmed running after every `sprint_complete` event when `run_doctrine_meta=True` (default).
+- ✅ **closure_check** — `webapp/backend/app/services/closure_check.py`. Fires after doctrine_meta; emits `orchestrator.closure_check.{start,done}` with `violation_count` + `by_kind`. Verified 0 violations across both sprints this session. **Note:** docker container scope unverified — documents_2 ended with 8 stale per-BL containers but closure_check reported 0 violations. Either it doesn't scan docker or its pattern misses per-BL naming. Latent I-3 bug worth confirming next session.
+
+## Process state at handoff (2026-05-28 morning)
 
 | Process | State |
 |---|---|
-| uvicorn | PID 98752 alive on port 8000 |
-| vite | port 5173 |
-| docker stack | torn down clean (no orphan containers) |
-| Active sprints | none (last killed by operator after A32 investigation) |
-| Worktrees on target | main checkout only (`agentic-skills-work` @ c7ea13e) |
-| Free disk | ~50 GB |
+| uvicorn (port 8000) | **STOPPED** (PID 78696 killed during handoff cleanup) |
+| milvus-standalone | UP ~23h (infra service, leave running) |
+| docker stale stacks | cleared (6 per-BL containers + 2 app-db volumes purged) |
+| Active sprint | none |
+| `.orchestrator-state/live/` | empty |
+| Worktrees on target | main checkout only on `agentic-skills-work-documents_3` |
+| Free disk | (not measured this handoff; was ~50 GB at prior) |
 
-## Pending for next session
+## Pending for next session (priority order)
 
-1. **Test the A32 fix end-to-end.** Submit a fresh sprint that includes a Q&A pattern → confirm pytest timeout fires at 120s rather than hanging.
-2. **A18-followup migration** — relocate the two `<agentic-skills>/sprint_briefs/` files to `<target>/_brownfield/features/<slug>/`, delete `sprint_briefs/` dir.
-3. **Move 3** (ManagedSubprocess for A9) — closes structurally.
-4. **Batches C + D** of ARCHITECT_PLAN — framework-reviewer + scheduled observer.
-5. **A28** — one-line fix to playwright workers=4 once green-path proven.
+1. **Decide R9 proposal disposition** — reject (recommended; see CONTINUATION_PROMPT.md §7) + file A43 + Layer-1 fix to meta-agent SKILLS.md.
+2. **Verify closure_check docker scope** — read closure_check.py + replay against documents_2 trace archive. ~15 min.
+3. **A39** — `regression_gate.py` parser fix (build-failure → suppress downstream-test "regression" entries).
+4. **A41** — meta-agent SKILLS.md prompt contradiction fix.
+5. **Extend documents_3 to all 8 BLs** to validate full pipeline at scale (not urgent; 3-BL pass already validated changed paths).
+6. **Move 3** (ManagedSubprocess for A9) — structural close of subprocess pgroup leak class.
+7. **Batches C + D** of ARCHITECT_PLAN — framework-reviewer + scheduled observer.
 
-Source: commit log on `architect-prereqs`, target commit log on `agentic-skills-work`, `DESIGN_SHORTCOMINGS.md`, `ARCHITECT_PLAN.md`.
+Source: commit log on `architect-prereqs`, `DESIGN_SHORTCOMINGS.md`, events.jsonl for both sprints, `.planning/doctrine_proposals/`.
