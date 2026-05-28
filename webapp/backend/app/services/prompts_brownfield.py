@@ -179,12 +179,72 @@ You may read them for context if helpful, but commits that modify
 `_brownfield/features/<other>/...` will be rejected by the doctrine
 validator and the orchestrator will refuse to merge your branch.
 
+## Codebase Intelligence Protocol — layer-coverage requirement (A36)
+
+The doctrine's R5 floor of ≥3 grounded retrieval calls is a **count**
+floor, not a **coverage** floor. For every BL that introduces or
+extends persistent state, a UI surface, or a new route, your retrieval
+evidence MUST span **multiple layers** of the target — not three
+queries against the same file.
+
+For each BL, identify which of the following layers it touches, then
+cite at least one retrieved chunk per touched layer in the BL's
+`codebase_context.md`. Mark the citation with the layer name in
+parentheses:
+
+- **model layer** — `models.py`, dataclasses, SQLModel/Pydantic classes
+- **migration layer** — `alembic/versions/*.py`, schema-change scripts
+  (any BL that adds/changes a model MUST include a migration-layer
+  citation showing existing `op.create_table` / `op.add_column` calls
+  so the engineer matches the project's naming convention)
+- **test layer** — `tests/**/*.py`, conftest, fixtures (any BL whose
+  diff will touch shared fixtures MUST include a test-layer citation)
+- **route layer** — `api/routes/*.py`, frontend `routes/**/*.tsx`,
+  router registration sites
+- **dependency layer** — `api/deps.py`, dependency-injection wiring,
+  middleware
+- **frontend build layer** — `routeTree.gen.ts`, generated artifacts,
+  lint config (`biome.json`, `.eslintrc`), `tsconfig.build.json`,
+  build scripts (any frontend BL MUST include a frontend-build-layer
+  citation)
+
+**Per-BL `codebase_context.md` template addition.** Add this block:
+
+```
+## Retrieval evidence by layer
+- **model:** <file:line> — <one-line why this is the convention>
+- **migration:** <file:line> — <one-line why this is the convention>
+- **test:** <file:line> — <one-line>
+- **route:** <file:line> — <one-line>
+- **dependency:** <file:line> — <one-line>
+- **frontend build:** <file:line> — <one-line>   (frontend BLs only)
+
+(Mark layers as "n/a — this BL does not touch <layer>" if genuinely
+out of scope. Marking a layer n/a is a claim; the doctrine validator
+will spot-check that no diff in the engineer's commit touches a layer
+marked n/a here.)
+```
+
+**Why this exists.** Sprint `run-20260527T160519Z-9811fa` BL-0001
+shipped a SQLModel `WorkspaceMember` class with no `__tablename__`
+override (correctly matching the default `Item`/`User` convention)
+but the Alembic migration in the same commit used
+`op.create_table('workspace_member', ...)` (snake_case) — a different
+convention. SQLModel emitted `INSERT INTO workspacemember` against a
+DB that only had `workspace_member` → 16 test failures, 1 wasted
+R10 cycle. The engineer's `eng_patterns.md` cited model-layer
+analogs but had no migration-layer citation, because the PO's
+grounding requirement only counted retrieval calls. Layer coverage
+prevents this class of defect at the source. See A36 in
+`DESIGN_SHORTCOMINGS.md` for the full forensic.
+
 ## Required completion steps
 
 1. Confirm all four artifacts exist (CODEBASE_CONTEXT.md, every per-BL codebase_context.md, BACKLOG.md, SPRINT_PLAN_C1.md).
-2. `git add -A` then `git commit` with a message of the form:
+2. For every per-BL `codebase_context.md`, confirm the "Retrieval evidence by layer" block is present and each touched layer has at least one citation (file:line). Marking a layer "n/a" is allowed only when the BL genuinely does not touch that layer.
+3. `git add -A` then `git commit` with a message of the form:
    `po(brownfield): decompose brief into N backlog items with codebase context`
-3. Print ONLY this JSON as your final output (no extra prose):
+4. Print ONLY this JSON as your final output (no extra prose):
    {{"status":"complete","backlog_path":".agile-v/BACKLOG.md","context_path":"_brownfield/_codebase_context/CODEBASE_CONTEXT.md","sprint_plan_path":"_brownfield/SPRINT_PLAN_C1.md","item_count":<N>,"commit_sha":"<sha>"}}
 
 Halt conditions (do NOT commit):
@@ -192,6 +252,7 @@ Halt conditions (do NOT commit):
 - Any BL lacks its per-BL codebase_context.md
 - Any BL lacks a REQ mapping
 - Any high-blast-radius BL lacks a feature-flag or compatibility strategy
+- Any BL's `codebase_context.md` lacks the "Retrieval evidence by layer" block, or has fewer than 3 non-"n/a" layer citations
 """
     if artifact_dir != "_brownfield":
         body = body.replace("_brownfield/", f"{artifact_dir}/").replace("`_brownfield`", f"`{artifact_dir}`")
