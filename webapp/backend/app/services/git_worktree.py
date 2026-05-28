@@ -102,9 +102,10 @@ async def fast_forward_target(repo_root: Path, branch: str, target_ref: str = "m
 
     # Refuse to fast-forward only if there are TRACKED modifications that
     # could collide with the merge. Untracked artifacts (graphify-out/, build
-    # caches, etc.) are harmless for a fast-forward and would falsely block
-    # legitimate merges. `git status --porcelain --untracked-files=no` lists
-    # only changes to tracked files.
+    # caches, etc.) are *mostly* harmless for a fast-forward, but git WILL
+    # refuse to overwrite an untracked working-tree file with a tracked one
+    # from the incoming branch — see A35 fix #2 below for the cleanup that
+    # makes the "mostly" actually true.
     code, out, _ = await _run(
         ["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo_root,
     )
@@ -125,6 +126,28 @@ async def fast_forward_target(repo_root: Path, branch: str, target_ref: str = "m
         code, _, err = await _run(["git", "checkout", target_ref], cwd=repo_root)
         if code != 0:
             return {"ok": False, "kind": "error", "error": f"could not checkout {target_ref}: {err.strip()}"}
+
+    # A35 fix #2: pre-merge cleanup of known-disposable indexer artifacts.
+    # The graphify indexer creates a symlink at `<repo>/graphify-out` pointing
+    # at the per-repo cache under ~/.cache/agentic-skills/graphify/. The symlink
+    # is regenerated on every indexer run and contains no commit-worthy data —
+    # but if an agent branch's reindex created the symlink before its commit,
+    # `git add -A` swept it in, and the resulting tracked entry collides with
+    # the main checkout's untracked symlink on FF merge with:
+    #   "error: The following untracked working tree files would be overwritten
+    #    by merge: graphify-out"
+    # This silently degraded documents_2 BL-0002 + BL-0007 (A37 forensic).
+    # Remove the untracked symlink in the main checkout before merging; if the
+    # next indexer run needs it, it'll regenerate. We only remove symlinks, not
+    # regular files, to avoid touching anything genuinely committed.
+    graphify_out = repo_root / "graphify-out"
+    if graphify_out.is_symlink():
+        try:
+            graphify_out.unlink()
+        except OSError:
+            # If we can't remove it, fall through and let the merge surface
+            # the original error — better diagnostic than swallowing here.
+            pass
 
     code, _, err = await _run(["git", "merge", "--ff-only", branch], cwd=repo_root)
     if code != 0:
