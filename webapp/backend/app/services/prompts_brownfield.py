@@ -331,12 +331,63 @@ Use this exact structure (the rubric reads it for the Pattern Fidelity score):
 2. ...
 ```
 
+## Persistent-state consistency rule (A36)
+
+If you introduce a new ORM table class (SQLModel/SQLAlchemy with
+`table=True` / `__tablename__` semantics), the migration you write
+in the SAME commit MUST use the table name that the ORM actually
+emits at runtime:
+
+- If you set `__tablename__ = "<name>"` on the class, the Alembic
+  migration MUST call `op.create_table("<name>", ...)` with that
+  literal string.
+- If you do NOT set `__tablename__`, the ORM default is the lowercased
+  class name with no separator (e.g., `class WorkspaceMember` →
+  `workspacemember`). The migration MUST use that string, NOT a
+  snake_case variant.
+
+Before writing the migration, verify the convention against existing
+migrations:
+
+```bash
+grep -nE "op\.create_table\(['\"]" backend/app/alembic/versions/*.py | head -5
+```
+
+If existing migrations all use single-token lowercase names (no
+underscore), follow that convention. If they use `__tablename__`
+overrides, match that pattern. Inconsistency between model class and
+migration string is the single most common new-table defect class
+(see A36 in `DESIGN_SHORTCOMINGS.md` for the BL-0001 documents_2
+case study — cost one wasted R10 retry cycle).
+
+## Auto-fix tooling rule (A40)
+
+If a regression gate failure reports a lint/format rule violation
+from a tool that advertises auto-fix (biome, ruff, eslint,
+prettier, isort, black, etc.) — look for "Safe fix", "auto-fix
+available", or `--fix`/`--apply` markers in the gate output — run
+the formatter's auto-fix flag and re-stage BEFORE editing the
+file by hand:
+
+```bash
+# Frontend
+bun run check --apply        # or: npx biome check --apply
+# Backend
+ruff check --fix .
+```
+
+Manual edits are reserved for failures the formatter cannot
+auto-fix. Burning an R10 retry cycle on a one-character import-order
+rewrite (as BL-0008 attempt #2 of `run-20260527T160519Z-9811fa`
+did) is the failure mode this rule prevents.
+
 ## Required completion steps
 
 1. `_brownfield/{bl_id}/eng_patterns.md` exists and cites the actual analogs you used.
 2. Run the full impacted-area test suite once more; pre-existing tests must still pass.
-3. `git status` + `git diff --stat` — if you touched more than 5 files for one BL, justify it in the commit body.
-4. `git add -A` then `git commit` with a message of this form:
+3. If this BL touches persistent state: verify the new model's tablename matches the migration's `op.create_table(...)` string per the Persistent-state consistency rule above.
+4. `git status` + `git diff --stat` — if you touched more than 5 files for one BL, justify it in the commit body.
+5. `git add -A` then `git commit` with a message of this form:
    `{bl_id}(brownfield): <short description>`
 
    The commit body MUST include these blocks (the brownfield rubric reads them):
@@ -349,13 +400,14 @@ Use this exact structure (the rubric reads it for the Pattern Fidelity score):
    Files changed: <N> · Lines: +X -Y
    ```
 
-5. Print ONLY this JSON as your final assistant output (no extra prose):
+6. Print ONLY this JSON as your final assistant output (no extra prose):
    {{"status":"complete","bl_id":"{bl_id}","commit_sha":"<full sha>","files_changed":<n>,"tests_added":<n>,"feature_flag":"<name or null>","summary":"<brief>"}}
 
 Halt immediately (do NOT commit) if:
 - You introduced a pattern materially different from your closest analog
 - You modified core legacy code without a feature flag and the change is not strictly additive
 - You added a new top-level dependency without justification in the commit body
+- You added a new ORM table class whose migration uses a different table-name string than the ORM will emit at runtime
 """
     if artifact_dir != "_brownfield":
         body = body.replace("_brownfield/", f"{artifact_dir}/").replace("`_brownfield`", f"`{artifact_dir}`")
