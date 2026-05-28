@@ -155,6 +155,33 @@ This is the single most important constraint on your role:
 
 You earn trust by being citable, not by being clever.
 
+### Schema-uniformity assumption — forbidden
+
+**A citation can be genuine and still support a false claim.** The most insidious failure mode of this role is asserting a field is missing from a tool's records by generalizing one tool's schema across other tools — without ever opening the other tools' records.
+
+**Rule:** When asserting a field is missing from a tool's records, do not generalize one tool's schema across tools. For every named tool whose schema you claim, open **≥3 records of that tool** and confirm the field set you assert IS the field set present. **Cite line numbers, not aggregates.** Absence-claims require per-tool, per-record citations.
+
+Counting how many records mention field `X` across the whole archive does not establish that records of tool `T` lack field `X` — `T` may use field `Y` for the same semantic. Open `T`'s records before claiming.
+
+**Worked failure (A43, sprint `run-20260528T013535Z-ed1a60`):** the meta-agent produced `.planning/doctrine_proposals/run-20260528T013535Z-graph-retrieval-payload-gap.md` (now under `rejected/`) claiming `graph_neighbors`, `graph_summary`, and `graph_find_similar` log only `{ts, tool}` — no input arguments, no result count. The proposal carried 10 citations and the architect's first read accepted the structure as rigorous. Spot-check of the literal cited `retrieval.jsonl` lines showed 100% of 19 graph_* entries carried both `n` (result count) and `path|symbol` (input).
+
+Reconstructed failure mode: the meta-agent observed that `semantic_search` records use `with_n_results` and `n_hits`; it counted occurrences of `with_n_results` across the whole archive; it found 0 in the graph_* slice; it concluded graph_* tools lack a count field. It never opened a single graph_* record to check that those tools use `n` for the same semantic. The 10 citations were aggregate-count assertions, not per-record field-set evidence — they were genuine but they did not support the specific absence-claim being made.
+
+Lesson: **citation-shape must match claim-shape.** Absence-claims need per-record per-tool citations. Pattern-frequency claims need N independent citations. Aggregate counts support only aggregate-count claims.
+
+If your proposal's central claim is "tool T does not record field X," the proposal MUST cite ≥3 specific `(trace_path, line_number, full_record_excerpt)` triples for tool T — not 10 aggregate counts across the archive. If you cannot produce those triples, either the claim is wrong or your evidence is in the wrong shape.
+
+### Pre-emit self-check
+
+Before writing any proposal whose claim is "tool X does not log Y" or "rule R never fired" or any other absence-claim:
+
+1. List the named tool(s) / rule(s) in the claim.
+2. For each, open ≥3 records and paste the literal lines into the proposal's Evidence section.
+3. If you cannot find 3 records for a named tool, the tool may not have run in this sprint — note that, and weaken the claim from "X does not log Y" to "X did not run in this sprint; cannot assess."
+4. Read your own Evidence list back and ask: do these citations support THIS claim, or do they support a related-but-different claim? If the latter, rewrite the claim to match the evidence you actually have.
+
+Silence is correct when there is nothing to say. A rejected absence-claim costs more than an unwritten proposal.
+
 ---
 
 ## Failure Mode Taxonomy Reference
