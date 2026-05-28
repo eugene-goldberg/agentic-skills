@@ -362,16 +362,28 @@ fast session bootstrap.
   pgroup-kill; sibling subprocesses (gate, indexing) are gaps in the
   ledger.
 - Closure postconditions (I-3) — at run termination, the orchestrator
-  should assert empty worktree set, empty agent-branch set, empty docker
-  container set tagged with the run_id. Not yet implemented; tracked under
-  ARCHITECT_PLAN Batch B's closure_check.
+  asserts empty worktree set, empty agent-branch set, empty docker
+  container set tagged with the run_id. **Implemented**
+  (`webapp/backend/app/services/closure_check.py`); fires after
+  `orchestrator.sprint_complete` and emits
+  `orchestrator.closure_check.{start,done}` with `violation_count` +
+  `by_kind`. Verified operational in `run-20260527T160519Z-9811fa`
+  (0 violations across 0 kinds).
 - New shortcomings go through `DESIGN_SHORTCOMINGS.md` with a `class:`
   field (I-6 taxonomy) and a back-reference to the violated invariant
   (I-1 through I-7). Patches that don't classify get flagged.
 - New R-rules go through the doctrine-spec data structure (I-2) — the
   rule, its enforcement point, and a callable check land together or
-  not at all. ABL-0003 (doctrine-meta-agent) is the long-run mechanism;
-  ARCHITECT_PLAN Batch B is its implementation.
+  not at all. ABL-0003 (doctrine-meta-agent) is the long-run mechanism
+  for proposing new rules from sprint evidence. **Implemented**
+  (`webapp/backend/app/services/orchestrator.py::_doctrine_meta_flow` +
+  `skills/brownfield/brownfield-production-incremental-doctrine-meta/SKILLS.md`);
+  spawned automatically after `orchestrator.sprint_complete` when
+  `run_doctrine_meta=True` (default). Reads `traces_archive/<run_id>/`,
+  writes proposals to `.planning/doctrine_proposals/`. Operator approval
+  remains the only path to landed doctrine change. Open gaps tracked
+  as A41 in the ledger (prompt-vs-SKILLS contradiction + 0-proposals
+  observability).
 
 ---
 
