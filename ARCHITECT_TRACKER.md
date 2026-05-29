@@ -88,6 +88,40 @@
 
 ---
 
+## Batch E — I-2 structural tightening (PROPOSED 2026-05-28, awaiting authorization)
+
+**Scope:** the overdue I-6 response to the 8-instance I-2 enforcement-gap
+class. Proposed in `ARCHITECT_PLAN.md` §9.2 from `EVALUATION_2026-05-28.md`.
+NOT part of the 2026-05-23 authorization — operator gate pending.
+
+| ID | Item | Status | Commit | Verification |
+|---|---|---|---|---|
+| E-1 | `doctrine_spec.py` data structure (rule → enforcement_point → check → test_ref) | pending (proposed) | — | spec lists every R-rule with all four fields |
+| E-2 | `test_doctrine_contract.py` CI meta-test | pending (proposed) | — | adding a rule w/o enforcement fails CI (negative control) |
+| E-3 | Close R9 graph-floor gap (A8 + A11) | pending (proposed) | — | zero-`graph_*` synthetic run → floor fires |
+| E-4 | Backfill R14 + layer-coverage (A36) into spec | pending (proposed) | — | R14 + A36 are first-class spec entries with checks |
+
+**Batch E gate:**
+- [ ] Meta-test bites on a rule added without enforcement
+- [ ] R9 graph-floor fires on zero-`graph_*` run
+- [ ] A8, A11, A36 resolved in `DESIGN_SHORTCOMINGS.md` w/ back-ref to E-1..E-4
+
+---
+
+## Batch G — Governance hygiene (PROPOSED 2026-05-28)
+
+**Scope:** doc/ledger drift surfaced by `EVALUATION_2026-05-28.md`
+(`ARCHITECT_PLAN.md` §9.3). Architect-owned accuracy maintenance.
+
+| ID | Item | Status | Commit | Verification |
+|---|---|---|---|---|
+| G-1 | Sync `ARCHITECTURE_INVARIANTS.md` to shipped code (I-3, I-7, add R14 to I-2 table) | pending | — | doc no longer calls I-3/I-7 "missing"; R14 in table |
+| G-2 | Reconcile ledger boxes (A32, A35, A37, A43 shipped but open) | pending | — | boxes ticked or annotated "shipped; box stale" |
+| G-3 | Reconcile Batch-B gate boxes (below) vs sign-off prose | pending | — | gate boxes match sign-off, or sign-off downgraded |
+| G-4 | Close A41/A43 observability gaps (proposals_count justification; prompt-vs-SKILLS fix) | pending | — | `proposals_count:0` event carries reasoning |
+
+---
+
 ## Move 2 — closure_check() (I-3)
 
 **Scope:** Strategic move proposed 2026-05-23 in the architect-prereqs strategic plan. Not part of `ARCHITECT_PLAN.md`'s four batches; tracked here because it closes A10 + foundation for A13. Operator approved 2026-05-23 evening.
@@ -145,6 +179,7 @@ After all four batches land, one final exercise validates the loop:
 
 ---
 
-*Last updated 2026-05-23. Plan is `ARCHITECT_PLAN.md`. Source-of-truth
+*Last updated 2026-05-28 (Batch E + Batch G proposed rows added from
+`EVALUATION_2026-05-28.md`). Plan is `ARCHITECT_PLAN.md`. Source-of-truth
 architectural foundation: `ARCHITECTURE_INVARIANTS.md` (delivered by
 Batch A).*

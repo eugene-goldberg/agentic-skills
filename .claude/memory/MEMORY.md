@@ -20,6 +20,8 @@
 - [Arch I-7: self-hardening](arch_self_hardening.md) — doctrine-meta-agent proposes; operator approves; never auto-merges
 - [Claude's architect role](arch_claude_role.md) — operator directive 2026-05-23: Claude is the architect with delivery accountability; codified in CLAUDE.md
 - [Mission framing](arch_mission_framing.md) — operator correction 2026-05-23: mission is the autonomous synthetic crew itself, not operator-time metrics; metrics are symptoms
-- [Active work branch](arch_active_branch.md) — `architect-prereqs` off `sprint-2-orchestrator@710992b`; Batch A done; B/C/D pending
+- [Active work branch](arch_active_branch.md) — `architect-prereqs` tip `b25cf2b` (A43 shipped); live sprint intelligent_kanban in flight
+- [Intelligent Kanban sprint](arch_intelligent_kanban_sprint.md) — first non-Documents brownfield sprint; `run-20260528T144444Z-e4ba3d` on target branch `intelligent_kanban`; 3/7 BLs merged at 4h28m snapshot
+- [Project evaluation 2026-05-28](arch_evaluation_2026-05-28.md) — ~40% of thesis (the right 40%); worker-loop works, crew brain unbuilt; Batch E (I-2 tightening) + G (hygiene) proposed in ARCHITECT_PLAN §9, awaiting operator auth
 - [Gate throughput bottleneck](arch_gate_throughput.md) — playwright 79-test gate at 1 worker, PRE+POST per BL = 80-160 min/BL; A28-A31 in ledger for workers/sharding/TIA/tiered gates
 - [Test hygiene (A32 resolved)](arch_test_hygiene.md) — QA test design caused 30-min gate hang; fixed defense-in-depth at framework (pytest --timeout=120) + doctrine (R14 in QA SKILLS.md); template for future hang-class diagnoses

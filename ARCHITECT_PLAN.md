@@ -11,6 +11,14 @@
 > patterns we ship in this branch make ABL-0003 / ABL-0009 deliverable and
 > close the structural gap noted in the "tactical vs. architect" exchange.
 
+> **Status banner (2026-05-28):** Batches **A** + **B** + **Move 2** landed;
+> Batches **C** + **D** not started. A findings-driven amendment (proposed
+> **Batch E** + governance hygiene) was appended in **§9** following the
+> 2026-05-28 project evaluation (`EVALUATION_2026-05-28.md`). Batch E is
+> **proposed, awaiting operator authorization** — it is not part of the
+> original four batches authorized 2026-05-23. See §9 for the full findings
+> mapping.
+
 ---
 
 ## 0. Pre-flight
@@ -382,5 +390,96 @@ enshrines.
 
 ---
 
-*Authored 2026-05-23. Companion: `ARCHITECT_TRACKER.md`. Architectural
+## 9. Findings-driven amendment (2026-05-28)
+
+Source: `EVALUATION_2026-05-28.md` — objective assessment of the project
+against the thesis's own definition-of-done. This section translates the
+evaluation's findings into plan items. Original Batches A–D are unchanged
+above; this is additive.
+
+### 9.1 Current execution state
+
+| Unit | State | Evidence / open gap |
+|---|---|---|
+| Batch A (memory/invariant artifacts) | ✅ done + verified | `658dcb1`, `a50026a`, `a2fa12a` |
+| Batch B (doctrine-meta-agent) | ✅ done, **with open gaps** | smoke-verified on one archive; A41 (prompt-vs-SKILLS contradiction + 0-proposals observability), A43 (false-evidence) open; tracker Batch-B gate boxes unticked despite sign-off prose |
+| Move 2 (closure_check / I-3) | ✅ done, 2 smokes deferred | `ff04634`, `616e46f`, `1764ab3`, `570b228` |
+| Batch C (framework-reviewer) | ⬜ not started | the adversarial check on meta-agent proposals — currently proposals reach the operator **unchallenged** |
+| Batch D (scheduled observer) | ⬜ not started | the only always-on component; the piece that removes the per-turn bottleneck |
+
+The self-hardening loop the plan defines as "done" (propose → adversarially
+review → continuously observe) is **open at two of four stations** (C, D).
+
+### 9.2 Batch E — I-2 structural tightening *(PROPOSED — awaiting operator authorization)*
+
+**Why now:** the I-2 (doctrine-enforcement-gap) failure class has **8
+instances** (A8, A11, A12, A16, A36, A39, A40, A41) — well past the I-6 `>3`
+threshold that obligates the architect to propose *tightening the invariant*
+rather than another per-site patch. The open cluster (R9 enforcement =
+A8+A11; layer-coverage = A36) is still being handled per-site. This is the
+single highest-value architect move available and is overdue by project
+doctrine. `ARCHITECTURE_INVARIANTS.md` already mandates this machinery under
+"Architectural mandate"; it was never built.
+
+| ID | Item | Goal | Files | Effort | Risk | Rollback |
+|---|---|---|---|---|---|---|
+| E-1 | Doctrine-spec data structure (in code, not prose) | One source of truth: each rule → `{id, floor, enforcement_point, check_callable, test_ref}`. Documentation alone stops being "enforcement." | new `webapp/backend/app/services/doctrine_spec.py` | ~150 LOC | low (additive; nothing reads it until E-2/E-3 wire in) | revert one commit |
+| E-2 | CI meta-test | Assert every doctrine entry has an enforcement point AND a callable check AND a test_ref. Adding a rule without enforcement **fails CI**. Makes I-2 self-policing. | new `webapp/backend/tests/test_doctrine_contract.py` | ~80 LOC | low | revert one commit |
+| E-3 | Close R9 enforcement gap (A8 + A11) | Wire a `graph_*`-call floor (≥1) into the spec + streaming check, same shape as R5/R8. Retires the "advisory only" status. | `streaming` enforcement site + `doctrine_spec.py` | ~60 LOC | medium (touches the live streaming kill path) | feature-flag the floor; revert |
+| E-4 | Backfill R14 + layer-coverage (A36) into the spec | R14 (pytest-timeout) and the PO layer-coverage requirement become first-class spec entries with checks, not prose in SKILLS.md only. | `doctrine_spec.py` + PO post-validation | ~80 LOC | medium | revert |
+
+**Batch E gate:**
+- [ ] `test_doctrine_contract.py` fails when a rule is added without an enforcement point (negative-control proves the gate bites).
+- [ ] R9 graph-floor fires on a synthetic run with zero `graph_*` calls.
+- [ ] A8, A11, A36 marked resolved in `DESIGN_SHORTCOMINGS.md` with back-reference to E-1..E-4.
+
+### 9.3 Batch G — Governance hygiene *(PROPOSED)*
+
+The evaluation surfaced doc/ledger drift the architect is obligated to keep
+accurate (CLAUDE.md responsibility #5).
+
+| ID | Item | Detail |
+|---|---|---|
+| G-1 | Sync `ARCHITECTURE_INVARIANTS.md` to code | It is stamped 2026-05-23 and now lags the code: I-3 (`closure_check.py`) and I-7 (doctrine-meta-agent) both shipped but are still described as "missing/aspirational"; **R14 is absent from the I-2 table entirely.** Update to reflect shipped state. (Stale doctrine doc is itself an I-2 violation.) |
+| G-2 | Reconcile ledger boxes | A32, A35, A37, A43 have fixes shipped (per commits) but open `[ ]` boxes — makes open-count read worse than reality (~17 genuinely open vs 19 by box). Tick or annotate "shipped; box stale." |
+| G-3 | Reconcile Batch-B gate boxes | `ARCHITECT_TRACKER.md` Batch-B gate (lines 55–57) is unticked though the sign-off prose claims end-to-end smoke validation. Tick to match, or downgrade the sign-off to "smoke-only." |
+| G-4 | Close A41/A43 observability gaps | Make the doctrine-meta `proposals_count:0` event carry a justification (so "0 = nothing to say" is distinguishable from "0 = silent failure"); fix the prompt-vs-SKILLS commit contradiction (A41). A43 Layer-1 shipped; Layer-2 remains deliberately deferred (n=1). |
+
+### 9.4 Capability gaps beyond this branch (forward pointer)
+
+These are **not** architect-prereqs work (they belong to `BACKLOG.md` /
+the sprint plan), but the evaluation elevates their priority and the
+sequencing matters:
+
+- **ABL-0002 Triage agent** and **ABL-0004 Escalation Bridge** are the two
+  unbuilt components that most directly remove the human. Today's
+  "self-correction" is hardcoded retry (R10/R10.1/R10.2), not a judging
+  agent that decides retry / rewrite / defer / split / escalate. This caps
+  the *self-correcting* property at "half."
+- **ABL-0007 Cross-project memory** is the weakest crew property
+  (*cumulative*): what's learned on one target does not yet carry to the
+  next as a crew capability — it's carried by the architect + ledger by hand.
+- **Sequencing implication:** **Batch C (framework-reviewer) should land
+  before** the doctrine-meta-agent's proposals are trusted unsupervised —
+  A43 proved a proposal can be confidently wrong and only operator forensics
+  caught it. C is the structural adversarial check that closes that loop.
+
+### 9.5 Operator decisions required
+
+1. **Resolve the success-metric contradiction.** `THESIS.md` §7 names
+   *operator-time < 1 hr* as THE "Success metric"; `CLAUDE.md` +
+   `arch_mission_framing.md` demote it to "a thermometer, not the patient."
+   The two governing docs disagree on what "done" means. Architect needs one
+   authoritative definition to score against.
+2. **Authorize (or decline) Batch E and Batch G.** Batch E is the overdue
+   I-6 structural response; Batch G is governance hygiene. Neither is in the
+   original 2026-05-23 authorization.
+3. **Confirm Batch C/D priority** vs. pausing the prereqs branch to build
+   ABL-0002/0004 — i.e., finish the *self-hardening* loop first, or pivot to
+   the *autonomy* agents that most move the thesis.
+
+---
+
+*Authored 2026-05-23. §9 amendment appended 2026-05-28 from
+`EVALUATION_2026-05-28.md`. Companion: `ARCHITECT_TRACKER.md`. Architectural
 foundation: `ARCHITECTURE_INVARIANTS.md` (delivered by Batch A).*
