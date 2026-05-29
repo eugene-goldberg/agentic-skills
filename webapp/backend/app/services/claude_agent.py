@@ -35,6 +35,22 @@ from pathlib import Path
 from typing import AsyncIterator
 
 
+# A44: asyncio's default StreamReader line buffer is 64 KiB (_DEFAULT_LIMIT =
+# 2**16). The `claude` CLI emits `--output-format stream-json` as ONE
+# newline-delimited JSON event per line, and a single line legitimately carries
+# large payloads — a `Read` tool_result echoes the file content TWICE (the
+# cat -n render in message.content[].tool_result AND the raw file in a top-level
+# tool_use_result.file field), giving ~2.3x inflation, so a ~29 KB source file
+# already produces a >64 KiB line. At the default limit, `proc.stdout.readline()`
+# raises asyncio.LimitOverrunError ("Separator is found, but chunk is longer than
+# limit"), which the broad `except` below converts into a pgroup SIGTERM (exit
+# 143) — killing the agent mid-read before it can write any code. This is exactly
+# what aborted the intelligent_kanban sprint at BL-0004 (boards.py had grown to
+# 32 KB → ~73 KB line). Raise the ceiling far above any realistic stream-json
+# line (large diffs, multi-file tool_results) so readline never trips it.
+STREAM_READER_LIMIT = 64 * 1024 * 1024  # 64 MiB
+
+
 async def _kill_pgroup(proc: asyncio.subprocess.Process, grace_seconds: float = 10.0) -> None:
     """B1: terminate the subprocess AND its descendants via the process group.
 
@@ -291,6 +307,11 @@ async def stream_agent_task(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        # A44: raise the StreamReader line-buffer ceiling from asyncio's 64 KiB
+        # default. stream-json lines routinely exceed 64 KiB (a Read tool_result
+        # for a ~29 KB+ file already does); the default made readline() raise
+        # LimitOverrunError and kill the agent mid-read (the BL-0004 abort).
+        limit=STREAM_READER_LIMIT,
         # B1: spawn in a new session/process-group so we can pgroup-kill the
         # whole subtree (claude + MCP servers + any shell helpers) on cleanup
         # rather than leaking children when SSE disconnects.
@@ -348,6 +369,39 @@ async def stream_agent_task(
                         trace.write_event(evt)
                     yield evt
                     return
+                except ValueError as exc:
+                    # A44 defense-in-depth: with STREAM_READER_LIMIT raised to
+                    # 64 MiB this should never fire, but if a single stream-json
+                    # line ever exceeds even that, label it honestly. NOTE:
+                    # StreamReader.readline() catches the underlying
+                    # asyncio.LimitOverrunError and RE-RAISES it as
+                    # `ValueError(e.args[0])` — which is precisely the
+                    # "ValueError: Separator is found, but chunk is longer than
+                    # limit" seen in the BL-0004 trace — so we catch ValueError
+                    # here, not LimitOverrunError. The buffer is NOT recoverable,
+                    # so we kill and surface a distinct event rather than letting
+                    # the broad `except Exception` mislabel it as a generic error
+                    # the orchestrator reads as "agent produced no source change".
+                    if "chunk is longer than limit" not in str(exc):
+                        raise  # not the overrun ValueError — let it propagate
+                    await _kill_pgroup(proc)
+                    over_evt = {
+                        "type": "_meta",
+                        "phase": "stream_overrun",
+                        "kind": "killed",
+                        "limit_bytes": STREAM_READER_LIMIT,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "reason": (
+                            "A single claude stream-json line exceeded the "
+                            f"{STREAM_READER_LIMIT}-byte reader limit. This is a "
+                            "harness I/O failure, NOT agent non-compliance. See "
+                            "A44 in DESIGN_SHORTCOMINGS.md."
+                        ),
+                    }
+                    if trace is not None:
+                        trace.write_event(over_evt)
+                    yield over_evt
+                    return
                 if not raw:
                     break
                 line = raw.decode(errors="replace").strip()
@@ -390,6 +444,37 @@ async def stream_agent_task(
                 if trace is not None:
                     trace.write_event(evt)
                 yield evt
+
+                # A44 companion: surface a CLI-side API error (e.g. the
+                # `400 ... thinking blocks ... cannot be modified` that hit
+                # BL-0004 attempt 3) as a distinct event. The orchestrator
+                # otherwise only inspects files-on-disk after the run, so an API
+                # failure is silently indistinguishable from "agent produced no
+                # source change" — and burns an R10.1 retry / aborts the sprint
+                # under a false label. This event lets the control flow and the
+                # operator tell the two apart. Follow-up (tracked in A44): have
+                # the orchestrator treat phase=api_error as a RETRIABLE infra
+                # failure rather than a doctrine-incomplete attempt.
+                if (
+                    isinstance(evt, dict)
+                    and evt.get("type") == "result"
+                    and evt.get("is_error")
+                ):
+                    api_evt = {
+                        "type": "_meta",
+                        "phase": "api_error",
+                        "api_error_status": evt.get("api_error_status"),
+                        "subtype": evt.get("subtype"),
+                        "num_turns": evt.get("num_turns"),
+                        "detail": str(evt.get("result", ""))[:500],
+                        "reason": (
+                            "claude CLI returned an API error (not a doctrine "
+                            "decision); distinct from 'agent did no work'. See A44."
+                        ),
+                    }
+                    if trace is not None:
+                        trace.write_event(api_evt)
+                    yield api_evt
 
                 if budget_exceeded:
                     await _kill_pgroup(proc)

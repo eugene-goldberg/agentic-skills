@@ -13,6 +13,7 @@ graphify-out/
 .claude-context/
 reference-repos/*/graphify-out/semantic_cache.json
 reference-repos/*/graphify-out/cache/
+reference-repos/*/graphify-out
 briefs/engineering-work-packets/
 briefs/qa-work-packets/
 *_api*.md
