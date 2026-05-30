@@ -35,6 +35,7 @@ SKILL_PATHS = {
     "engineer":      SKILLS_DIR / "brownfield-production-incremental-engineer" / "SKILLS.md",
     "qa":            SKILLS_DIR / "brownfield-production-incremental-qa" / "SKILLS.md",
     "doctrine_meta": SKILLS_DIR / "brownfield-production-incremental-doctrine-meta" / "SKILLS.md",
+    "acceptance":    SKILLS_DIR / "brownfield-acceptance-agent" / "SKILLS.md",
 }
 
 

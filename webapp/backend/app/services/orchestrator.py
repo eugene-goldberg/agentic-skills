@@ -35,6 +35,7 @@ from app.services import regression_gate as regression_gate_svc
 from app.services import repo_config as repo_config_svc
 from app.services import run_state as run_state_svc
 from app.services import closure_check as closure_check_svc
+from app.services import acceptance_validator as acceptance_validator_svc
 from app.services.brownfield import classify_target, feature_artifact_dir
 from app.services.claude_agent import stream_agent_task
 from app.services.git_worktree import (
@@ -668,6 +669,125 @@ async def _qa_or_scorer_flow(
                 await remove_worktree(repo_dir, wt)
             except Exception:
                 pass
+
+
+# ─── acceptance flow (ABL-0010 — Batch A skeleton) ─────────────────────────
+
+
+async def _gate_stack_present(run_id: str) -> bool:
+    """§E.1 Q7 pre-flight: is a regression-gate docker stack still up for
+    this run? Returns True if any container named ``gate-<run_id>*`` exists.
+
+    Used by ``_acceptance_flow`` to skip-with-warning rather than fight a
+    port collision mid-playwright. A non-empty result is itself a latent
+    I-3 closure_check violation — callers should surface it as
+    ``acceptance.skipped reason=gate_stack_still_up``.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "ps", "--filter", f"name=gate-{run_id}",
+            "--format", "{{.Names}}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except (FileNotFoundError, asyncio.TimeoutError, OSError):
+        # Docker not installed / hung — treat as "not present" rather than
+        # blocking. The acceptance agent itself will fail loudly if docker
+        # is genuinely broken.
+        return False
+    return bool(out and out.decode("utf-8", "replace").strip())
+
+
+async def _acceptance_flow(
+    repo_dir: Path,
+    repo_name: str,
+    run_id: str,
+    feature_slug: str | None,
+    timeout: int = 3600,
+) -> AsyncIterator[dict]:
+    """ABL-0010 Acceptance Agent — Batch A skeleton.
+
+    Runs once per sprint, immediately AFTER ``sprint_complete`` and BEFORE
+    ``doctrine_meta`` / ``closure_check`` (per §E.1 Q3, advisory only —
+    never sets terminal_status=aborted from here).
+
+    **Batch A scope:** locate inputs, perform §E.1 Q7 pre-flight
+    gate-collision check, validate any pre-existing acceptance/ outputs,
+    skip cleanly if the brief is missing. **The agent itself is NOT
+    spawned in Batch A**; Batch B will wire the ``stream_agent_task``
+    call. This skeleton lets us land the plumbing + tests safely first.
+
+    Events:
+      - ``acceptance.skipped`` (reasons: ``no_feature_slug``, ``no_brief``,
+        ``gate_stack_still_up``)
+      - ``acceptance.start``
+      - ``acceptance.validator.{ok,incomplete}``  (Batch A: only on
+        pre-existing outputs; Batch B drives this via R10.1 retry loop)
+      - ``acceptance.done`` (terminal; mirrors doctrine_meta.proposals)
+    """
+    if not feature_slug:
+        yield _evt("acceptance.skipped", reason="no_feature_slug", run_id=run_id)
+        return
+
+    feature_dir = repo_dir / "_brownfield" / "features" / feature_slug
+    brief_path = feature_dir / "brief.md"
+    if not brief_path.exists():
+        yield _evt(
+            "acceptance.skipped",
+            reason="no_brief",
+            run_id=run_id,
+            brief_path=str(brief_path),
+        )
+        return
+
+    if await _gate_stack_present(run_id):
+        # §E.1 Q7: a regression-gate stack is still up for this run.
+        # Surface it; the operator can chase the closure_check leak.
+        yield _evt(
+            "acceptance.skipped",
+            reason="gate_stack_still_up",
+            run_id=run_id,
+        )
+        return
+
+    acceptance_dir = feature_dir / "acceptance"
+    yield _evt(
+        "acceptance.start",
+        run_id=run_id,
+        feature_slug=feature_slug,
+        brief_path=str(brief_path),
+        acceptance_dir=str(acceptance_dir),
+        timeout=timeout,
+        note="batch_a_skeleton_no_agent_spawn",
+    )
+
+    # ── Batch B will spawn the agent here via stream_agent_task ───────
+    # ── Batch A: validate whatever may already exist (lets us ────────
+    #     exercise the validator end-to-end against fixture data). ────
+
+    if acceptance_dir.exists():
+        validation = acceptance_validator_svc.validate_acceptance(acceptance_dir)
+        phase = "acceptance.validator.ok" if validation["ok"] else "acceptance.validator.incomplete"
+        yield _evt(
+            phase,
+            run_id=run_id,
+            ok=validation["ok"],
+            missing=validation["missing"],
+            empty=validation["empty"],
+            summary=validation["summary"],
+        )
+    else:
+        validation = {"ok": False, "missing": [], "empty": [], "summary": "acceptance dir not created (batch A skeleton)"}
+
+    yield _evt(
+        "acceptance.done",
+        run_id=run_id,
+        feature_slug=feature_slug,
+        validator_ok=validation["ok"],
+        acceptance_dir=str(acceptance_dir),
+        batch="A",
+    )
 
 
 # ─── doctrine-meta flow (B-3 / I-7 self-hardening) ─────────────────────────
