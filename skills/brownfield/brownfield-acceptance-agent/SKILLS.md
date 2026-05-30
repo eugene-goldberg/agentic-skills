@@ -271,11 +271,16 @@ You have explicit permission to invoke:
 - **Read / Write / Edit** — restricted to
   `_brownfield/features/<slug>/acceptance/` for your artifacts; read-only
   elsewhere
-- **mcp__retrieval__semantic_search / graph_summary / graph_neighbors /
-  graph_find_similar** — to discover existing helpers, selectors, and
-  fixtures you can reuse for seeding and journeys
 - **Python execution** — for seed scripts; no LLM-side analysis that
   bypasses observable evidence
+
+Note: retrieval MCP tools (`mcp__retrieval__*`) are **NOT** available
+in this run (v1 design choice — the agent reads the codebase directly
+via `Read` + `Grep` rather than through Milvus/graphify). Discover
+existing test helpers and selectors by reading
+`frontend/tests/utils/*.ts` (or the target's equivalent helpers dir)
+and existing spec files. If you find yourself wanting semantic search,
+use `Bash grep -r "<term>" frontend/tests/ backend/tests/` instead.
 
 ---
 
