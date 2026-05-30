@@ -32,3 +32,4 @@ webapp/backend/traces_archive/
 
 # Schedule-wakeup harness lock file.
 .claude/scheduled_tasks.lock
+webapp/backend/screenshots/

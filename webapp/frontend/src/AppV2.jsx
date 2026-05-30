@@ -25,6 +25,10 @@ export function AppV2() {
   const [detail, setDetail] = useState(null);
   const abortRef = useRef(null);
   const logEndRef = useRef(null);
+  // Init-feature bootstrap state
+  const [initStatus, setInitStatus] = useState(null); // null | "pending" | "ok" | "error"
+  const [initResult, setInitResult] = useState(null); // { slug, agent_branch, branch_sha, requirements_path }
+  const [initError, setInitError] = useState(null);
 
   useEffect(() => {
     fetch(`${API}/api/projects`).then((r) => (r.ok ? r.json() : { items: [] }))
@@ -296,12 +300,42 @@ export function AppV2() {
           <label>Feature name</label>
           <input
             value={featureName}
-            onChange={(e) => setFeatureName(e.target.value)}
+            onChange={(e) => { setFeatureName(e.target.value); setInitStatus(null); setInitResult(null); setInitError(null); }}
             placeholder="audit-log, rbac, multi-tenant-workspaces …"
             style={{ flex: 1, minWidth: 240 }}
-            disabled={running}
+            disabled={running || initStatus === "pending"}
           />
+          <button
+            onClick={async () => {
+              setInitStatus("pending"); setInitError(null); setInitResult(null);
+              try {
+                const r = await fetch(`${API}/api/projects/${encodeURIComponent(repo)}/init-feature`, {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ feature_name: featureName }),
+                });
+                const body = await r.json();
+                if (!r.ok) { setInitStatus("error"); setInitError(body.detail || body); return; }
+                setInitStatus("ok"); setInitResult(body);
+              } catch (e) { setInitStatus("error"); setInitError({ error: e.message }); }
+            }}
+            disabled={running || initStatus === "pending" || featureName.trim().length < 2 || !repo}
+            className="v2-secondary"
+            title="Fork a clean-baseline branch from master and apply the harness (gitignore, regression_gate.sh, compose.gate.yml, .agentic-skills.json). Required only for an UNRELATED new feature."
+          >
+            {initStatus === "pending" ? "Initializing…" : "Start clean baseline"}
+          </button>
         </div>
+        {initStatus === "ok" && initResult && (
+          <div className="v2-row" style={{ background: "#1f3b1f", padding: "8px 12px", borderRadius: 4, fontSize: 13 }}>
+            ✅ Branch <code>{initResult.agent_branch}</code> forked from <code>{initResult.main_ref}</code> @ <code>{initResult.branch_sha.slice(0,8)}</code>.
+            Drop REQUIREMENTS.md at <code>{initResult.requirements_path}</code> (optional — you can also just paste the brief below).
+          </div>
+        )}
+        {initStatus === "error" && initError && (
+          <div className="v2-row" style={{ background: "#3b1f1f", padding: "8px 12px", borderRadius: 4, fontSize: 13 }}>
+            ❌ init-feature failed: <code>{initError.error || "unknown"}</code> {initError.message ? `— ${initError.message}` : ""}
+          </div>
+        )}
         <textarea
           className="v2-brief"
           value={brief}

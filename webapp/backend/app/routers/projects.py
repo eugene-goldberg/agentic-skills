@@ -933,6 +933,185 @@ def _brief_hash(brief: str, project_name: str, repo: str) -> str:
 # See _persist_brief_in_worktree + _slugify in app.services.orchestrator.
 
 
+class InitFeatureRequest(BaseModel):
+    """Bootstrap a fresh clean-baseline agent branch for a new feature.
+
+    Replaces the manual RUNBOOK_clean_brownfield_reset.md procedure: fork a
+    new branch off ``main_ref`` (default: ``master``), apply the harness
+    infrastructure (gitignore + scripts/regression_gate.sh + compose.gate.yml),
+    write ``.agentic-skills.json`` pointing ``agent_branch`` at the new
+    branch, and create the empty ``_brownfield/features/<slug>/`` directory
+    ready for ``REQUIREMENTS.md``.
+    """
+
+    feature_name: str = Field(..., min_length=2, max_length=120)
+    main_ref: str | None = Field(None, description="Override the base ref to fork from; defaults to current .agentic-skills.json main_ref or 'master'.")
+    test_cmd: list[str] | None = Field(None, description="Override regression-gate test command; default is ['sh', 'scripts/regression_gate.sh'].")
+
+
+_HARNESS_GITIGNORE_ENTRIES = (
+    "graphify-out",
+    "_brownfield/features/*/events.jsonl",
+)
+
+
+def _run_git(repo_dir: Path, *args: str) -> str:
+    """Run a git command in repo_dir; raise HTTPException with detail on failure."""
+    import subprocess
+
+    res = subprocess.run(
+        ["git", *args],
+        cwd=str(repo_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "git_command_failed",
+                "cmd": ["git", *args],
+                "returncode": res.returncode,
+                "stderr": (res.stderr or "").strip()[:500],
+                "stdout": (res.stdout or "").strip()[:500],
+            },
+        )
+    return (res.stdout or "").strip()
+
+
+@router.post("/{repo}/init-feature")
+def init_feature(repo: str, req: InitFeatureRequest):
+    """Fork a clean-baseline agent branch + apply harness + create feature dir.
+
+    On success returns the slug, the new branch name, the bootstrap commit
+    SHA, and the absolute path where the operator should drop their
+    REQUIREMENTS.md before submitting via /run-brief.
+
+    Idempotency: this endpoint is **not** idempotent. If the branch already
+    exists it returns 409. Re-running after a failed mid-bootstrap requires
+    operator cleanup of the partial branch first.
+    """
+    from app.services.orchestrator import _slugify
+
+    repo_dir = _repo_dir(repo)
+    slug = _slugify(req.feature_name)
+    if not slug or slug == "untitled":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_feature_name", "feature_name": req.feature_name},
+        )
+
+    # Refuse to clobber uncommitted state.
+    status_out = _run_git(repo_dir, "status", "--porcelain")
+    if status_out:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "working_tree_dirty",
+                "message": "Target repo has uncommitted changes; commit or stash before init-feature.",
+                "changes": status_out.splitlines()[:10],
+            },
+        )
+
+    # Refuse to clobber an existing branch.
+    branches = _run_git(repo_dir, "branch", "--list", slug)
+    if branches:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "branch_exists",
+                "branch": slug,
+                "message": f"Branch '{slug}' already exists; delete it or choose a different feature_name.",
+            },
+        )
+
+    # Resolve main_ref from request > existing .agentic-skills.json > "master".
+    main_ref = req.main_ref
+    if main_ref is None:
+        existing_cfg_path = repo_dir / ".agentic-skills.json"
+        if existing_cfg_path.exists():
+            try:
+                main_ref = json.loads(existing_cfg_path.read_text()).get("main_ref")
+            except Exception:
+                main_ref = None
+        if main_ref is None:
+            main_ref = "master"
+
+    # Verify main_ref exists locally.
+    refs_check = _run_git(repo_dir, "rev-parse", "--verify", main_ref)
+    if not refs_check:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "main_ref_not_found", "main_ref": main_ref},
+        )
+
+    # Checkout main_ref then fork new branch.
+    _run_git(repo_dir, "checkout", main_ref)
+    _run_git(repo_dir, "checkout", "-b", slug)
+
+    # --- Apply harness ---
+
+    # 1. .gitignore additions (idempotent merge).
+    gitignore = repo_dir / ".gitignore"
+    existing = gitignore.read_text() if gitignore.exists() else ""
+    additions = [e for e in _HARNESS_GITIGNORE_ENTRIES if e not in existing.split("\n")]
+    if additions:
+        suffix = ("" if existing.endswith("\n") or not existing else "\n") + "\n".join(additions) + "\n"
+        gitignore.write_text(existing + suffix)
+
+    # 2. scripts/regression_gate.sh + compose.gate.yml from canonical templates.
+    templates_dir = Path(__file__).resolve().parents[1] / "templates"
+    scripts_dir = repo_dir / "scripts"
+    scripts_dir.mkdir(exist_ok=True)
+    gate_sh = scripts_dir / "regression_gate.sh"
+    gate_sh.write_text((templates_dir / "regression_gate.sh").read_text())
+    gate_sh.chmod(0o755)
+    (repo_dir / "compose.gate.yml").write_text(
+        (templates_dir / "compose.gate.yml").read_text()
+    )
+
+    # 3. .agentic-skills.json with agent_branch pointing at the new slug.
+    test_cmd = req.test_cmd or ["sh", "scripts/regression_gate.sh"]
+    cfg = {
+        "agent_branch": slug,
+        "main_ref": main_ref,
+        "doctrine": "brownfield",
+        "test_cmd": test_cmd,
+    }
+    (repo_dir / ".agentic-skills.json").write_text(json.dumps(cfg, indent=2) + "\n")
+
+    # 4. Feature artifact directory + .gitkeep so the empty dir survives commit.
+    feature_dir = repo_dir / "_brownfield" / "features" / slug
+    feature_dir.mkdir(parents=True, exist_ok=True)
+    keep = feature_dir / ".gitkeep"
+    if not keep.exists():
+        keep.write_text("")
+
+    # Commit it all on the new branch.
+    _run_git(repo_dir, "add", "-A")
+    commit_msg = (
+        f"chore({slug}): bootstrap feature branch from {main_ref}\n\n"
+        f"Initialized via POST /api/projects/{repo}/init-feature.\n"
+        f"- forked from {main_ref}\n"
+        f"- harness: .gitignore + scripts/regression_gate.sh + compose.gate.yml\n"
+        f"- .agentic-skills.json agent_branch={slug}\n"
+        f"- _brownfield/features/{slug}/ (drop REQUIREMENTS.md here)\n"
+    )
+    _run_git(repo_dir, "commit", "-m", commit_msg)
+    branch_sha = _run_git(repo_dir, "rev-parse", "HEAD")
+
+    return {
+        "slug": slug,
+        "agent_branch": slug,
+        "main_ref": main_ref,
+        "branch_sha": branch_sha,
+        "bootstrap_commit": branch_sha,
+        "requirements_path": str(feature_dir / "REQUIREMENTS.md"),
+        "feature_dir": str(feature_dir),
+    }
+
+
 class RunBriefRequest(BaseModel):
     brief: str = Field(..., min_length=20)
     project_name: str | None = None

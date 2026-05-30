@@ -1,0 +1,104 @@
+# compose.gate.yml — regression-gate overlay.
+#
+# Layered atop compose.yml (not compose.override.yml, which is broken on
+# local Docker Compose v2.21.0 due to the v2.22+ `develop:` watch key).
+# Usage:  docker compose -f compose.yml -f compose.gate.yml ...
+#
+# Provides:
+#   - frontend healthcheck + internal-URL build args
+#   - fe-lint: one-shot lint + typecheck + vite build (bun image)
+#   - playwright: E2E runner using frontend/Dockerfile.playwright
+#
+# Networks: compose.yml declares `traefik-public` as `external: true`,
+# which we cannot flip here (Compose ignores the override). The test_cmd
+# wrapper creates that network idempotently on the host.
+services:
+
+  # Mailcatcher — captures outbound SMTP from backend so reset-password
+  # E2E tests can read the message via its HTTP API on :1080.
+  # Mirrors compose.override.yml mailcatcher (which we can't load).
+  mailcatcher:
+    image: schickling/mailcatcher
+    restart: unless-stopped
+
+  # Backend must point SMTP at the in-network mailcatcher and wait for it.
+  backend:
+    environment:
+      - SMTP_HOST=mailcatcher
+      - SMTP_PORT=1025
+      - SMTP_TLS=false
+      - SMTP_SSL=false
+      - EMAILS_FROM_EMAIL=noreply@example.com
+    depends_on:
+      mailcatcher:
+        condition: service_started
+      db:
+        condition: service_healthy
+      prestart:
+        condition: service_completed_successfully
+
+  # Override frontend build args + add a healthcheck so dependent services
+  # (playwright) can wait for it without a manual sleep.
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_URL: http://backend:8000
+        NODE_ENV: development
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/ >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # One-shot frontend QA: biome lint + tsc typecheck + vite production build.
+  # Uses the bun image (matching the frontend Dockerfile's build stage) so
+  # bun.lock resolves identically.
+  fe-lint:
+    image: oven/bun:1
+    working_dir: /app/frontend
+    volumes:
+      - ./package.json:/app/package.json:ro
+      - ./bun.lock:/app/bun.lock:ro
+      - ./frontend:/app/frontend
+      # Anonymous volume hides the host's node_modules (if any) and gives
+      # the container a writable scratch area for bun install.
+      - /app/frontend/node_modules
+    profiles: [gate-lint]
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        cd /app/frontend
+        bun install --frozen-lockfile
+        bunx biome check --no-errors-on-unmatched ./
+        bun run build
+
+  # Playwright E2E runner — mirrors the orphaned compose.override.yml
+  # definition but without the develop: watch key.
+  playwright:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile.playwright
+      args:
+        VITE_API_URL: http://backend:8000
+        NODE_ENV: production
+    ipc: host
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - VITE_API_URL=http://backend:8000
+      - PLAYWRIGHT_HTML_HOST=0.0.0.0
+      - CI=true
+      - MAILCATCHER_HOST=http://mailcatcher:1080
+    volumes:
+      - ./frontend/blob-report:/app/frontend/blob-report
+      - ./frontend/test-results:/app/frontend/test-results
+    profiles: [gate-e2e]
