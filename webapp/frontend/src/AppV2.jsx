@@ -18,6 +18,10 @@ export function AppV2() {
   const [brief, setBrief] = useState("");
   const [maxBls, setMaxBls] = useState("");
   const [skipPo, setSkipPo] = useState(false);
+  // ABL-0014 §E.1 Q6 — off by default for the first 3 calibration sprints.
+  const [runAcceptance, setRunAcceptance] = useState(false);
+  // ABL-0014 — last acceptance.done/skipped/error event, surfaced as a tile.
+  const [acceptance, setAcceptance] = useState(null);
   const [running, setRunning] = useState(false);
   const [stages, setStages] = useState(initialStages());
   const [bls, setBls] = useState([]); // {id, title, deps, steps:{engineer, reindex_e, qa, reindex_q, scorer}, outcome}
@@ -64,6 +68,7 @@ export function AppV2() {
     setBls([]);
     setEvents([]);
     setDetail(null);
+    setAcceptance(null);
   }
 
   function setStage(key, patch) {
@@ -187,6 +192,19 @@ export function AppV2() {
         setStage("sprint_complete", { status: "failed", detail: evt.reason });
         return;
       }
+      // ABL-0014 — acceptance.* event filter. Track the most recent
+      // skipped/done/error event so the summary tile reflects terminal state.
+      if (key.startsWith("acceptance.")) {
+        const sub = key.slice("acceptance.".length);
+        if (sub === "skipped" || sub === "done" || sub === "error") {
+          setAcceptance((prev) => ({ ...(prev || {}), terminal: sub, ...evt }));
+        } else if (sub === "start") {
+          setAcceptance({ terminal: "running", ...evt });
+        } else if (sub === "archived") {
+          setAcceptance((prev) => ({ ...(prev || {}), archive: evt.archive }));
+        }
+        return;
+      }
     }
 
     // per-role events carrying orchestrator_step + bl_id are reflected as detail
@@ -243,6 +261,7 @@ export function AppV2() {
         skip_po: skipPo,
         stop_on_failure: true,
         timeout_per_role: 2400,
+        run_acceptance: runAcceptance,
         // A18: per-feature isolation — server creates
         // <target>/_brownfield/features/<slug>/ and tails events.jsonl there.
         feature_name: featureName || null,
@@ -295,6 +314,7 @@ export function AppV2() {
           <input value={maxBls} onChange={(e) => setMaxBls(e.target.value.replace(/[^0-9]/g, ""))}
                  placeholder="all" style={{ width: 60 }} disabled={running} />
           <label><input type="checkbox" checked={skipPo} onChange={(e) => setSkipPo(e.target.checked)} disabled={running} /> Skip PO (re-run on existing backlog)</label>
+          <label title="ABL-0014 — runs the Acceptance Agent after sprint_complete to exercise end-to-end user journeys and produce a report. Default OFF for first 3 calibration sprints (§E.1 Q6)."><input type="checkbox" checked={runAcceptance} onChange={(e) => setRunAcceptance(e.target.checked)} disabled={running} /> Run acceptance pass</label>
         </div>
         <div className="v2-row">
           <label>Feature name</label>
@@ -365,6 +385,34 @@ export function AppV2() {
             <div className="v2-bls">
               <h3>Backlog ({bls.length})</h3>
               {bls.map((b) => <BlRow key={b.id} b={b} onClick={(s) => setDetail({ bl: b.id, step: s, ...b })} />)}
+            </div>
+          )}
+          {acceptance && (
+            <div
+              className="v2-acceptance-tile"
+              style={{
+                marginTop: 12, padding: 12, borderRadius: 6,
+                background: acceptance.terminal === "done"
+                  ? (acceptance.validator_ok ? "#1f3b1f" : "#3b2f1f")
+                  : acceptance.terminal === "error" ? "#3b1f1f"
+                  : acceptance.terminal === "skipped" ? "#2a2a2a"
+                  : "#1f2a3b",
+                cursor: "pointer", fontSize: 13,
+              }}
+              onClick={() => setDetail({ acceptance: true, ...acceptance })}
+              title="ABL-0014 Acceptance pass — click for full event detail"
+            >
+              <strong>Acceptance ({acceptance.terminal})</strong>
+              {acceptance.terminal === "done" && (
+                <> · validator_ok={String(acceptance.validator_ok)} · attempts={acceptance.attempts}</>
+              )}
+              {acceptance.terminal === "skipped" && <> · reason={acceptance.reason}</>}
+              {acceptance.terminal === "error" && <> · {acceptance.error}</>}
+              {acceptance.archive && (
+                <div style={{ marginTop: 4, opacity: 0.8, fontFamily: "monospace", fontSize: 11 }}>
+                  archive: {acceptance.archive}
+                </div>
+              )}
             </div>
           )}
         </div>

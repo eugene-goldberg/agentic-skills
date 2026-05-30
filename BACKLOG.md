@@ -230,6 +230,38 @@ Sprint 1 was the validation that the worker layer (Engineer/QA/Scorer) can run u
 
 ---
 
+### ABL-0014 — Acceptance Agent (end-to-end UAT pass)
+**Priority:** HIGH · **Effort:** 4 · **Dependencies:** ABL-0001 · **State:** IMPLEMENTING (Batches A+B shipped, Batch C in flight)
+
+**Story:** As the framework, I want a sprint-close role that exercises the *assembled feature as a whole* against the *brief as a whole* — seeding realistic multi-user state, walking each end-to-end journey via playwright with full-page screenshots, and producing a calibrated report — so that the operator sees what per-BL QA structurally cannot (cross-BL handoffs, cross-component bugs, framing-bias defects).
+
+**Acceptance:**
+1. New skill `skills/brownfield/brownfield-acceptance-agent/SKILLS.md` defining the role's inputs (brief.md, BACKLOG.md, merged agent_branch), outputs (`_brownfield/features/<slug>/acceptance/`), constraints (read-only on code, one honest pass, classification enum), and hard caps (≤8 journeys × ≤15 steps).
+2. Validator + flow + R10.1 retry + archive + closure_check extension landed and tested.
+3. Wired into `run_brief` between `sprint_complete` and `doctrine_meta` as advisory-only (failure becomes an event, never aborts the sprint).
+4. Frontend checkbox + summary tile.
+5. Default `run_acceptance=False` for the first 3 calibration sprints; flip after FP-rate calibration.
+
+**Reference:** [`ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md`](ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md), commits `4a5c108` (A), `f1bdb8b` (B).
+**Risk level:** Medium (cost ceiling enforced; advisory only)
+
+---
+
+### ABL-0015 — Auto-dispatch follow-up engineer on `product_bug` acceptance findings
+**Priority:** MEDIUM · **Effort:** 3 · **Dependencies:** ABL-0014 · **State:** Blocked
+
+**Story:** As the framework, once the Acceptance Agent classifies a journey failure as `product_bug` and the operator has confirmed acceptance is reliable, I want the orchestrator to auto-spawn a follow-up engineer to attempt the fix — so the feedback loop closes without an operator round-trip for unambiguous bugs.
+
+**Acceptance:**
+1. New flag `run_acceptance_followup: bool` (default False until calibrated).
+2. On `product_bug` findings, the orchestrator constructs a focused remediation BL referencing the acceptance report + screenshots and spawns an engineer in a fresh worktree.
+3. Cost cap: max 1 follow-up per sprint to start; revisit after calibration.
+4. Acceptance Agent re-runs (or doesn't) per operator policy.
+
+**Risk level:** High (crosses two new invariant boundaries — acceptance becomes a writer; engineer gets non-PO-decomposed work)
+
+---
+
 ### ABL-0013 — Cost + telemetry layer
 **Priority:** HIGH · **Effort:** 3 · **Dependencies:** ABL-0001 · **State:** Blocked
 
@@ -253,6 +285,7 @@ Sprint 1 was the validation that the worker layer (Engineer/QA/Scorer) can run u
 | Sprint 3 | ABL-0006 → 0008 | Sprint planning from product intent | ~3h/feature → ~1.5h/feature |
 | Sprint 4 | ABL-0009 → 0010 | Self-improvement, meta-rubric | ~1.5h/feature → ~1h/feature |
 | Sprint 5 | ABL-0011 → 0013 | Concurrency, multi-target, telemetry | Sub-linear scaling beyond ~1h/feature |
+| Mid-stream | ABL-0014 → 0015 | Acceptance pass + auto-dispatch follow-up | Closes per-BL-isolation gap; lower false-merge rate |
 
 ---
 

@@ -1,4 +1,4 @@
-"""ABL-0010 Batch B — B.3: run_brief wiring for run_acceptance.
+"""ABL-0014 Batch B — B.3: run_brief wiring for run_acceptance.
 
 Verifies:
 - ``RunBriefRequest`` accepts ``run_acceptance: bool`` (default False per
@@ -57,7 +57,7 @@ def test_run_brief_signature_has_run_acceptance_default_false() -> None:
 def test_run_brief_source_gates_acceptance_flow_on_flag() -> None:
     """The wiring lives in the run_brief source. Verify the gate exists
     AND that the call sits between sprint_complete and doctrine_meta
-    per the ABL-0010 plan §A.3."""
+    per the ABL-0014 plan §A.3."""
     src = inspect.getsource(orch.run_brief)
     assert "if run_acceptance:" in src
     assert "_acceptance_flow(" in src

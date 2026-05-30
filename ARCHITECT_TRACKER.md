@@ -168,6 +168,23 @@ After all four batches land, one final exercise validates the loop:
 
 ---
 
+## Batch H — ABL-0014 Acceptance Agent (added 2026-05-30)
+
+| Step | Status |
+|---|---|
+| Batch A: skill loader + validator + flow skeleton + 14 tests (commit `4a5c108`) | ✅ |
+| Batch B: worktree + agent spawn + R10.1 retry + archive + closure_check ext + 11 new tests (commit `f1bdb8b`) | ✅ |
+| Batch C: frontend checkbox + summary tile + 7 doc updates + memory flips | 🚧 |
+| Smoke run #1 with `run_acceptance=True` | ☐ |
+| Smoke run #2 with `run_acceptance=True` | ☐ |
+| Smoke run #3 with `run_acceptance=True` | ☐ |
+| Flip default `run_acceptance=True` in `RunBriefRequest` + `run_brief` after 3 clean smokes | ☐ |
+| ABL-0015 (auto-dispatch follow-up engineer on `product_bug`) — separate ABL | ☐ |
+
+Full plan: `ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md`.
+
+---
+
 ## Sign-off
 
 - [x] Batch A verified — sign: claude (Opus 4.7)  date: 2026-05-23  notes: 658dcb1 + a50026a + a2fa12a. Docs-only; Sprint 4 unaffected throughout.

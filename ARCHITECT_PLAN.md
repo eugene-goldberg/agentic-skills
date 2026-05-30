@@ -464,6 +464,29 @@ sequencing matters:
   A43 proved a proposal can be confidently wrong and only operator forensics
   caught it. C is the structural adversarial check that closes that loop.
 
+### 9.6 Batch H — ABL-0014 Acceptance Agent (added 2026-05-30)
+
+Stand-alone batch landed mid-stream after operator approval. Closes A45
+(per-BL isolation prevents cross-component bug recovery) by introducing
+an acceptance pass that runs once at `sprint_complete` against the
+assembled feature with seeded multi-user state and exercises end-to-end
+user journeys via playwright with full-page screenshots. Read-only on
+code; advisory-only on the sprint (§E.1 Q3 — never aborts).
+
+**Status:**
+- Batch A (skill loader + validator + flow skeleton + 14 tests) — SHIPPED `4a5c108`
+- Batch B (worktree + agent spawn + R10.1 retry + archive + closure_check extension + 11 new tests) — SHIPPED `f1bdb8b`
+- Batch C (frontend + 7 docs + memory flips) — IN FLIGHT
+- ABL-0015 (auto-dispatch follow-up engineer on `product_bug`) — deferred to its own ABL
+
+Full deliverable + test matrix + operator-locked answers to the 7 §E.1
+blocking questions live in `ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md`.
+
+**Calibration plan:** `run_acceptance=False` default for first 3 sprints;
+flip after FP-rate is verified low.
+
+---
+
 ### 9.5 Operator decisions required
 
 1. **Resolve the success-metric contradiction.** `THESIS.md` §7 names

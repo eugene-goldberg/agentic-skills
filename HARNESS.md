@@ -369,7 +369,27 @@ The orchestrator computes the BL outcome:
 **5.6.1 `orchestrator.sprint_complete`** fires when the BACKLOG is
 exhausted.
 
-**5.6.2 doctrine_meta-agent.** The orchestrator spawns the
+**5.6.2 Acceptance Agent (ABL-0014, advisory-only).** If
+`run_acceptance=True`, the orchestrator forks a detached worktree off
+`agent_branch`, spawns the acceptance agent there, and lets it exercise
+end-to-end user journeys against the *assembled* feature with seeded
+multi-user state. Read-only on code. Outputs land at
+`<target>/_brownfield/features/<slug>/acceptance/` (`journeys.yaml`,
+`report.md`, `report.json`, `tests/_acceptance/*.spec.ts`,
+`screenshots/`, `fixtures/seed_log.txt`) and are copied to
+`traces_archive/<run_id>/acceptance/` at sprint close. R10.1 retry (max
+2) applies to the *artifact contract*, not to journey failures (which
+are classified, not retried). Hard caps: ≤8 journeys × ≤15 steps.
+Defensive pre-flight skips with `acceptance.skipped reason=gate_stack_still_up`
+if a regression-gate docker stack survives past `sprint_complete`. **The
+acceptance pass NEVER aborts the sprint** — exceptions become
+`acceptance.error` events; doctrine_meta + closure_check still run.
+Default off for the first 3 calibration sprints (§E.1 Q6). Full design
+in `ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md`; closes A45 (per-BL
+isolation prevents cross-component bug recovery; BL-0007 REQ-0502
+worked example).
+
+**5.6.3 doctrine_meta-agent.** The orchestrator spawns the
 self-hardening role. It reads the sealed trace archive
 (`traces_archive/<run_id>/`) and writes proposals to
 `.planning/doctrine_proposals/<run_id>-<topic>.md`. Operator approval is
@@ -377,13 +397,13 @@ the only path to landed doctrine change. A43's "Evidence Discipline"
 section in the meta-agent SKILLS.md forbids absence-claims without
 per-tool per-record citations.
 
-**5.6.3 `closure_check`** asserts the I-3 postconditions: no orphaned
+**5.6.4 `closure_check`** asserts the I-3 postconditions: no orphaned
 worktrees on the target, no agent_branches not yet merged or explicitly
 preserved, no docker containers tagged with the `run_id`, no state files
 in `.orchestrator-state/live/`. Violations are emitted by class — the
 orchestrator does not silently leak.
 
-**5.6.4 Trace archival** moves `traces/<repo>/...` to
+**5.6.5 Trace archival** moves `traces/<repo>/...` to
 `traces_archive/<run_id>/`. The orchestrator state file moves from
 `live/` to `done/`. The run is sealed.
 

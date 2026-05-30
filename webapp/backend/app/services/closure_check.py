@@ -166,7 +166,7 @@ def scan_orphan_agent_branches(repo_root: Path, run_id: str) -> list[Violation]:
     return []
 
 
-# ─── ABL-0010 D9: acceptance-stack scan ───────────────────────────────────
+# ─── ABL-0014 D9: acceptance-stack scan ───────────────────────────────────
 
 
 async def scan_orphan_acceptance_containers(

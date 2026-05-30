@@ -24,7 +24,7 @@ Active work branch: **`architect-prereqs`** tip **`3528cad`**, in sync with orig
 - tools/ui_tour/ operator-side visual inspection (validated 9/9)
 
 ## What's drafted but not wired
-- Acceptance Agent (ABL-0010) — `skills/brownfield/brownfield-acceptance-agent/SKILLS.md`. Needs orchestrator wiring + prompt builder + validator + tests.
+- Acceptance Agent (ABL-0014) — `skills/brownfield/brownfield-acceptance-agent/SKILLS.md`. Needs orchestrator wiring + prompt builder + validator + tests.
 
 ## Operator hand-patches this session
 - BL-0007 (time-tracking): skipped REQ-0502 test (Radix Dialog aria-hidden interaction); merged QA's main.tsx 403 fix

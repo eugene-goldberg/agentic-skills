@@ -5,7 +5,7 @@
 > UI shipped (operator no longer needs to know the runbook exists);
 > EVALUATION_2026-05-28.md filed; HARNESS.md teaching doc written;
 > `tools/ui_tour/` operator-side visual inspection tool built + validated;
-> Acceptance Agent SKILLS.md drafted (ABL-0010, pending wiring); time-
+> Acceptance Agent SKILLS.md drafted (ABL-0014, pending wiring); time-
 > tracking sprint **in flight** on BL-0014 (last BL) after operator hand-
 > patches rescued BL-0007 + BL-0012 from auto-aborts.
 
@@ -65,7 +65,7 @@ If sprint aborted mid-BL, run against whatever state IS on the branch.
 ### P1.4 — Surface the Acceptance Agent proposal for operator decision
 The `skills/brownfield/brownfield-acceptance-agent/SKILLS.md` draft sits
 uncommitted to orchestrator wiring. The operator agreed in principle to
-ABL-0010 (Acceptance Agent role that runs after sprint_complete and
+ABL-0014 (Acceptance Agent role that runs after sprint_complete and
 exercises end-to-end user journeys). Pending decisions:
 1. Wire it into `orchestrator.run_brief` behind a `run_acceptance: bool=True`
    flag in RunBriefRequest?
@@ -143,9 +143,9 @@ Active gaps surfaced this session:
 |---|---|---|
 | **A39** | open, **promoted to high priority** | regression_gate parser conflates build-failure with all-tests-regressed. **3 worked examples now**: documents_2 BL-0008, intelligent_kanban BL-0006, time-tracking BL-0012. Engineers waste retries chasing phantom test regressions. Fix in `webapp/backend/app/services/regression_gate.py`. |
 | **A40** | open (incomplete) | engineer prompt says `--apply` (biome 1.x) but biome 2.x is `--write`. One-line prompt update. |
-| **A4x candidate** | not yet filed | "Per-BL isolation prevents cross-component bug recovery" — worked example: BL-0007 REQ-0502. **Acceptance Agent (ABL-0010) is the proposed structural answer.** |
+| **A4x candidate** | not yet filed | "Per-BL isolation prevents cross-component bug recovery" — worked example: BL-0007 REQ-0502. **Acceptance Agent (ABL-0014) is the proposed structural answer.** |
 | **A4x candidate** | not yet filed | "Gate is regression detector, not coverage prover" — no code coverage, no visual regression, no mutation testing. |
-| **ABL-0010** | proposed | Acceptance Agent — SKILLS.md drafted this session, awaiting operator decision on wiring. |
+| **ABL-0014** | proposed | Acceptance Agent — SKILLS.md drafted this session, awaiting operator decision on wiring. |
 
 ## 5. Mandatory reading order for next session
 
@@ -161,7 +161,7 @@ Active gaps surfaced this session:
 ## 6. Likely next moves (after P1.1-P1.4 complete)
 
 In approximate priority order:
-- **Decide ABL-0010 Acceptance Agent wiring** (P1.4) — orchestrator + prompt builder + validator + tests. ~1-2 days of build. Highest-leverage architecture work.
+- **Decide ABL-0014 Acceptance Agent wiring** (P1.4) — orchestrator + prompt builder + validator + tests. ~1-2 days of build. Highest-leverage architecture work.
 - **A39 fix** — regression_gate.py parser. Promote to high priority based on 3 worked examples. Should ship before the next sprint.
 - **A40 fix** — one-line prompt update for biome --write.
 - **File the deferred A4x candidates** in `DESIGN_SHORTCOMINGS.md` with full forensic detail.
@@ -174,7 +174,7 @@ In approximate priority order:
 Carry-forward + new this session:
 
 1. **Don't trust Edit tool to persist on target-repo files without immediate verification.** This session encountered file reverts; safer to commit immediately after editing on target.
-2. **Don't assume QA can fix cross-component bugs.** BL-0007 REQ-0502 needed an engineer-side dialog-close-on-error change; QA's 3 retries couldn't resolve it. Per-BL isolation forces this asymmetry — ABL-0010 is the proposed answer.
+2. **Don't assume QA can fix cross-component bugs.** BL-0007 REQ-0502 needed an engineer-side dialog-close-on-error change; QA's 3 retries couldn't resolve it. Per-BL isolation forces this asymmetry — ABL-0014 is the proposed answer.
 3. **Don't ship a "feature done" claim without acceptance evidence.** This session's user critique: regression-clean ≠ functionality-tested-as-user-would. Acceptance Agent or hand-run ui_tour bridges this.
 4. **Don't conflate "tests exist" with "functionality is thoroughly tested."** 102 playwright tests + 1 skip + 1 TODO ≠ proof of correctness. The gate is a regression detector.
 5. **Don't let A39 noise consume R10 retry budget.** When the parser shows 100+ regressions but the real cause is `tests/gate::build FAILED`, the engineer chases phantoms. This bit BL-0012 hard.

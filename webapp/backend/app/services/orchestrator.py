@@ -671,7 +671,7 @@ async def _qa_or_scorer_flow(
                 pass
 
 
-# ─── acceptance flow (ABL-0010 — Batch B: agent spawn + R10.1 retry) ──────
+# ─── acceptance flow (ABL-0014 — Batch B: agent spawn + R10.1 retry) ──────
 
 
 ACCEPTANCE_MAX_RETRIES = 2  # R10.1 — matches per-role doctrine retry budget
@@ -739,7 +739,7 @@ def _build_acceptance_task(
         f"- output dir (write everything here, nothing elsewhere): "
         f"`{acceptance_rel}`\n"
         f"- attempt: {attempt} of {1 + ACCEPTANCE_MAX_RETRIES}\n\n"
-        f"# Hard requirements (§E.1 of ABL-0010 plan)\n\n"
+        f"# Hard requirements (§E.1 of ABL-0014 plan)\n\n"
         f"- MAXIMUM 8 journeys. If more candidates exist, pick the cross-"
         f"actor ones and list the rest as `journeys_deferred` in the "
         f"report. The validator rejects > 8.\n"
@@ -790,7 +790,7 @@ async def _acceptance_flow(
     feature_slug: str | None,
     timeout: int = 3600,
 ) -> AsyncIterator[dict]:
-    """ABL-0010 Acceptance Agent.
+    """ABL-0014 Acceptance Agent.
 
     Runs once per sprint, AFTER ``sprint_complete`` and BEFORE
     ``doctrine_meta`` / ``closure_check`` (per §E.1 Q3, advisory only —
@@ -1399,7 +1399,7 @@ async def run_brief(
         terminal_status = "sprint_complete"  # A7: flip from default "aborted"
         yield _evt("sprint_complete", summary=summary)
 
-        # ABL-0010: acceptance pass — runs AFTER sprint_complete and BEFORE
+        # ABL-0014: acceptance pass — runs AFTER sprint_complete and BEFORE
         # doctrine_meta + closure_check. Advisory only (§E.1 Q3): exceptions
         # are surfaced as acceptance.error and never abort the sprint.
         # Default off until §E.1 Q6 calibration (3 smoke runs) flips it on.

@@ -166,6 +166,31 @@
 │   terminal_status = "sprint_complete"                                      │
 │   ═► orchestrator.sprint_complete {summary}                                │
 │                                                                            │
+│   [ABL-0014] if run_acceptance:                                            │
+│     try: _acceptance_flow(repo_dir, repo_name, run_id, feature_slug, ...)  │
+│       ─ skip if no_feature_slug | no_brief | gate_stack_still_up           │
+│       ─ else: fork detached worktree off agent_branch                      │
+│         spawn agent (allowed: Bash,Read,Write,Edit; timeout 3600s)         │
+│         R10.1 retry × max 2 on validator-incomplete                        │
+│         archive acceptance/ → traces_archive/<run_id>/acceptance/          │
+│         remove worktree                                                    │
+│         ═► acceptance.start                                                │
+│         ═► acceptance.attempt.start | attempt.error                        │
+│         ═► acceptance.validator.{ok | incomplete | give_up}                │
+│         ═► acceptance.archived                                             │
+│         ═► acceptance.done {validator_ok, attempts}                        │
+│     except Exception as exc:                                               │
+│       ═► acceptance.error {error}        ◀── advisory: NEVER aborts        │
+│                                                                            │
+│   [B-3/I-7] if run_doctrine_meta:                                          │
+│     try: _doctrine_meta_flow(...) → ═► doctrine_meta.proposals             │
+│     except: ═► doctrine_meta.error                                         │
+│                                                                            │
+│   [M2-3/I-3] closure_check.scan_all(repo_dir, run_id) →                    │
+│     ═► closure_violation × N (kinds: docker_container,                     │
+│         acceptance_docker, gate_worktree, acceptance_worktree, ...)        │
+│     ═► closure_check.done {violation_count, by_kind}                       │
+│                                                                            │
 │  finally:                                                                  │
 │   [A7]  run_state_svc.mark_terminated(run_id, terminal_status)             │
 │         ☐ .orchestrator-state/<run_id>.json → done/<run_id>.json           │

@@ -1,4 +1,4 @@
-"""Tests for ABL-0010 Batch A: acceptance_validator.
+"""Tests for ABL-0014 Batch A: acceptance_validator.
 
 Validates the contract in
 ``skills/brownfield/brownfield-acceptance-agent/SKILLS.md`` against a

@@ -3,7 +3,7 @@ description: Runs once per sprint at sprint_complete. Reads the original brief a
 license: CC-BY-SA-4.0
 metadata:
   version: "0.1-brownfield"
-  standard: "Production Incremental + Brownfield + Acceptance (ABL-0010)"
+  standard: "Production Incremental + Brownfield + Acceptance (ABL-0014)"
   sections_index:
     - Identity & Scope
     - Inputs
@@ -23,7 +23,7 @@ metadata:
 
 ## Identity & Scope
 
-You are the **acceptance agent** (ABL-0010). You operate **once per sprint**,
+You are the **acceptance agent** (ABL-0014). You operate **once per sprint**,
 immediately after `orchestrator.sprint_complete` and BEFORE `closure_check` /
 `doctrine_meta`. By the time you run, all BLs in the BACKLOG have either
 landed merged on `agent_branch` or are explicitly excluded by an operator

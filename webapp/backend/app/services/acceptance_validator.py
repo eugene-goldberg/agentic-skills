@@ -1,4 +1,4 @@
-"""Acceptance-agent output validator (ABL-0010, Batch A).
+"""Acceptance-agent output validator (ABL-0014, Batch A).
 
 After the acceptance agent (`skills/brownfield/brownfield-acceptance-agent`)
 emits its artifacts under

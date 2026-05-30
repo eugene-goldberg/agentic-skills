@@ -1132,7 +1132,7 @@ class RunBriefRequest(BaseModel):
     # False for short test runs where the post-sprint analysis adds latency
     # without value.
     run_doctrine_meta: bool = True
-    # ABL-0010 §E.1 Q6: acceptance pass — off by default for the first 3
+    # ABL-0014 §E.1 Q6: acceptance pass — off by default for the first 3
     # smoke sprints; flip to True once calibration confirms FP rate is low.
     # §E.1 Q2: 3600s default timeout, configurable per-call.
     run_acceptance: bool = False

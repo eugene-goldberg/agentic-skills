@@ -1,13 +1,23 @@
-# ABL-0010 — Acceptance Agent Implementation Plan
+# ABL-0014 — Acceptance Agent Implementation Plan
 
-> Status: **proposal / pre-coding scoping**
+> **Numbering note (2026-05-30):** earlier this session and in commits
+> `4a5c108` (Batch A) and `f1bdb8b` (Batch B) the Acceptance Agent was
+> referenced as "ABL-0010". That ID was already taken by the Meta-rubric
+> entry in `BACKLOG.md`. Per operator decision (Option A), the new work
+> was renumbered to **ABL-0014** for the Acceptance Agent and **ABL-0015**
+> for the deferred auto-dispatch follow-up. Past commit messages still
+> say "ABL-0010"; in this codebase "ABL-0010" referenced from anything
+> Acceptance-related means ABL-0014. Original ABL-0010 (Meta-rubric) and
+> ABL-0011 (Concurrent BL execution) in `BACKLOG.md` keep their numbers.
+
+> Status: **Batches A + B SHIPPED; Batch C in flight**
 > Author: Claude (architect role), 2026-05-30
 > Source SKILLS.md: [`skills/brownfield/brownfield-acceptance-agent/SKILLS.md`](skills/brownfield/brownfield-acceptance-agent/SKILLS.md)
 > Wiring pattern reference: `webapp/backend/app/services/orchestrator.py::_doctrine_meta_flow` (lines 676–783)
 
 This document captures, with ≥95%-confidence-pending-7-open-questions, the
 complete set of deliverables required to implement the Acceptance Agent
-(ABL-0010) into the agentic-skills harness. It is the authoritative
+(ABL-0014) into the agentic-skills harness. It is the authoritative
 scoping artifact for that work; do not start coding until the 7 questions
 in §E are answered by the operator.
 
@@ -70,10 +80,10 @@ machinery is invented where existing pattern fits.
   new R-rules emerge (candidate R15: "every acceptance claim has a
   re-openable artifact path")
 - **`DESIGN_SHORTCOMINGS.md`** — file the deferred A4x "per-BL isolation
-  prevents cross-component bug recovery" with ABL-0010 as resolution and
+  prevents cross-component bug recovery" with ABL-0014 as resolution and
   the BL-0007 REQ-0502 worked example as motivating evidence
-- **`BACKLOG.md`** — ABL-0010 status → in-progress
-- **`ARCHITECT_PLAN.md` / `ARCHITECT_TRACKER.md`** — add ABL-0010 batch
+- **`BACKLOG.md`** — ABL-0014 status → in-progress
+- **`ARCHITECT_PLAN.md` / `ARCHITECT_TRACKER.md`** — add ABL-0014 batch
   containing the 12 deliverables above
 - **`.claude/memory/arch_acceptance_agent.md`** — flip status from
   "proposed" to "implementing"
@@ -118,7 +128,7 @@ invariant:
    agent could burn an hour of playwright runs.
 5. **Auto-dispatch on `product_bug`** — report-only v1, or also spawn a
    follow-up engineer to attempt a fix? Recommend report-only;
-   auto-dispatch becomes ABL-0011.
+   auto-dispatch becomes ABL-0015.
 6. **Default on/off** — `run_acceptance=True` by default from day one, or
    default `False` until 2–3 smoke runs prove the agent doesn't waste
    operator time?
@@ -154,9 +164,9 @@ then, do not start coding deliverable 1.
    together).
 5. **Auto-dispatch on `product_bug`** → **report-only v1.** Auto-dispatch
    crosses two new invariant boundaries (acceptance becomes a writer;
-   engineer gets a non-PO-decomposed BL). File as **ABL-0011** with
-   ABL-0010 as prerequisite. Ship the smaller surface, learn from real
-   sprint evidence, then design ABL-0011 against that evidence.
+   engineer gets a non-PO-decomposed BL). File as **ABL-0015** with
+   ABL-0014 as prerequisite. Ship the smaller surface, learn from real
+   sprint evidence, then design ABL-0015 against that evidence.
 6. **Default on/off** → **`run_acceptance=False` for first 3 sprints,
    then flip to True.** The agent is unproven. Three explicit opt-in
    smoke runs give calibration data (proposal accuracy, runtime, FP

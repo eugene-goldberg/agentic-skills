@@ -1,4 +1,4 @@
-"""Tests for ABL-0010 Batch B: orchestrator._acceptance_flow with spawn.
+"""Tests for ABL-0014 Batch B: orchestrator._acceptance_flow with spawn.
 
 Three skip-path tests short-circuit before any external dependency. The
 happy-path tests mock create_worktree/remove_worktree/stream_agent_task/

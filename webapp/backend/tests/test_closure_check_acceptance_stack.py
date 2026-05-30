@@ -1,4 +1,4 @@
-"""ABL-0010 Batch B — B.4: closure_check acceptance-stack extension.
+"""ABL-0014 Batch B — B.4: closure_check acceptance-stack extension.
 
 Verifies that ``closure_check`` enumerates surviving acceptance docker
 containers (``acceptance-<run_id>*``) and worktrees

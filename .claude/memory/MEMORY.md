@@ -25,4 +25,4 @@
 - [Project evaluation 2026-05-28](arch_evaluation_2026-05-28.md) — ~40% of thesis (the right 40%); worker-loop works, crew brain unbuilt; Batch E (I-2 tightening) + G (hygiene) proposed in ARCHITECT_PLAN §9, awaiting operator auth
 - [Gate throughput bottleneck](arch_gate_throughput.md) — playwright 79-test gate at 1 worker, PRE+POST per BL = 80-160 min/BL; A28-A31 in ledger for workers/sharding/TIA/tiered gates
 - [Test hygiene (A32 resolved)](arch_test_hygiene.md) — QA test design caused 30-min gate hang; fixed defense-in-depth at framework (pytest --timeout=120) + doctrine (R14 in QA SKILLS.md); template for future hang-class diagnoses
-- [Acceptance Agent proposal](arch_acceptance_agent.md) — ABL-0010 SKILLS.md drafted; closes per-BL-isolation gap; pending wiring
+- [Acceptance Agent proposal](arch_acceptance_agent.md) — ABL-0014 SKILLS.md drafted; closes per-BL-isolation gap; pending wiring
