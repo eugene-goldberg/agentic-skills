@@ -1132,6 +1132,11 @@ class RunBriefRequest(BaseModel):
     # False for short test runs where the post-sprint analysis adds latency
     # without value.
     run_doctrine_meta: bool = True
+    # ABL-0010 §E.1 Q6: acceptance pass — off by default for the first 3
+    # smoke sprints; flip to True once calibration confirms FP rate is low.
+    # §E.1 Q2: 3600s default timeout, configurable per-call.
+    run_acceptance: bool = False
+    acceptance_timeout: int = Field(3600, ge=300, le=10800)
     # A18: per-feature isolation. Operator-supplied feature name; server
     # slugifies it and creates <target>/_brownfield/features/<slug>/ which
     # holds the brief, BACKLOG.md, CODEBASE_CONTEXT.md, SPRINT_PLAN.md, the
@@ -1283,6 +1288,8 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 start_bl=req.start_bl,
                 run_doctrine_meta=req.run_doctrine_meta,
                 feature_slug=feature_slug,
+                run_acceptance=req.run_acceptance,
+                acceptance_timeout=req.acceptance_timeout,
             ):
                 # Track current_bl from bl.start so 409 responses can name it.
                 if event.get("phase") == "orchestrator.bl.start":

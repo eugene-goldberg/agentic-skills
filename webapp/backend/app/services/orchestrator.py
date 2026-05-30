@@ -671,7 +671,10 @@ async def _qa_or_scorer_flow(
                 pass
 
 
-# ─── acceptance flow (ABL-0010 — Batch A skeleton) ─────────────────────────
+# ─── acceptance flow (ABL-0010 — Batch B: agent spawn + R10.1 retry) ──────
+
+
+ACCEPTANCE_MAX_RETRIES = 2  # R10.1 — matches per-role doctrine retry budget
 
 
 async def _gate_stack_present(run_id: str) -> bool:
@@ -699,6 +702,87 @@ async def _gate_stack_present(run_id: str) -> bool:
     return bool(out and out.decode("utf-8", "replace").strip())
 
 
+def _build_acceptance_task(
+    skill: str,
+    *,
+    run_id: str,
+    feature_slug: str,
+    brief_rel: str,
+    backlog_rel: str,
+    acceptance_rel: str,
+    compose_project: str,
+    attempt: int,
+    prior_missing: list[str] | None = None,
+) -> str:
+    """Construct the per-attempt task prompt for the acceptance agent.
+
+    On attempt > 1 (R10.1 retry), include the validator's missing-artifact
+    list as a focused fix prompt — mirrors ``doctrine_validator.build_fix_prompt``.
+    """
+    retry_block = ""
+    if attempt > 1 and prior_missing:
+        items = "\n".join(f"- MISSING: `{p}`" for p in prior_missing)
+        retry_block = (
+            f"\n\n---\n\n# Retry context (attempt {attempt} of "
+            f"{1 + ACCEPTANCE_MAX_RETRIES})\n\n"
+            f"Your previous run did not satisfy the validator. Fix these "
+            f"specifically, in the SAME worktree:\n\n{items}\n"
+        )
+    return (
+        f"{skill}\n\n"
+        f"---\n\n"
+        f"# Run context\n\n"
+        f"- run_id: `{run_id}`\n"
+        f"- feature_slug: `{feature_slug}`\n"
+        f"- brief: `{brief_rel}`\n"
+        f"- backlog: `{backlog_rel}`\n"
+        f"- output dir (write everything here, nothing elsewhere): "
+        f"`{acceptance_rel}`\n"
+        f"- attempt: {attempt} of {1 + ACCEPTANCE_MAX_RETRIES}\n\n"
+        f"# Hard requirements (§E.1 of ABL-0010 plan)\n\n"
+        f"- MAXIMUM 8 journeys. If more candidates exist, pick the cross-"
+        f"actor ones and list the rest as `journeys_deferred` in the "
+        f"report. The validator rejects > 8.\n"
+        f"- MAXIMUM 15 steps per journey. The validator rejects > 15.\n"
+        f"- When you boot any docker compose stack for the seed/run, "
+        f"export `COMPOSE_PROJECT_NAME={compose_project}` so "
+        f"`closure_check` can enumerate any leaks tied to this run.\n"
+        f"- One honest pass: do NOT retry failed journeys yourself. "
+        f"Classify each failure into one of "
+        f"`product_bug | test_bug | data_bug | infra_bug | uncertain` "
+        f"and move on.\n"
+        f"- The pre-existing test suite (`frontend/tests/*.spec.ts`, "
+        f"`backend/tests/`) is READ-ONLY. Your tests live under "
+        f"`{acceptance_rel}/tests/_acceptance/` and nowhere else.\n\n"
+        f"Follow the Required Completion Steps in your SKILLS.md, "
+        f"emitting a final JSON summary with `journeys_planned`, "
+        f"`journeys_passed`, `journeys_failed`, `journeys_unshippable`, "
+        f"`report_path`, `screenshots_dir`.{retry_block}\n"
+    )
+
+
+def _archive_acceptance_dir(acceptance_dir: Path, run_id: str) -> Path | None:
+    """Copy the agent's `acceptance/` tree into
+    `webapp/backend/traces_archive/<run_id>/acceptance/` so the operator can
+    review reports + screenshots after the worktree is reaped. Returns the
+    archive path, or None on any failure (best-effort)."""
+    if not acceptance_dir.exists():
+        return None
+    archive_root = (
+        prompts_brownfield_svc.AGENTIC_ROOT
+        / "webapp" / "backend" / "traces_archive" / run_id
+    )
+    dest = archive_root / "acceptance"
+    try:
+        archive_root.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(acceptance_dir, dest)
+        return dest
+    except (OSError, shutil.Error):
+        return None
+
+
 async def _acceptance_flow(
     repo_dir: Path,
     repo_name: str,
@@ -706,25 +790,26 @@ async def _acceptance_flow(
     feature_slug: str | None,
     timeout: int = 3600,
 ) -> AsyncIterator[dict]:
-    """ABL-0010 Acceptance Agent — Batch A skeleton.
+    """ABL-0010 Acceptance Agent.
 
-    Runs once per sprint, immediately AFTER ``sprint_complete`` and BEFORE
+    Runs once per sprint, AFTER ``sprint_complete`` and BEFORE
     ``doctrine_meta`` / ``closure_check`` (per §E.1 Q3, advisory only —
     never sets terminal_status=aborted from here).
 
-    **Batch A scope:** locate inputs, perform §E.1 Q7 pre-flight
-    gate-collision check, validate any pre-existing acceptance/ outputs,
-    skip cleanly if the brief is missing. **The agent itself is NOT
-    spawned in Batch A**; Batch B will wire the ``stream_agent_task``
-    call. This skeleton lets us land the plumbing + tests safely first.
+    **Batch B scope:** detached worktree off ``agent_branch``, agent spawn
+    via ``stream_agent_task``, R10.1 retry on validator-incomplete,
+    archive copy to ``traces_archive/<run_id>/acceptance/``, cleanup in
+    ``finally``.
 
     Events:
-      - ``acceptance.skipped`` (reasons: ``no_feature_slug``, ``no_brief``,
-        ``gate_stack_still_up``)
-      - ``acceptance.start``
-      - ``acceptance.validator.{ok,incomplete}``  (Batch A: only on
-        pre-existing outputs; Batch B drives this via R10.1 retry loop)
-      - ``acceptance.done`` (terminal; mirrors doctrine_meta.proposals)
+      - ``acceptance.skipped`` — ``no_feature_slug | no_brief |
+        gate_stack_still_up``
+      - ``acceptance.start`` — opens the flow; includes worktree path
+      - per-attempt agent stream events (pass-through, tagged
+        ``orchestrator_step=acceptance``)
+      - ``acceptance.validator.{ok,incomplete,give_up}`` — R10.1 result
+      - ``acceptance.archived`` — archive copy destination
+      - ``acceptance.done`` — terminal
     """
     if not feature_slug:
         yield _evt("acceptance.skipped", reason="no_feature_slug", run_id=run_id)
@@ -742,8 +827,6 @@ async def _acceptance_flow(
         return
 
     if await _gate_stack_present(run_id):
-        # §E.1 Q7: a regression-gate stack is still up for this run.
-        # Surface it; the operator can chase the closure_check leak.
         yield _evt(
             "acceptance.skipped",
             reason="gate_stack_still_up",
@@ -751,42 +834,147 @@ async def _acceptance_flow(
         )
         return
 
-    acceptance_dir = feature_dir / "acceptance"
+    # Resolve the merged agent_branch we fork the read-only worktree off of.
+    cfg = repo_config_svc.load(repo_dir)
+    agent_branch = cfg.agent_branch
+    compose_project = f"acceptance-{run_id}"
+    feature_rel = f"_brownfield/features/{feature_slug}"
+    brief_rel = f"{feature_rel}/brief.md"
+    backlog_rel = f"{feature_rel}/BACKLOG.md"
+    acceptance_rel = f"{feature_rel}/acceptance"
+
+    # Create the detached worktree (§E.1 Q1).
+    try:
+        wt = await create_worktree(
+            repo_dir,
+            task_id=f"accept-{run_id}",
+            base_ref=agent_branch,
+        )
+    except RuntimeError as exc:
+        yield _evt(
+            "acceptance.skipped",
+            reason="worktree_failed",
+            run_id=run_id,
+            error=str(exc),
+        )
+        return
+
     yield _evt(
         "acceptance.start",
         run_id=run_id,
         feature_slug=feature_slug,
         brief_path=str(brief_path),
-        acceptance_dir=str(acceptance_dir),
+        acceptance_dir=str(feature_dir / "acceptance"),
+        worktree=str(wt.path),
+        agent_branch=agent_branch,
+        compose_project=compose_project,
         timeout=timeout,
-        note="batch_a_skeleton_no_agent_spawn",
     )
 
-    # ── Batch B will spawn the agent here via stream_agent_task ───────
-    # ── Batch A: validate whatever may already exist (lets us ────────
-    #     exercise the validator end-to-end against fixture data). ────
+    skill = prompts_brownfield_svc._load_skill("acceptance")
+    trace = TraceWriter(repo=repo_name, role="acceptance", task_id=run_id)
+    acceptance_dir_wt = wt.path / acceptance_rel  # validator reads the worktree copy
+    validation: dict = {"ok": False, "missing": [], "empty": [], "summary": "no attempts"}
+    last_attempt = 0
 
-    if acceptance_dir.exists():
-        validation = acceptance_validator_svc.validate_acceptance(acceptance_dir)
-        phase = "acceptance.validator.ok" if validation["ok"] else "acceptance.validator.incomplete"
-        yield _evt(
-            phase,
-            run_id=run_id,
-            ok=validation["ok"],
-            missing=validation["missing"],
-            empty=validation["empty"],
-            summary=validation["summary"],
-        )
-    else:
-        validation = {"ok": False, "missing": [], "empty": [], "summary": "acceptance dir not created (batch A skeleton)"}
+    try:
+        for attempt in range(1, ACCEPTANCE_MAX_RETRIES + 2):  # 1, 2, 3 = 1 + 2 retries
+            last_attempt = attempt
+            prior_missing = (
+                validation.get("missing", []) if attempt > 1 else None
+            )
+            task = _build_acceptance_task(
+                skill,
+                run_id=run_id,
+                feature_slug=feature_slug,
+                brief_rel=brief_rel,
+                backlog_rel=backlog_rel,
+                acceptance_rel=acceptance_rel,
+                compose_project=compose_project,
+                attempt=attempt,
+                prior_missing=prior_missing,
+            )
+            yield _evt(
+                "acceptance.attempt.start",
+                run_id=run_id,
+                attempt=attempt,
+                max_attempts=1 + ACCEPTANCE_MAX_RETRIES,
+            )
+            try:
+                async for event in stream_agent_task(
+                    task,
+                    wt.path,
+                    timeout_seconds=timeout,
+                    idle_timeout=900,
+                    allowed_tools="Bash,Read,Write,Edit",
+                    trace=trace,
+                ):
+                    event.setdefault("orchestrator_step", "acceptance")
+                    yield event
+            except Exception as exc:  # noqa: BLE001 — advisory: never abort sprint
+                yield _evt(
+                    "acceptance.attempt.error",
+                    run_id=run_id,
+                    attempt=attempt,
+                    error=str(exc),
+                )
+
+            validation = acceptance_validator_svc.validate_acceptance(acceptance_dir_wt)
+            if validation["ok"]:
+                yield _evt(
+                    "acceptance.validator.ok",
+                    run_id=run_id,
+                    attempt=attempt,
+                    summary=validation["summary"],
+                )
+                break
+
+            phase = (
+                "acceptance.validator.give_up"
+                if attempt >= 1 + ACCEPTANCE_MAX_RETRIES
+                else "acceptance.validator.incomplete"
+            )
+            yield _evt(
+                phase,
+                run_id=run_id,
+                attempt=attempt,
+                missing=validation["missing"],
+                empty=validation["empty"],
+                summary=validation["summary"],
+            )
+            if phase == "acceptance.validator.give_up":
+                break
+    finally:
+        trace.close()
+        # Archive whatever the agent produced (even on give_up, the report
+        # is the most valuable evidence — keep it).
+        archive_dest = _archive_acceptance_dir(acceptance_dir_wt, run_id)
+        if archive_dest is not None:
+            yield _evt(
+                "acceptance.archived",
+                run_id=run_id,
+                archive=str(archive_dest),
+            )
+        # Reap the worktree (I-1). Branch is left in place per the convention
+        # in remove_worktree; closure_check.scan_orphan_agent_branches is the
+        # canonical reaper for those (currently deferred).
+        try:
+            await remove_worktree(repo_dir, wt, force=True)
+        except Exception as exc:  # noqa: BLE001
+            yield _evt(
+                "acceptance.worktree_cleanup_error",
+                run_id=run_id,
+                error=str(exc),
+            )
 
     yield _evt(
         "acceptance.done",
         run_id=run_id,
         feature_slug=feature_slug,
         validator_ok=validation["ok"],
-        acceptance_dir=str(acceptance_dir),
-        batch="A",
+        attempts=last_attempt,
+        acceptance_dir=str(feature_dir / "acceptance"),
+        batch="B",
     )
 
 
@@ -947,6 +1135,8 @@ async def run_brief(
     start_bl: str | None = None,
     run_doctrine_meta: bool = True,
     feature_slug: str | None = None,
+    run_acceptance: bool = False,  # §E.1 Q6 — off for first 3 sprints, then flip
+    acceptance_timeout: int = 3600,
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -1208,6 +1398,23 @@ async def run_brief(
 
         terminal_status = "sprint_complete"  # A7: flip from default "aborted"
         yield _evt("sprint_complete", summary=summary)
+
+        # ABL-0010: acceptance pass — runs AFTER sprint_complete and BEFORE
+        # doctrine_meta + closure_check. Advisory only (§E.1 Q3): exceptions
+        # are surfaced as acceptance.error and never abort the sprint.
+        # Default off until §E.1 Q6 calibration (3 smoke runs) flips it on.
+        if run_acceptance:
+            try:
+                async for evt in _acceptance_flow(
+                    repo_dir,
+                    repo_name,
+                    run_id,
+                    feature_slug,
+                    timeout=acceptance_timeout,
+                ):
+                    yield evt
+            except Exception as exc:
+                yield _evt("acceptance.error", error=str(exc))
 
         # B-3 / I-7: spawn the doctrine-meta-agent against this sprint's
         # archived traces. Runs ONLY after sprint_complete (a partial sprint
