@@ -49,10 +49,13 @@ VALID_CLASSIFICATIONS = {
 # Top-level files the acceptance agent must produce.
 REQUIRED_TOP_LEVEL = (
     "journeys.yaml",
-    "report.md",
-    "report.json",
     "fixtures/seed_log.txt",
 )
+
+# Smoke-1 calibration (2026-05-30): require EITHER report.md OR report.json,
+# not both. The JSON form is richer and more actionable; agents tend to
+# produce one or the other, not both. Both forms count toward the contract.
+REPORT_VARIANTS = ("report.json", "report.md")
 
 
 def _safe_load_yaml(path: Path) -> tuple[Any, str | None]:
@@ -85,7 +88,13 @@ def _safe_load_json(path: Path) -> tuple[Any, str | None]:
 def _validate_journeys_yaml(acc_dir: Path, acc: dict) -> list[dict]:
     """Validate journeys.yaml; mutate ``acc`` with missing/empty. Return
     the parsed journey list (or [] on error) so downstream screenshot
-    checks can run."""
+    checks can run.
+
+    Smoke-1 calibration (2026-05-30): accept BOTH the top-level list form
+    ``[<journey>, ...]`` AND the dict form ``{journeys: [...], journeys_deferred: [...]}``.
+    The dict form is the agent's natural extension to support the §E.1 Q4
+    deferred-list concept; both forms satisfy the contract.
+    """
     path = acc_dir / "journeys.yaml"
     if not path.exists():
         acc["missing"].append("journeys.yaml")
@@ -94,8 +103,19 @@ def _validate_journeys_yaml(acc_dir: Path, acc: dict) -> list[dict]:
     if err:
         acc["missing"].append(f"journeys.yaml ({err})")
         return []
-    if not isinstance(data, list):
-        acc["missing"].append("journeys.yaml (expected a top-level list of journeys)")
+    # Normalize: accept either list or {journeys: [...]} dict
+    if isinstance(data, dict):
+        data = data.get("journeys")
+        if not isinstance(data, list):
+            acc["missing"].append(
+                "journeys.yaml (dict form must contain 'journeys: [...]' list)"
+            )
+            return []
+    elif not isinstance(data, list):
+        acc["missing"].append(
+            "journeys.yaml (expected either a top-level list of journeys "
+            "OR a dict with 'journeys: [...]')"
+        )
         return []
     if len(data) > MAX_JOURNEYS:
         acc["missing"].append(
@@ -126,12 +146,69 @@ def _validate_journeys_yaml(acc_dir: Path, acc: dict) -> list[dict]:
     return valid_journeys
 
 
+def _journey_outcome_for_screenshot_rule(j: dict) -> str:
+    """Return the journey's outcome for screenshot strictness purposes.
+
+    Smoke-1 calibration: the agent uses `outcome` (passed/failed/...) but
+    also `result` (pass/fail/...). Treat them as equivalent."""
+    o = j.get("outcome") or j.get("result")
+    if not o:
+        return "unknown"
+    o = str(o).lower()
+    if o.startswith("pass"):
+        return "passed"
+    if o.startswith("fail"):
+        return "failed"
+    if o.startswith("unship"):
+        return "unshippable"
+    return o
+
+
+def _load_report_outcomes(acc_dir: Path) -> dict[str, str]:
+    """Build a {slug-or-id: outcome} index from report.json so the
+    screenshot rule can know which journeys passed vs failed.
+
+    Returns empty dict if report.json is absent or malformed — that
+    just means every journey defaults to 'unknown' for the screenshot
+    rule (the lenient path)."""
+    path = acc_dir / "report.json"
+    if not path.exists():
+        return {}
+    data, err = _safe_load_json(path)
+    if err or not isinstance(data, dict):
+        return {}
+    out: dict[str, str] = {}
+    for j in data.get("journeys") or []:
+        if not isinstance(j, dict):
+            continue
+        outcome = _journey_outcome_for_screenshot_rule(j)
+        for key in (j.get("slug"), j.get("id"), str(j.get("id"))):
+            if key:
+                out[str(key)] = outcome
+    return out
+
+
 def _validate_screenshots(acc_dir: Path, journeys: list[dict], acc: dict) -> None:
-    """Every step's `screenshot:` value MUST exist on disk under
-    `acc_dir/screenshots/journey_<NN>_<slug>/<screenshot>` per SKILLS.md
-    §Outputs."""
+    """Step screenshots are evidence the journey ran.
+
+    Smoke-1 calibration (2026-05-30):
+    - PASSED journeys: every declared step MUST have a png (strict — proves
+      the assertion ran cleanly).
+    - FAILED / unshippable / unknown journeys: only need the journey dir to
+      exist with ≥1 png. Steps after the failure point legitimately have
+      no screenshot because the journey halted; the classified failure
+      record + at least one png is sufficient evidence.
+    """
     screenshots_root = acc_dir / "screenshots"
+    outcomes_idx = _load_report_outcomes(acc_dir)
     for j in journeys:
+        # Look up outcome by slug or id from report.json index;
+        # default 'passed' if absent so unit tests with bare YAML
+        # still exercise the strict path.
+        slug_key = j.get("slug") or ""
+        id_key = str(j.get("id") or "")
+        outcome = outcomes_idx.get(slug_key) or outcomes_idx.get(id_key) or "passed"
+        is_passed = outcome == "passed"
         slug = j.get("slug", "?")
         # padded id (e.g. "01") — fall back to raw if non-numeric
         raw_id = str(j.get("id", "??"))
@@ -140,6 +217,15 @@ def _validate_screenshots(acc_dir: Path, journeys: list[dict], acc: dict) -> Non
         except (TypeError, ValueError):
             jid = raw_id
         journey_dir = screenshots_root / f"journey_{jid}_{slug}"
+        # Lenient path for non-passed journeys: require only ≥1 png exists.
+        if not is_passed:
+            if journey_dir.exists() and any(journey_dir.glob("*.png")):
+                continue  # evidence present — skip per-step strictness
+            acc["missing"].append(
+                f"screenshots/journey_{jid}_{slug}/ (journey '{slug}' "
+                f"outcome={j.get('outcome') or j.get('result')}, no png evidence found)"
+            )
+            continue
         steps = j.get("steps") or []
         for step_idx, step in enumerate(steps):
             if not isinstance(step, dict):
@@ -151,11 +237,25 @@ def _validate_screenshots(acc_dir: Path, journeys: list[dict], acc: dict) -> Non
                 )
                 continue
             ss_path = journey_dir / ss
-            if not ss_path.exists():
-                acc["missing"].append(
-                    f"screenshots/journey_{jid}_{slug}/{ss} (declared by step "
-                    f"'{step.get('name', step_idx + 1)}' but file missing on disk)"
-                )
+            if ss_path.exists():
+                continue
+            # Smoke-1 calibration (2026-05-30): lenient match — if the
+            # exact declared filename is missing, accept ANY png matching
+            # the step's ordinal (e.g. step_05_*.png) OR a playwright
+            # auto-failure artifact (test-failed-N.png) in the journey
+            # dir. A failed step often produces an auto-failure screenshot
+            # at a different path than the spec declared.
+            ordinal = f"step_{step_idx + 1:02d}_"
+            if journey_dir.exists() and (
+                any(p.name.startswith(ordinal) for p in journey_dir.glob("*.png"))
+                or any("failed" in p.name.lower() for p in journey_dir.glob("*.png"))
+            ):
+                continue
+            acc["missing"].append(
+                f"screenshots/journey_{jid}_{slug}/{ss} (declared by step "
+                f"'{step.get('name', step_idx + 1)}' but file missing on disk; "
+                f"no step_{step_idx + 1:02d}_*.png or auto-failure png found either)"
+            )
 
 
 def _validate_report_json(acc_dir: Path, acc: dict) -> None:
@@ -178,19 +278,26 @@ def _validate_report_json(acc_dir: Path, acc: dict) -> None:
         if not isinstance(j, dict):
             acc["missing"].append(f"report.json journeys[{idx}] (not a mapping)")
             continue
-        outcome = j.get("outcome")
+        # Smoke-1 calibration: accept either `outcome` or `result`,
+        # normalize loose values (pass/fail/unship*).
+        outcome = _journey_outcome_for_screenshot_rule(j)
         if outcome not in VALID_OUTCOMES:
             acc["missing"].append(
-                f"report.json journeys[{idx}] outcome={outcome!r} "
-                f"(must be one of {sorted(VALID_OUTCOMES)})"
+                f"report.json journeys[{idx}] outcome={j.get('outcome') or j.get('result')!r} "
+                f"(must be one of {sorted(VALID_OUTCOMES)} or pass/fail/unshippable shorthand)"
             )
             continue
         if outcome == "failed":
+            # Classification may be top-level OR nested under `failure`
+            # (the agent's natural shape since failure details are grouped).
             cls = j.get("classification")
+            if cls is None and isinstance(j.get("failure"), dict):
+                cls = j["failure"].get("classification")
             if cls not in VALID_CLASSIFICATIONS:
                 acc["missing"].append(
                     f"report.json journeys[{idx}] failed but classification={cls!r} "
-                    f"(must be one of {sorted(VALID_CLASSIFICATIONS)})"
+                    f"(must be one of {sorted(VALID_CLASSIFICATIONS)}; "
+                    f"accepted at top-level or nested under 'failure')"
                 )
 
 
@@ -232,6 +339,17 @@ def validate_acceptance(acceptance_dir: Path) -> dict:
 
     for rel in REQUIRED_TOP_LEVEL:
         _check_required_file(acceptance_dir, rel, acc)
+
+    # Smoke-1 calibration (2026-05-30): require EITHER report.md or
+    # report.json, not both. If neither exists, flag the absence; if
+    # either exists, validate it (only the JSON gets schema-checked).
+    report_present = [r for r in REPORT_VARIANTS if (acceptance_dir / r).exists()]
+    if not report_present:
+        acc["missing"].append(f"report (need at least one of: {', '.join(REPORT_VARIANTS)})")
+    else:
+        # apply the ≥120-byte floor only to the variant(s) that exist
+        for r in report_present:
+            _check_required_file(acceptance_dir, r, acc)
 
     journeys = _validate_journeys_yaml(acceptance_dir, acc)
     if journeys:

@@ -1392,6 +1392,58 @@ async def run_doctrine_meta(repo: str, req: RunDoctrineMetaRequest):
     )
 
 
+class RunAcceptanceRequest(BaseModel):
+    """ABL-0014: invoke the acceptance agent against an already-shipped feature.
+
+    Use this to smoke-test the acceptance pass on its own (without re-running
+    the BL pipeline) — e.g. the calibration smokes required before flipping
+    ``run_acceptance=True`` to the default in ``RunBriefRequest``.
+
+    Requires:
+    - ``<target>/_brownfield/features/<feature_slug>/brief.md`` exists
+    - The merged ``agent_branch`` carries the feature
+    - No regression-gate docker stack is up for ``run_id`` (else skipped)
+    """
+    run_id: str = Field(..., min_length=1)
+    feature_slug: str = Field(..., min_length=1)
+    acceptance_timeout: int = Field(3600, ge=300, le=10800)
+
+
+@router.post("/{repo}/run-acceptance")
+async def run_acceptance(repo: str, req: RunAcceptanceRequest):
+    """Stream the acceptance agent against an existing feature.
+
+    Standalone entry point that mirrors ``/run-doctrine-meta``: bypasses
+    the BL loop and invokes ``_acceptance_flow`` directly. Read-only on
+    code; writes outputs under
+    ``<target>/_brownfield/features/<feature_slug>/acceptance/`` and
+    archives a copy at
+    ``webapp/backend/traces_archive/<run_id>/acceptance/``.
+    """
+    repo_dir = _repo_dir(repo)
+    if not repo_dir.exists():
+        raise HTTPException(status_code=404, detail=f"repo not found: {repo}")
+
+    async def gen():
+        try:
+            async for event in orchestrator_svc._acceptance_flow(
+                repo_dir=repo_dir,
+                repo_name=repo,
+                run_id=req.run_id,
+                feature_slug=req.feature_slug,
+                timeout=req.acceptance_timeout,
+            ):
+                yield _sse(event)
+        except Exception as exc:  # noqa: BLE001
+            yield _sse({"type": "_error", "error": f"{type(exc).__name__}: {exc}"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/{repo}/branches")
 async def list_branches(repo: str):
     """List agent/* branches that have not been merged into the configured agent_branch."""
