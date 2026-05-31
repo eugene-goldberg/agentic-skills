@@ -151,7 +151,8 @@ def _journey_outcome_for_screenshot_rule(j: dict) -> str:
 
     Smoke-1 calibration: the agent uses `outcome` (passed/failed/...) but
     also `result` (pass/fail/...). Treat them as equivalent."""
-    o = j.get("outcome") or j.get("result")
+    # Smoke-2 calibration (2026-05-31): agents also write `status`.
+    o = j.get("outcome") or j.get("result") or j.get("status")
     if not o:
         return "unknown"
     o = str(o).lower()

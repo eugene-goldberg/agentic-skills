@@ -203,6 +203,18 @@ def test_classification_nested_under_failure_accepted(tmp_path: Path) -> None:
     assert result["ok"] is True, result
 
 
+def test_status_field_accepted_as_outcome_synonym(tmp_path: Path) -> None:
+    """Smoke-2 calibration: agents may write `status` instead of `outcome`."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    journeys = yaml.safe_load((acc / "journeys.yaml").read_text())
+    _write_report_json(acc, journeys, outcomes=[
+        {"id": 1, "slug": "slug_1", "status": "passed"},
+        {"id": 2, "slug": "slug_2", "status": "passed"},
+    ])
+    result = av.validate_acceptance(acc)
+    assert result["ok"] is True, result
+
+
 def test_loose_result_pass_fail_synonyms_accepted(tmp_path: Path) -> None:
     """Smoke-1 calibration: 'pass'/'fail' shorthand in report.json's
     `result` field maps to passed/failed."""
