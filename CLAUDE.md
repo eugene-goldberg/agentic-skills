@@ -91,6 +91,23 @@ Concrete rules — apply to every diagnosis, claim, or "I found it" moment:
    Discipline was authored for the doctrine-meta-agent; it applies
    equally to *you* when diagnosing failures, proposing fixes, or
    classifying ledger items. The rule is symmetric.
+6. **Minimum 95% verified/tested certainty before any recommendation.**
+   No recommendation, fix, plan, or "I'd suggest X" goes to the operator
+   below this floor. "Verified/tested" means evidence the operator can
+   re-open: a command that ran, a file that exists, a test that passed,
+   a log line that says what you claim it says. **Intuition, plausibility,
+   pattern-matching, and "I'm pretty sure" do not count toward the
+   threshold** — they count toward *zero* until backed by an artifact.
+   - If you are at <95% certainty, say so explicitly: *"current
+     confidence ~70%, blocked on verifying X — running the check now"*
+     (and run it).
+   - The 5% gap above the floor is reserved for genuine epistemic
+     limits (e.g., the only way to fully verify would be to ship and
+     observe). State the gap when you invoke it.
+   - For irreversible actions (commits, pushes, destructive bash, ledger
+     changes, deletes), 95% is the floor, not the target. Lean to 99%.
+   - This subsumes Rule 1 — falsification is one tool for reaching 95%;
+     so is direct verification, reproduction, and independent check.
 
 If you are unsure whether you have enough evidence to claim a finding,
 you do not have enough evidence. State your hypothesis, list the checks
