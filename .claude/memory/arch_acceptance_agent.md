@@ -1,6 +1,6 @@
 ---
 name: arch-acceptance-agent
-description: ABL-0014 Acceptance Agent — IMPLEMENTING. Runs after sprint_complete; reads brief as whole; infers end-to-end user journeys; seeds realistic state; exercises each via playwright with screenshots. Batches A+B shipped (4a5c108, f1bdb8b); Batch C in flight. Closes per-BL-isolation gap (BL-0007 REQ-0502 worked example). Wired in run_brief behind run_acceptance=False default (§E.1 Q6, flip after 3 calibration sprints).
+description: ABL-0014 Acceptance Agent — OPERATIONAL (2026-05-31). Runs after sprint_complete; reads brief as whole; infers end-to-end user journeys; seeds realistic state; exercises each via playwright with screenshots. Batches A+B+C + 2 calibration commits shipped. Default `run_acceptance=True` flipped after 3 clean smokes against time-tracking (smoke-1 surfaced 5 validator gaps, smoke-2 1 gap, smoke-3 zero gaps + validator_ok=True on attempt 1). Closes A45 (per-BL-isolation gap; BL-0007 REQ-0502 worked example).
 metadata:
   type: project
 ---
@@ -9,7 +9,9 @@ metadata:
 
 - **Batch A** (skill loader + validator + flow skeleton + tests): SHIPPED at `4a5c108`. 14 tests pass.
 - **Batch B** (worktree + agent spawn + R10.1 retry + archive + closure_check ext + 2 new tests): SHIPPED at `f1bdb8b`. 31 acceptance-related tests pass; 56 backend total no regressions.
-- **Batch C** (frontend + 7 docs + memory): IN FLIGHT this session.
+- **Batch C** (frontend + 7 docs + memory): SHIPPED at `c504e4f`.
+- **Calibration smokes** (3/3 PASSED 2026-05-31): smoke-1 (5 gap fixes at `aa0e9ef`), smoke-2 (1 gap fix at `eb075ad`), smoke-3 (zero gaps, validator_ok=True attempt 1).
+- **Default flipped to `run_acceptance=True`** (this commit) — ABL-0014 OPERATIONAL.
 
 ## Why the role exists
 Operator critique 2026-05-30: regression-clean gates ≠ functionality tested end-to-end as a real user would. Per-BL QA is structurally limited because it tests one BL in isolation and cannot exercise cross-BL user journeys. Real teams hand off to a UAT pass after dev-done; the framework needs an analog.

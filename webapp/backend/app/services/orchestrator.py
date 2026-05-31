@@ -1135,7 +1135,7 @@ async def run_brief(
     start_bl: str | None = None,
     run_doctrine_meta: bool = True,
     feature_slug: str | None = None,
-    run_acceptance: bool = False,  # §E.1 Q6 — off for first 3 sprints, then flip
+    run_acceptance: bool = True,  # ABL-0014 default flipped 2026-05-31 after 3 clean smokes
     acceptance_timeout: int = 3600,
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.

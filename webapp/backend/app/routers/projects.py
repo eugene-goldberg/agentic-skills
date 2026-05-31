@@ -1132,10 +1132,13 @@ class RunBriefRequest(BaseModel):
     # False for short test runs where the post-sprint analysis adds latency
     # without value.
     run_doctrine_meta: bool = True
-    # ABL-0014 §E.1 Q6: acceptance pass — off by default for the first 3
-    # smoke sprints; flip to True once calibration confirms FP rate is low.
-    # §E.1 Q2: 3600s default timeout, configurable per-call.
-    run_acceptance: bool = False
+    # ABL-0014: acceptance pass — DEFAULT ON (2026-05-31).
+    # Flipped after 3 clean calibration smokes against time-tracking
+    # (smoke-20260530T161537Z, smoke-20260531T022625Z, smoke-20260531T034747Z):
+    # smoke #3 hit validator_ok=True on attempt 1 with zero leaked
+    # resources. Calibration data confirmed agent's natural output shape +
+    # advisory-only semantics. §E.1 Q2: 3600s default timeout.
+    run_acceptance: bool = True
     acceptance_timeout: int = Field(3600, ge=300, le=10800)
     # A18: per-feature isolation. Operator-supplied feature name; server
     # slugifies it and creates <target>/_brownfield/features/<slug>/ which

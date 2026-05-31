@@ -18,8 +18,8 @@ export function AppV2() {
   const [brief, setBrief] = useState("");
   const [maxBls, setMaxBls] = useState("");
   const [skipPo, setSkipPo] = useState(false);
-  // ABL-0014 §E.1 Q6 — off by default for the first 3 calibration sprints.
-  const [runAcceptance, setRunAcceptance] = useState(false);
+  // ABL-0014 — DEFAULT ON (2026-05-31, after 3 clean calibration smokes).
+  const [runAcceptance, setRunAcceptance] = useState(true);
   // ABL-0014 — last acceptance.done/skipped/error event, surfaced as a tile.
   const [acceptance, setAcceptance] = useState(null);
   const [running, setRunning] = useState(false);

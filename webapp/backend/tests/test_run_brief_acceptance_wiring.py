@@ -28,9 +28,12 @@ from app.routers.projects import RunBriefRequest  # noqa: E402
 # ─── signature / defaults ──────────────────────────────────────────────────
 
 
-def test_run_brief_request_has_run_acceptance_default_false() -> None:
+def test_run_brief_request_has_run_acceptance_default_true() -> None:
+    """Post-2026-05-31: default flipped to True after 3 clean calibration
+    smokes (smoke-20260530T161537Z, smoke-20260531T022625Z,
+    smoke-20260531T034747Z)."""
     req = RunBriefRequest(brief="x" * 25)
-    assert req.run_acceptance is False
+    assert req.run_acceptance is True
     assert req.acceptance_timeout == 3600
 
 
@@ -40,12 +43,13 @@ def test_run_brief_request_accepts_run_acceptance_true() -> None:
     assert req.acceptance_timeout == 1800
 
 
-def test_run_brief_signature_has_run_acceptance_default_false() -> None:
+def test_run_brief_signature_has_run_acceptance_default_true() -> None:
+    """Post-2026-05-31: default flipped to True after 3 clean calibration
+    smokes. ABL-0014 transitioned implementing → operational."""
     sig = inspect.signature(orch.run_brief)
     p = sig.parameters["run_acceptance"]
-    assert p.default is False, (
-        "§E.1 Q6: run_acceptance must default to False for the first 3 "
-        "calibration sprints — flip after calibration confirms low FP rate."
+    assert p.default is True, (
+        "ABL-0014: run_acceptance defaults to True (calibration complete)"
     )
     p2 = sig.parameters["acceptance_timeout"]
     assert p2.default == 3600, "§E.1 Q2: 3600s default timeout."
