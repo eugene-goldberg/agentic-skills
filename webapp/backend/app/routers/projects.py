@@ -22,6 +22,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services import backlog as backlog_svc
+from app.services import disk_preflight as disk_preflight_svc
 from app.services import orchestrator as orchestrator_svc
 from app.services import run_state as run_state_svc
 from app.services.claude_agent import stream_agent_task
@@ -1150,6 +1151,19 @@ class RunBriefRequest(BaseModel):
     # framework already merged everything; partial is a UX signal that the
     # assembled product may not be usable end-to-end from the user seat).
     min_ui_coverage_ratio: float = Field(0.0, ge=0.0, le=1.0)
+    # A48 pre-flight disk-free check (2026-06-01). Default advisory:
+    # the check ALWAYS runs and emits an SSE event with the breakdown,
+    # but only refuses the run (HTTP 409) when enforce=True. This
+    # matches the "operator opts in to gating" pattern used elsewhere
+    # (min_ui_coverage_ratio, stop_on_qa_doctrine_failure) so backward
+    # compat is preserved while operators can dial in stricter policy.
+    enforce_disk_preflight: bool = False
+    min_free_disk_gb: float = Field(
+        disk_preflight_svc.DEFAULT_MIN_FREE_GB, ge=0.0, le=10000.0,
+    )
+    per_bl_disk_gb: float = Field(
+        disk_preflight_svc.DEFAULT_PER_BL_GB, ge=0.0, le=100.0,
+    )
     # A18: per-feature isolation. Operator-supplied feature name; server
     # slugifies it and creates <target>/_brownfield/features/<slug>/ which
     # holds the brief, BACKLOG.md, CODEBASE_CONTEXT.md, SPRINT_PLAN.md, the
@@ -1170,6 +1184,29 @@ async def run_brief(repo: str, req: RunBriefRequest):
     with `orchestrator_step`) so the v2 UI can render a live timeline.
     """
     repo_dir = _repo_dir(repo)
+
+    # A48 pre-flight disk-free check (filed 2026-05-31, fix #1 of 4
+    # shipped 2026-06-01). Runs BEFORE any lock acquisition so it
+    # fails fast and never holds state for a sprint that can't run.
+    # Advisory by default: result is emitted as a `pre_flight.disk`
+    # SSE event below; only refuses (HTTP 409) when
+    # enforce_disk_preflight=True. Backward-compat: default opts the
+    # operator into visibility but not gating.
+    pre_flight = disk_preflight_svc.check(
+        repo_dir,
+        min_free_gb=req.min_free_disk_gb,
+        per_bl_gb=req.per_bl_disk_gb,
+        n_bls=req.max_bls,
+    )
+    if req.enforce_disk_preflight and not pre_flight.ok:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "pre_flight.insufficient_disk",
+                "repo": repo,
+                **pre_flight.to_event(),
+            },
+        )
 
     # B9: stable identity for THIS submission. Lets B2's 409 distinguish a
     # duplicate (same brief resubmitted) from a contention (different brief
@@ -1278,6 +1315,20 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 events_fh.write(json.dumps(rec, default=str) + "\n")
             except (ValueError, TypeError, OSError):
                 pass
+
+        # A48 pre-flight disk advisory — always first event in the
+        # stream so operators see the disk state before any heavy
+        # subprocess fires. Emitted regardless of enforce flag; the
+        # HTTP 409 path above handles the enforce-and-blocked case.
+        _pre_flight_evt = {
+            "type": "_meta",
+            "phase": "orchestrator.pre_flight.disk",
+            "run_id": run_id,
+            "enforce": req.enforce_disk_preflight,
+            **pre_flight.to_event(),
+        }
+        _persist_event(_pre_flight_evt)
+        yield _sse(_pre_flight_evt)
 
         # A17/A18: the per-role brief_persisted SSE event is emitted from
         # inside _po_flow once the worktree exists and the brief has been
