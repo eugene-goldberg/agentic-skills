@@ -1,6 +1,6 @@
 ---
 name: arch-acceptance-agent
-description: ABL-0014 Acceptance Agent — OPERATIONAL (2026-05-31). Runs after sprint_complete; reads brief as whole; infers end-to-end user journeys; seeds realistic state; exercises each via playwright with screenshots. Batches A+B+C + 2 calibration commits shipped. Default `run_acceptance=True` flipped after 3 clean smokes against time-tracking (smoke-1 surfaced 5 validator gaps, smoke-2 1 gap, smoke-3 zero gaps + validator_ok=True on attempt 1). Closes A45 (per-BL-isolation gap; BL-0007 REQ-0502 worked example).
+description: ABL-0014 Acceptance Agent — OPERATIONAL since 2026-05-31; Items 1+2 (API-acceptance + UI-coverage check) landed 2026-06-01 across Batches A/B/C/D. UI journeys exercise what users can reach; api_journeys exercise every merged backend BL via authenticated portal client; sprint_complete carries coverage_subtype (full|partial) and ratio. Closes A46 (per-BL isolation gap; Client_Portal sprint proof point) and Item 1/2 (backend-without-UI assurance + operator visibility).
 metadata:
   type: project
 ---
@@ -11,7 +11,13 @@ metadata:
 - **Batch B** (worktree + agent spawn + R10.1 retry + archive + closure_check ext + 2 new tests): SHIPPED at `f1bdb8b`. 31 acceptance-related tests pass; 56 backend total no regressions.
 - **Batch C** (frontend + 7 docs + memory): SHIPPED at `c504e4f`.
 - **Calibration smokes** (3/3 PASSED 2026-05-31): smoke-1 (5 gap fixes at `aa0e9ef`), smoke-2 (1 gap fix at `eb075ad`), smoke-3 (zero gaps, validator_ok=True attempt 1).
-- **Default flipped to `run_acceptance=True`** (this commit) — ABL-0014 OPERATIONAL.
+- **Default flipped to `run_acceptance=True`** at `8499dd3` — ABL-0014 OPERATIONAL (UI-only scope).
+- **Production proof-of-class** at `run-20260531T134012Z-dd4864` (health-version, 2026-05-31): acceptance found 3 real `product_bug` findings per-BL QA had missed (missing VersionPill.tsx, missing click-copy, broken cross-actor e2e).
+- **Item 1 Batch A** (validator contract for `api_journeys.yaml` + SKILLS.md "API Acceptance" section + 12 tests): SHIPPED at `2282c69`. Backward-compatible: `validate_acceptance(acc_dir)` unchanged when no `backend_bls` supplied.
+- **Item 1 Batch B** (orchestrator computes backend_bls via `_compute_backend_bls`, threads through `_build_acceptance_task` + `validate_acceptance`, `RunAcceptanceRequest.backend_bls_override`, 9 new tests): SHIPPED at `3cc52ca`.
+- **Item 2 Batch C** (UI-coverage check at sprint_complete; `_compute_ui_coverage`; `RunBriefRequest.min_ui_coverage_ratio: float = 0.0`; new `orchestrator.coverage_check` event + `coverage_subtype` on sprint_complete; 7 new tests): SHIPPED at `25a8d33`.
+- **Item 2 Batch D** (frontend AppV2 coverage tile + min_ui_coverage_ratio input + backend_bls surfacing on acceptance tile + HARNESS.md §5.6.2 split into §5.6.2.1 API Acceptance + §5.6.2.2 UI-coverage + this memory): SHIPPED in current commit.
+- **Test posture**: 94/94 backend pass after Batch D (was 64 pre-Item-1).
 
 ## Why the role exists
 Operator critique 2026-05-30: regression-clean gates ≠ functionality tested end-to-end as a real user would. Per-BL QA is structurally limited because it tests one BL in isolation and cannot exercise cross-BL user journeys. Real teams hand off to a UAT pass after dev-done; the framework needs an analog.
@@ -55,6 +61,17 @@ Operator critique 2026-05-30: regression-clean gates ≠ functionality tested en
 BL-0007 REQ-0502: superuser self-approval test exposed a real cross-component bug (ReviewTimesheet keeps dialog open on error → Radix Dialog sets aria-hidden on sibling content → queue rows vanish from a11y tree). QA's 3 R10 retries couldn't fix it because QA cannot request an engineer-side UX change. Test is now `.skip`'d. Acceptance Agent would have classified this as `product_bug` with operator visibility at sprint close instead of silent skip.
 
 ## Open follow-ups
-- 3 calibration smoke sprints with `run_acceptance=True` before flipping the default
-- ABL-0015 (deferred): auto-dispatch follow-up engineer on `product_bug` findings
-- Retrieval MCP wiring (currently `allowed_tools="Bash,Read,Write,Edit"`; agent uses pre-existing test helpers via Read)
+- **Calibration smokes for Item 1 (API-acceptance path)**: Batch B proof-point in flight against Client_Portal sprint. Two more clean runs required before Item 1 can be declared "operational" with same confidence as UI-only ABL-0014.
+- **ABL-0015 (still deferred)**: auto-dispatch follow-up engineer on `product_bug` findings — closes the find→fix loop.
+- **A48 pre-flight disk-free check** — filed but not yet implemented; acceptance runs are heavy on docker volume churn.
+- **Acceptance trace observability gaps** (filed informally): no `retrieval.jsonl`, no `phase_events.jsonl`, tool invocations don't show in `stream.jsonl`. Currently a black box for diagnostics.
+- **Findings feedback ledger**: no mechanism today to bound the agent's false-positive rate over multi-sprint windows.
+- Retrieval MCP wiring (currently `allowed_tools="Bash,Read,Write,Edit"`; agent uses pre-existing test helpers via Read).
+
+## Item 1+2 design rationale (Batch D consolidated)
+
+- **Why Item 1 (API-acceptance) is mandatory not optional**: A46 was framed as "per-BL QA misses cross-component bugs." Hidden assumption was bugs manifest in UI. Client_Portal sprint exposed the gap: 4 of 10 BLs shipped backend with no UI — acceptance honestly flagged `capability_gaps` but couldn't *exercise* those backends, leaving their assurance to per-BL QA, which is exactly what ABL-0014 was created to backstop. Item 1 closes that.
+- **Why coverage assertion is on the validator, not the prompt**: prompts are advisory; validators are enforced. A coverage gap triggers R10.1 retry with the missing BLs named, mirroring `doctrine_validator.build_fix_prompt`.
+- **Why Item 2 doesn't flip terminal_status**: `sprint_complete` has a strong downstream contract (UI tile renderers, doctrine-meta-agent inputs, closure_check trigger). Adding a new value would force every consumer to handle it. Subtype on the same event is cheaper, simpler, and equally operator-visible. A future tighter mode is reachable via a `hard_gate_on_partial` flag.
+- **Why default `min_ui_coverage_ratio=0.0`**: same opt-in discipline as ABL-0014's original 3-smoke calibration. Operator can dial up after watching a few sprints' actual ratios.
+- **Repo-configurable globs**: `RepoConfig.api_route_globs` and `ui_globs` default to FastAPI/React shapes; targets with Django/Rails/Next.js can override in `.agentic-skills.json` without code change.

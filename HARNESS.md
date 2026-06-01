@@ -370,24 +370,58 @@ The orchestrator computes the BL outcome:
 exhausted.
 
 **5.6.2 Acceptance Agent (ABL-0014, advisory-only).** If
-`run_acceptance=True`, the orchestrator forks a detached worktree off
+`run_acceptance=True` (default ON since 2026-05-31 after 3 clean
+calibration smokes), the orchestrator forks a detached worktree off
 `agent_branch`, spawns the acceptance agent there, and lets it exercise
 end-to-end user journeys against the *assembled* feature with seeded
 multi-user state. Read-only on code. Outputs land at
 `<target>/_brownfield/features/<slug>/acceptance/` (`journeys.yaml`,
-`report.md`, `report.json`, `tests/_acceptance/*.spec.ts`,
-`screenshots/`, `fixtures/seed_log.txt`) and are copied to
-`traces_archive/<run_id>/acceptance/` at sprint close. R10.1 retry (max
-2) applies to the *artifact contract*, not to journey failures (which
-are classified, not retried). Hard caps: ≤8 journeys × ≤15 steps.
-Defensive pre-flight skips with `acceptance.skipped reason=gate_stack_still_up`
-if a regression-gate docker stack survives past `sprint_complete`. **The
-acceptance pass NEVER aborts the sprint** — exceptions become
-`acceptance.error` events; doctrine_meta + closure_check still run.
-Default off for the first 3 calibration sprints (§E.1 Q6). Full design
-in `ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md`; closes A45 (per-BL
-isolation prevents cross-component bug recovery; BL-0007 REQ-0502
-worked example).
+`api_journeys.yaml`, `report.md`, `report.json`, `tests/_acceptance/*.spec.ts`,
+`screenshots/`, `fixtures/seed_log.txt`, `fixtures/api_logs/`) and are
+copied to `traces_archive/<run_id>/acceptance/` at sprint close. R10.1
+retry (max 2) applies to the *artifact contract*, not to journey failures
+(which are classified, not retried). Hard caps: ≤8 UI journeys × ≤15
+steps; ≤20 api_journeys × ≤25 requests. Defensive pre-flight skips with
+`acceptance.skipped reason=gate_stack_still_up` if a regression-gate
+docker stack survives past `sprint_complete`. **The acceptance pass NEVER
+aborts the sprint** — exceptions become `acceptance.error` events;
+doctrine_meta + closure_check still run. Full design in
+`ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md`; closes A46 (per-BL
+isolation prevents cross-component bug recovery; BL-0007 REQ-0502 worked
+example).
+
+**5.6.2.1 API Acceptance (Item 1, Batches A+B, 2026-06-01).** The agent
+exercises *every merged backend BL* via API journeys, not just whatever
+the UI can reach. The orchestrator computes the backend-BL list by
+walking `target_ref..agent_branch` commits and matching touched paths
+against `RepoConfig.api_route_globs` (defaults cover FastAPI/Flask;
+overridable per-target in `.agentic-skills.json`). Each backend BL must
+have ≥1 `api_journey` with a matching `backend_bl:` field; the validator
+fails the run (triggering R10.1) on coverage gaps. Each api_journey is a
+list of HTTP requests against the seeded gate stack as a portal-
+authenticated client, with `method`, `path`, `auth_actor`,
+`assert_status` (int or `[int, int]`), and optional `body` /
+`assert_json` (jq-style). Failures are classified with the same taxonomy
+as UI journeys (`product_bug | test_bug | data_bug | infra_bug |
+uncertain`). Request/response logs land under
+`fixtures/api_logs/<journey_id>.jsonl`. Closes the structural gap where
+backend BLs with no UI surface were assured only by per-BL QA — exactly
+the assurance ABL-0014 was created to backstop. Operator may pin the BL
+list via `POST /run-acceptance` with `backend_bls_override: [...]`.
+
+**5.6.2.2 UI-coverage check (Item 2, Batch C, 2026-06-01).** Just
+before `sprint_complete`, the orchestrator emits
+`orchestrator.coverage_check` with the breakdown
+`{merged_total, ui_bls, backend_only, ratio, threshold, subtype}`.
+`sprint_complete` then carries `coverage_subtype: full | partial` and
+`ui_coverage_ratio`. The threshold comes from `RunBriefRequest`'s
+`min_ui_coverage_ratio` (default `0.0` = informational-only — subtype is
+always `full`); when an operator sets a positive floor and the actual
+ratio falls short, subtype is `partial`. **Terminal status is never
+flipped** — the framework already merged the BLs; partial is purely an
+operator-visibility UX signal that the assembled product may not be
+reachable from the user seat. `ui_globs` are repo-configurable
+(defaults: `**/*.tsx,jsx,vue,svelte`, `frontend/**/*`, etc.).
 
 **5.6.3 doctrine_meta-agent.** The orchestrator spawns the
 self-hardening role. It reads the sealed trace archive

@@ -209,3 +209,131 @@ starts. No invariant-touching change auto-promotes.
 delivered in-session. Replaces ad-hoc chat scoping with a durable
 artifact the operator can review, comment on, and grant batch-level
 approval against.*
+
+---
+
+## G. Item 1 — API Acceptance (added 2026-06-01)
+
+Motivated by `run-20260601T032339Z-dd81c5` (Client_Portal): the
+acceptance agent honestly flagged 4 backend BLs (BL-0006/0007/0008/0009)
+as `capability_gaps` because none had reachable UI, but could not
+*exercise* their backends. Their only assurance was per-BL QA — exactly
+what ABL-0014 was created to backstop. Item 1 closes that gap.
+
+### G.1 Contract additions
+
+- Every merged BL whose commit touched a path matching the target's
+  `api_route_globs` MUST have ≥1 entry in `api_journeys.yaml` with a
+  matching `backend_bl:` field. Validator enforces.
+- Each api_journey is a list of HTTP requests against the seeded
+  acceptance compose stack as a portal-authenticated client.
+- Request schema: `{method, path, auth_actor, assert_status}` + optional
+  `body`, `assert_json`.
+- Cost caps: `MAX_API_JOURNEYS=20`, `MAX_REQUESTS_PER_API_JOURNEY=25`.
+- Failures classified with same taxonomy as UI journeys; logs land at
+  `fixtures/api_logs/<journey_id>.jsonl`; per-journey outcome added to
+  `report.json` under `api_journeys: [...]`.
+
+### G.2 Sequencing (shipped)
+
+**Batch A — Validator + SKILLS.md (gated, dormant)** — commit `2282c69`.
+Validator accepts `backend_bls=None` (no-op) or a list (coverage
+asserted). SKILLS.md "API Acceptance" section documents the contract.
+12 new tests. Backward-compatible; production behavior unchanged.
+
+**Batch B — Orchestrator wiring (live)** — commit `3cc52ca`. New
+`_compute_backend_bls` helper walks `target_ref..agent_branch`, matches
+each BL commit against `RepoConfig.api_route_globs`, returns
+`(bls, evidence)`. `_acceptance_flow` computes on entry, threads through
+`_build_acceptance_task` (new "API Acceptance — REQUIRED" prompt block
+naming each BL + cited route files) and `validate_acceptance`.
+`RunAcceptanceRequest.backend_bls_override` lets operator pin scope.
+Both `acceptance.start` and `acceptance.done` events carry
+`backend_bls`. 9 new tests. **Proof point in flight against
+Client_Portal: should compute BL-0001..BL-0009 (BL-0010 = frontend
+shell, excluded).**
+
+### G.3 Locked operator decisions
+
+- **G.3.1 Glob source**: defaults in `repo_config.DEFAULT_API_ROUTE_GLOBS`
+  (FastAPI/Flask shaped); overridable per-target via `api_route_globs`
+  key in `.agentic-skills.json`. Targets that diverge (Django,
+  Rails, Next.js routes) override; no code change required.
+- **G.3.2 Test exclusion**: paths under `/tests/` (or starting with
+  `tests/`) never count toward backend coverage — exercising shipped
+  behavior is the intent, not re-running QA tests.
+- **G.3.3 Evidence cap**: ≤5 cited route files per BL in the prompt for
+  readability; full diff available via the agent's own `git show`.
+- **G.3.4 Multi-commit dedup**: a BL with multiple commits appears once;
+  evidence merged across commits. Subject must start with `BL-NNNN`
+  (the `fix(BL-XXXX):` form is intentionally excluded — keeps the
+  scan deterministic).
+- **G.3.5 Auth model**: api_journeys reuse the seeded identities from
+  `fixtures/seed.py`; tokens minted via the real login route and
+  stashed in `seed_log.txt` so journeys can resolve `auth_actor` at
+  run time. No hard-coded tokens; no token sharing across actors.
+
+---
+
+## H. Item 2 — UI-coverage check (added 2026-06-01)
+
+Operator-visibility complement to Item 1: even after Item 1 closes the
+assurance gap, the operator needs a signal when "everything merged" but
+"nothing reaches the user." Client_Portal had ratio = 1/10 = 0.1.
+
+### H.1 Contract additions
+
+- New `orchestrator.coverage_check` event between `bl.done` (last BL)
+  and `sprint_complete`. Payload:
+  `{merged_total, ui_bls, backend_only, ratio, threshold, subtype}`.
+- `sprint_complete` extended with `coverage_subtype` (`full`|`partial`),
+  `ui_coverage_ratio`, `ui_coverage_threshold`.
+- New `RunBriefRequest.min_ui_coverage_ratio: float = 0.0`. When 0.0,
+  subtype is always `full` (informational-only). When > 0.0 and the
+  actual ratio falls below, subtype is `partial`.
+- **`terminal_status` is never flipped** — sprint still completes; the
+  partial flag is purely operator-visibility UX.
+- `ui_globs` repo-configurable via `RepoConfig.ui_globs`; defaults
+  cover React/Vue/Svelte plus frontend/web/ui top-level dirs.
+
+### H.2 Sequencing (shipped)
+
+**Batch C — Orchestrator + plumbing** — commit `25a8d33`.
+`_compute_ui_coverage` parallel to backend version; emission wired
+before `sprint_complete`; `RunBriefRequest.min_ui_coverage_ratio`
+threaded; 7 new tests including reproduction of Client_Portal ratio.
+
+**Batch D — Frontend + docs + memory** — current commit. AppV2
+gains a Coverage tile rendering subtype + ratio + threshold +
+backend-only BL list; existing Acceptance tile gains a `backend_bls`
+line. New input control for `min_ui_coverage_ratio` (default "0.0").
+HARNESS.md §5.6.2 split into §5.6.2.1 (API Acceptance) + §5.6.2.2 (UI
+coverage). `arch_acceptance_agent.md` memory rewritten.
+
+### H.3 Locked operator decisions
+
+- **H.3.1 Subtype over terminal_status flip**: rejected the
+  `terminal_status="partial_complete"` design because it forces every
+  downstream consumer (UI renderers, doctrine-meta-agent inputs,
+  closure_check trigger) to handle a new value. Subtype on the same
+  event is cheaper, equally visible.
+- **H.3.2 Default 0.0**: matches ABL-0014's original 3-smoke
+  calibration discipline. Operator opts in after watching a few
+  sprints' actual ratios.
+- **H.3.3 Future tighter mode**: a `hard_gate_on_partial` flag could
+  flip `terminal_status` when paired with a positive threshold. Defer
+  until calibrated.
+- **H.3.4 Full-stack BL counted as UI**: a BL whose commit touches BOTH
+  backend AND frontend files counts as UI-covered (it has reachable
+  surface). Backend-only is the residual.
+- **H.3.5 UI test files don't count**: parallel to Item 1's test
+  exclusion — `frontend/tests/*.spec.tsx` does NOT count toward UI
+  surface.
+
+---
+
+*Items 1 + 2 raise ABL-0014 from "OPERATIONAL on UI surfaces" to
+"fully functional for sprints with arbitrary UI/backend mix." Three
+calibration smokes against backend-heavy sprints remain before the
+new Item 1 default is "operational" with the same confidence as the
+2026-05-31 UI-only flip.*

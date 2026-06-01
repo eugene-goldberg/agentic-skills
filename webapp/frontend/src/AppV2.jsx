@@ -22,6 +22,13 @@ export function AppV2() {
   const [runAcceptance, setRunAcceptance] = useState(true);
   // ABL-0014 — last acceptance.done/skipped/error event, surfaced as a tile.
   const [acceptance, setAcceptance] = useState(null);
+  // ABL-0014 Item 2 (Batch C/D, 2026-06-01) — UI-coverage breakdown from
+  // orchestrator.coverage_check event; surfaced as its own tile.
+  const [coverage, setCoverage] = useState(null);
+  // ABL-0014 Item 2 Batch D — operator-tunable UI-coverage floor. 0.0
+  // (default) is informational-only; any positive value will surface
+  // sprint_complete as "partial" when the actual ratio falls short.
+  const [minUiCoverageRatio, setMinUiCoverageRatio] = useState("0.0");
   const [running, setRunning] = useState(false);
   const [stages, setStages] = useState(initialStages());
   const [bls, setBls] = useState([]); // {id, title, deps, steps:{engineer, reindex_e, qa, reindex_q, scorer}, outcome}
@@ -69,6 +76,7 @@ export function AppV2() {
     setEvents([]);
     setDetail(null);
     setAcceptance(null);
+    setCoverage(null);
   }
 
   function setStage(key, patch) {
@@ -186,6 +194,29 @@ export function AppV2() {
       }
       if (key === "sprint_complete") {
         setStage("sprint_complete", { status: "done", detail: evt.summary });
+        // Item 2 Batch C: capture the subtype + ratio on the terminal
+        // sprint_complete event (the coverage_check fires just before).
+        if (evt.coverage_subtype || typeof evt.ui_coverage_ratio === "number") {
+          setCoverage((prev) => ({
+            ...(prev || {}),
+            subtype: evt.coverage_subtype,
+            ratio: evt.ui_coverage_ratio,
+            threshold: evt.ui_coverage_threshold,
+            terminal: true,
+          }));
+        }
+        return;
+      }
+      if (key === "coverage_check") {
+        // Item 2 Batch C — informational event with the full breakdown.
+        setCoverage({
+          merged_total: evt.merged_total,
+          ui_bls: evt.ui_bls || [],
+          backend_only: evt.backend_only || [],
+          ratio: evt.ratio,
+          threshold: evt.threshold,
+          subtype: evt.subtype,
+        });
         return;
       }
       if (key === "aborted") {
@@ -262,6 +293,8 @@ export function AppV2() {
         stop_on_failure: true,
         timeout_per_role: 2400,
         run_acceptance: runAcceptance,
+        // ABL-0014 Item 2 Batch D — operator-tunable UI-coverage floor.
+        min_ui_coverage_ratio: parseFloat(minUiCoverageRatio) || 0.0,
         // A18: per-feature isolation — server creates
         // <target>/_brownfield/features/<slug>/ and tails events.jsonl there.
         feature_name: featureName || null,
@@ -315,6 +348,16 @@ export function AppV2() {
                  placeholder="all" style={{ width: 60 }} disabled={running} />
           <label><input type="checkbox" checked={skipPo} onChange={(e) => setSkipPo(e.target.checked)} disabled={running} /> Skip PO (re-run on existing backlog)</label>
           <label title="ABL-0014 — runs the Acceptance Agent after sprint_complete to exercise end-to-end user journeys and produce a report. Default OFF for first 3 calibration sprints (§E.1 Q6)."><input type="checkbox" checked={runAcceptance} onChange={(e) => setRunAcceptance(e.target.checked)} disabled={running} /> Run acceptance pass</label>
+          <label title="ABL-0014 Item 2 (Batch C) — minimum fraction of merged BLs that must touch UI for sprint_complete to surface as 'full'. 0.0 = informational only (no partial flag ever); 0.5 = at least half the merged BLs must have UI surface; 1.0 = every merged BL must touch UI. Operator-visibility only — sprint still completes either way.">
+            UI cov ≥
+            <input
+              value={minUiCoverageRatio}
+              onChange={(e) => setMinUiCoverageRatio(e.target.value.replace(/[^0-9.]/g, ""))}
+              placeholder="0.0"
+              style={{ width: 50, marginLeft: 4 }}
+              disabled={running}
+            />
+          </label>
         </div>
         <div className="v2-row">
           <label>Feature name</label>
@@ -408,9 +451,40 @@ export function AppV2() {
               )}
               {acceptance.terminal === "skipped" && <> · reason={acceptance.reason}</>}
               {acceptance.terminal === "error" && <> · {acceptance.error}</>}
+              {Array.isArray(acceptance.backend_bls) && acceptance.backend_bls.length > 0 && (
+                <div style={{ marginTop: 4, opacity: 0.85, fontSize: 12 }}>
+                  API coverage: {acceptance.backend_bls.length} backend BL{acceptance.backend_bls.length === 1 ? "" : "s"} ({acceptance.backend_bls.join(", ")})
+                </div>
+              )}
               {acceptance.archive && (
                 <div style={{ marginTop: 4, opacity: 0.8, fontFamily: "monospace", fontSize: 11 }}>
                   archive: {acceptance.archive}
+                </div>
+              )}
+            </div>
+          )}
+          {coverage && typeof coverage.ratio === "number" && (
+            <div
+              className="v2-coverage-tile"
+              style={{
+                marginTop: 12, padding: 12, borderRadius: 6,
+                background: coverage.subtype === "partial" ? "#3b2f1f" : "#1f3b3b",
+                cursor: "pointer", fontSize: 13,
+              }}
+              onClick={() => setDetail({ coverage: true, ...coverage })}
+              title="ABL-0014 Item 2 — UI-coverage breakdown. Click for full detail."
+            >
+              <strong>UI Coverage ({coverage.subtype || "full"})</strong>
+              {" · ratio="}{(coverage.ratio).toFixed(2)}
+              {typeof coverage.threshold === "number" && coverage.threshold > 0 && (
+                <> · threshold={coverage.threshold.toFixed(2)}</>
+              )}
+              {typeof coverage.merged_total === "number" && (
+                <> · {coverage.ui_bls ? coverage.ui_bls.length : 0}/{coverage.merged_total} BLs touch UI</>
+              )}
+              {Array.isArray(coverage.backend_only) && coverage.backend_only.length > 0 && (
+                <div style={{ marginTop: 4, opacity: 0.85, fontSize: 12 }}>
+                  Backend-only BLs ({coverage.backend_only.length}): {coverage.backend_only.join(", ")}
                 </div>
               )}
             </div>
