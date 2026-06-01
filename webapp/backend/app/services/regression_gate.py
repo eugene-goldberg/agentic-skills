@@ -71,6 +71,64 @@ def _compose_project_prefix(run_id: str | None) -> str | None:
     return f"agentic-skills-{short}"
 
 
+# A48 fix #3 (2026-06-01): DiskFull-aware classifier. When the gate's
+# `post_tail` carries a disk-exhaustion error, the canonical SQLAlchemy
+# surface error is `PendingRollbackError` — the *cascade* failure caused
+# by the session going DEACTIVE after the original ENOSPC. The operator-
+# valuable signal is the original `psycopg.errors.DiskFull` (or analog)
+# line, which sits ~3 KB deeper in the tail. These patterns pull that
+# original line out so the orchestrator's `infra_fail` payload carries
+# the *cause*, not the *cascade*.
+_DISK_FULL_PATTERNS = (
+    # postgres-via-psycopg, the empirical signal from BL-0003 abort
+    re.compile(
+        r"^.*psycopg\.errors\.DiskFull:.*$",
+        re.MULTILINE,
+    ),
+    # postgres direct: "could not extend file" is the canonical wording
+    re.compile(
+        r'^.*could not extend file ".*": No space left on device.*$',
+        re.MULTILINE,
+    ),
+    # SQLAlchemy/SQLite/other DBs
+    re.compile(
+        r"^.*OperationalError.*(?:disk full|disk I/O error|no space).*$",
+        re.MULTILINE | re.IGNORECASE,
+    ),
+    # POSIX-level ENOSPC (last-resort; matches even non-DB code paths)
+    re.compile(
+        r"^.*No space left on device.*$",
+        re.MULTILINE,
+    ),
+    # Filesystem quota (typical of CI quota'd workspaces; user reports as
+    # "disk full" experientially even though the host has space)
+    re.compile(
+        r"^.*[Dd]isk quota exceeded.*$",
+        re.MULTILINE,
+    ),
+)
+
+
+def extract_disk_full_reason(post_tail: str) -> str | None:
+    """A48 fix #3: pull the original disk-exhaustion line out of a noisy
+    cascade tail. Returns the trimmed line (≤300 chars) or None when
+    nothing matches.
+
+    Patterns scanned in priority order; the first hit wins. This is
+    deliberately a separate scan from `detect_infra_failure` so the
+    orchestrator can distinguish "host_disk_full" specifically (a
+    completely different operator action — free space, prune volumes —
+    versus generic infra noise).
+    """
+    if not post_tail:
+        return None
+    for pat in _DISK_FULL_PATTERNS:
+        m = pat.search(post_tail)
+        if m:
+            return m.group(0).strip()[:300]
+    return None
+
+
 PYTEST_RESULT_RE = re.compile(r"^(?P<file>tests?/[\w./-]+)::(?P<name>[\w.\[\]-]+)\s+(?P<verdict>PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)", re.MULTILINE)
 
 
@@ -289,14 +347,25 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
         # gate ran but the runtime crashed under it.
         infra = detect_infra_failure(post.raw_tail)
         if infra:
-            return {
+            # A48 fix #3: prefer the canonical disk-full line over the
+            # cascade error (e.g. SQLAlchemy's PendingRollbackError). The
+            # operator action is completely different from generic
+            # ENOSPC — free space + prune volumes, not "fix the test."
+            disk_full = extract_disk_full_reason(post.raw_tail)
+            result: dict = {
                 "ok": False, "kind": "infra_fail",
                 "pre": pre.to_dict(), "post": post.to_dict(),
                 "regressions": [], "new_failures": [],
                 "command": test_cmd,
-                "reason": f"infra failure: {infra[:200]}",
                 "post_tail": post.raw_tail[-15000:],
             }
+            if disk_full:
+                result["reason"] = f"infra failure (host_disk_full): {disk_full[:200]}"
+                result["infra_fail_reason"] = "host_disk_full"
+            else:
+                result["reason"] = f"infra failure: {infra[:200]}"
+                result["infra_fail_reason"] = "other"
+            return result
 
         # A test that was passing pre-merge but is now failing (or missing) is a regression.
         regressions = sorted(pre.passed - post.passed)
