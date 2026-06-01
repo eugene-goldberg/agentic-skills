@@ -275,3 +275,154 @@ def test_nonexistent_dir_flagged(tmp_path: Path) -> None:
     result = av.validate_acceptance(tmp_path / "does_not_exist")
     assert result["ok"] is False
     assert any("acceptance dir not created" in m for m in result["missing"])
+
+
+# ─── ABL-0014 Item 1 — API-acceptance validation ──────────────────────────
+
+
+def _api_journey(id_: str, slug: str, bl: str, n_requests: int = 1) -> dict:
+    return {
+        "id": id_,
+        "slug": slug,
+        "backend_bl": bl,
+        "brief_refs": ["REQ-0001"],
+        "actors": ["alice"],
+        "requests": [
+            {
+                "method": "GET",
+                "path": f"/api/v1/{slug}/{i}",
+                "auth_actor": "alice",
+                "assert_status": 200,
+            }
+            for i in range(1, n_requests + 1)
+        ],
+    }
+
+
+def _write_api_journeys(acc_dir: Path, api_journeys: list[dict]) -> None:
+    (acc_dir / "api_journeys.yaml").write_text(
+        yaml.safe_dump({"api_journeys": api_journeys})
+    )
+
+
+def test_api_validation_skipped_when_no_backend_bls(tmp_path: Path) -> None:
+    """Backward-compat: if caller passes no backend_bls (the default),
+    api_journeys.yaml is NOT required and not parsed. Pre-Item-1 behavior."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    # No api_journeys.yaml on disk.
+    result = av.validate_acceptance(acc)  # backend_bls=None
+    assert result["ok"] is True, result
+
+
+def test_api_validation_skipped_when_backend_bls_empty(tmp_path: Path) -> None:
+    """A pure-frontend sprint has zero backend BLs → skip."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    result = av.validate_acceptance(acc, backend_bls=[])
+    assert result["ok"] is True, result
+
+
+def test_api_journeys_missing_when_backend_bls_supplied(tmp_path: Path) -> None:
+    """Item 1 contract: a sprint shipping backend BLs MUST produce
+    api_journeys.yaml. Absence is a hard miss."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    result = av.validate_acceptance(acc, backend_bls=["BL-0006"])
+    assert result["ok"] is False
+    assert any("api_journeys.yaml" in m for m in result["missing"])
+
+
+def test_api_journeys_coverage_gap_flagged(tmp_path: Path) -> None:
+    """If api_journeys.yaml exists but a backend BL has no covering
+    api_journey, the coverage assertion fires."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    _write_api_journeys(acc, [_api_journey("api_01", "comments", "BL-0006")])
+    # BL-0007 is in the prompt but absent from api_journeys → gap
+    result = av.validate_acceptance(acc, backend_bls=["BL-0006", "BL-0007"])
+    assert result["ok"] is False
+    assert any("coverage gap" in m and "BL-0007" in m for m in result["missing"])
+
+
+def test_api_journeys_full_coverage_passes(tmp_path: Path) -> None:
+    """All backend BLs covered by ≥1 api_journey → ok."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    _write_api_journeys(acc, [
+        _api_journey("api_01", "comments_create", "BL-0006"),
+        _api_journey("api_02", "comments_cross_tenant", "BL-0006"),
+        _api_journey("api_03", "documents_list", "BL-0007"),
+    ])
+    result = av.validate_acceptance(acc, backend_bls=["BL-0006", "BL-0007"])
+    assert result["ok"] is True, result
+
+
+def test_api_journey_missing_required_field_flagged(tmp_path: Path) -> None:
+    """Each api_journey needs id, slug, backend_bl, requests."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    bad = _api_journey("api_01", "x", "BL-0006")
+    del bad["backend_bl"]
+    _write_api_journeys(acc, [bad])
+    result = av.validate_acceptance(acc, backend_bls=["BL-0006"])
+    assert result["ok"] is False
+    assert any("missing key 'backend_bl'" in m for m in result["missing"])
+
+
+def test_api_request_missing_required_field_flagged(tmp_path: Path) -> None:
+    """Each request needs method, path, auth_actor, assert_status."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    j = _api_journey("api_01", "x", "BL-0006")
+    del j["requests"][0]["assert_status"]
+    _write_api_journeys(acc, [j])
+    result = av.validate_acceptance(acc, backend_bls=["BL-0006"])
+    assert result["ok"] is False
+    assert any("missing key 'assert_status'" in m for m in result["missing"])
+
+
+def test_api_invalid_http_method_flagged(tmp_path: Path) -> None:
+    acc = _build_valid_acceptance_dir(tmp_path)
+    j = _api_journey("api_01", "x", "BL-0006")
+    j["requests"][0]["method"] = "TRACE"  # not in our allowlist
+    _write_api_journeys(acc, [j])
+    result = av.validate_acceptance(acc, backend_bls=["BL-0006"])
+    assert result["ok"] is False
+    assert any("'TRACE'" in m for m in result["missing"])
+
+
+def test_api_assert_status_list_accepted(tmp_path: Path) -> None:
+    """assert_status can be a list of acceptable codes (e.g. [403, 404])."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    j = _api_journey("api_01", "x", "BL-0006")
+    j["requests"][0]["assert_status"] = [403, 404]
+    _write_api_journeys(acc, [j])
+    result = av.validate_acceptance(acc, backend_bls=["BL-0006"])
+    assert result["ok"] is True, result
+
+
+def test_api_assert_status_wrong_type_flagged(tmp_path: Path) -> None:
+    acc = _build_valid_acceptance_dir(tmp_path)
+    j = _api_journey("api_01", "x", "BL-0006")
+    j["requests"][0]["assert_status"] = "two hundred"  # string, not int|list
+    _write_api_journeys(acc, [j])
+    result = av.validate_acceptance(acc, backend_bls=["BL-0006"])
+    assert result["ok"] is False
+    assert any("must be int or list[int]" in m for m in result["missing"])
+
+
+def test_api_too_many_journeys_flagged(tmp_path: Path) -> None:
+    acc = _build_valid_acceptance_dir(tmp_path)
+    too_many = [
+        _api_journey(f"api_{i:02d}", f"x_{i}", "BL-0006")
+        for i in range(av.MAX_API_JOURNEYS + 1)
+    ]
+    _write_api_journeys(acc, too_many)
+    result = av.validate_acceptance(acc, backend_bls=["BL-0006"])
+    assert result["ok"] is False
+    assert any(f"> MAX {av.MAX_API_JOURNEYS}" in m for m in result["missing"])
+
+
+def test_api_too_many_requests_per_journey_flagged(tmp_path: Path) -> None:
+    acc = _build_valid_acceptance_dir(tmp_path)
+    j = _api_journey("api_01", "x", "BL-0006",
+                     n_requests=av.MAX_REQUESTS_PER_API_JOURNEY + 1)
+    _write_api_journeys(acc, [j])
+    result = av.validate_acceptance(acc, backend_bls=["BL-0006"])
+    assert result["ok"] is False
+    assert any(f"> MAX {av.MAX_REQUESTS_PER_API_JOURNEY}" in m
+               for m in result["missing"])

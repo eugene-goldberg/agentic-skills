@@ -46,6 +46,19 @@ VALID_CLASSIFICATIONS = {
     "product_bug", "test_bug", "data_bug", "infra_bug", "uncertain",
 }
 
+# ─── ABL-0014 Item 1 (API-acceptance pass) ────────────────────────────────
+# Cap parallel to MAX_JOURNEYS; one api_journey per backend BL is the
+# expected steady-state, so 20 leaves headroom for sprints that touch
+# multiple route modules per BL without runaway agent spend.
+MAX_API_JOURNEYS = 20
+MAX_REQUESTS_PER_API_JOURNEY = 25
+
+# Methods we recognize without further enum-checking; anything else falls
+# through to the agent's judgment but is flagged.
+VALID_HTTP_METHODS = {
+    "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+}
+
 # Top-level files the acceptance agent must produce.
 REQUIRED_TOP_LEVEL = (
     "journeys.yaml",
@@ -316,7 +329,148 @@ def _check_required_file(acc_dir: Path, rel: str, acc: dict) -> None:
         acc["empty"].append(rel)
 
 
-def validate_acceptance(acceptance_dir: Path) -> dict:
+def _validate_api_journeys_yaml(
+    acc_dir: Path, acc: dict, backend_bls: list[str],
+) -> list[dict]:
+    """ABL-0014 Item 1 — validate api_journeys.yaml.
+
+    Parameters
+    ----------
+    acc_dir
+        ``<target>/_brownfield/features/<slug>/acceptance/``.
+    acc
+        Mutable accumulator (missing/empty/...).
+    backend_bls
+        IDs of merged backlog items that touched backend route files.
+        Every BL in this list MUST appear as `backend_bl` in at least one
+        api_journey (coverage assertion — the whole point of Item 1).
+
+    Returns the parsed api_journey list (or [] on error). When
+    ``backend_bls`` is empty, this function is a no-op (returns []) — that
+    is the legitimate case for a sprint whose BLs ship pure frontend.
+
+    Schema (each entry must be a mapping):
+      id:           str   (required, ordering hint; agent's choice)
+      slug:         str   (required, snake_case identifier)
+      backend_bl:   str   (required, the merged BL this journey covers,
+                           e.g. "BL-0006")
+      requests:     list  (required, ≥1, ≤ MAX_REQUESTS_PER_API_JOURNEY)
+        each request:
+          method:        str (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS)
+          path:          str (e.g. "/api/v1/portal/projects")
+          auth_actor:    str (which seeded identity drives this request)
+          assert_status: int OR list[int]
+    """
+    path = acc_dir / "api_journeys.yaml"
+    if not backend_bls:
+        # No backend BLs to cover → skip the API pass entirely. This
+        # keeps the validator a no-op for caller paths that don't opt in.
+        return []
+    if not path.exists():
+        acc["missing"].append(
+            f"api_journeys.yaml (required; sprint shipped {len(backend_bls)} "
+            f"backend BL(s): {', '.join(backend_bls)} — every backend BL "
+            f"needs ≥1 api_journey)"
+        )
+        return []
+    data, err = _safe_load_yaml(path)
+    if err:
+        acc["missing"].append(f"api_journeys.yaml ({err})")
+        return []
+    if isinstance(data, dict):
+        data = data.get("api_journeys") or data.get("journeys")
+        if not isinstance(data, list):
+            acc["missing"].append(
+                "api_journeys.yaml (dict form must contain "
+                "'api_journeys: [...]' or 'journeys: [...]' list)"
+            )
+            return []
+    elif not isinstance(data, list):
+        acc["missing"].append(
+            "api_journeys.yaml (expected list of api_journeys or "
+            "dict with 'api_journeys: [...]')"
+        )
+        return []
+    if len(data) > MAX_API_JOURNEYS:
+        acc["missing"].append(
+            f"api_journeys.yaml (cost cap: {len(data)} api_journeys "
+            f"> MAX {MAX_API_JOURNEYS})"
+        )
+
+    valid: list[dict] = []
+    covered_bls: set[str] = set()
+    for idx, j in enumerate(data):
+        if not isinstance(j, dict):
+            acc["missing"].append(f"api_journeys.yaml[{idx}] (not a mapping)")
+            continue
+        for required_key in ("id", "slug", "backend_bl", "requests"):
+            if required_key not in j:
+                acc["missing"].append(
+                    f"api_journeys.yaml[{idx}] missing key '{required_key}'"
+                )
+        bl = j.get("backend_bl")
+        if isinstance(bl, str):
+            covered_bls.add(bl)
+        reqs = j.get("requests")
+        if not isinstance(reqs, list) or len(reqs) == 0:
+            acc["missing"].append(
+                f"api_journeys.yaml[{idx}] '{j.get('slug', '?')}' "
+                f"(≥1 request required)"
+            )
+        elif len(reqs) > MAX_REQUESTS_PER_API_JOURNEY:
+            acc["missing"].append(
+                f"api_journeys.yaml[{idx}] '{j.get('slug', '?')}' "
+                f"(cost cap: {len(reqs)} requests "
+                f"> MAX {MAX_REQUESTS_PER_API_JOURNEY})"
+            )
+        else:
+            for r_idx, r in enumerate(reqs):
+                if not isinstance(r, dict):
+                    acc["missing"].append(
+                        f"api_journeys.yaml[{idx}].requests[{r_idx}] (not a mapping)"
+                    )
+                    continue
+                for rk in ("method", "path", "auth_actor", "assert_status"):
+                    if rk not in r:
+                        acc["missing"].append(
+                            f"api_journeys.yaml[{idx}].requests[{r_idx}] "
+                            f"missing key '{rk}'"
+                        )
+                method = r.get("method")
+                if isinstance(method, str) and method.upper() not in VALID_HTTP_METHODS:
+                    acc["missing"].append(
+                        f"api_journeys.yaml[{idx}].requests[{r_idx}] "
+                        f"method={method!r} (not in {sorted(VALID_HTTP_METHODS)})"
+                    )
+                ast = r.get("assert_status")
+                if ast is not None and not isinstance(ast, (int, list)):
+                    acc["missing"].append(
+                        f"api_journeys.yaml[{idx}].requests[{r_idx}] "
+                        f"assert_status={ast!r} (must be int or list[int])"
+                    )
+                elif isinstance(ast, list) and not all(isinstance(x, int) for x in ast):
+                    acc["missing"].append(
+                        f"api_journeys.yaml[{idx}].requests[{r_idx}] "
+                        f"assert_status list must contain only ints"
+                    )
+        valid.append(j)
+
+    # Coverage assertion — the whole point of Item 1.
+    missing_coverage = sorted(set(backend_bls) - covered_bls)
+    if missing_coverage:
+        acc["missing"].append(
+            f"api_journeys.yaml coverage gap: backend BL(s) "
+            f"{missing_coverage} have NO api_journey "
+            f"(each merged backend BL requires ≥1 api_journey with "
+            f"matching `backend_bl:` field)"
+        )
+    return valid
+
+
+def validate_acceptance(
+    acceptance_dir: Path,
+    backend_bls: list[str] | None = None,
+) -> dict:
     """Validate the contents of an acceptance-agent output dir.
 
     Parameters
@@ -324,6 +478,14 @@ def validate_acceptance(acceptance_dir: Path) -> dict:
     acceptance_dir
         Absolute path to
         ``<target>/_brownfield/features/<slug>/acceptance/``.
+    backend_bls
+        Optional list of merged BL IDs whose commit touched backend route
+        files (ABL-0014 Item 1, 2026-06-01). When supplied (non-empty),
+        triggers ``api_journeys.yaml`` validation and the coverage
+        assertion: every BL listed must appear as ``backend_bl:`` in at
+        least one api_journey. When ``None`` or empty, the API-acceptance
+        pass is skipped entirely — backward-compatible with all pre-Item-1
+        callers and with sprints that ship pure frontend.
 
     Returns
     -------
@@ -356,6 +518,13 @@ def validate_acceptance(acceptance_dir: Path) -> dict:
     if journeys:
         _validate_screenshots(acceptance_dir, journeys, acc)
     _validate_report_json(acceptance_dir, acc)
+
+    # ABL-0014 Item 1: API-acceptance pass. Gated on caller opt-in via
+    # backend_bls. When the orchestrator wires this through (Batch B),
+    # it will compute backend_bls from `git diff --name-only` against
+    # the merged agent branch and pass them here.
+    if backend_bls:
+        _validate_api_journeys_yaml(acceptance_dir, acc, backend_bls)
 
     acc["ok"] = not acc["missing"] and not acc["empty"]
     acc["summary"] = (

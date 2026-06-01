@@ -92,9 +92,11 @@ You write under `<target>/_brownfield/features/<slug>/acceptance/`:
 
 ```
 acceptance/
-  journeys.yaml              # the journeys you planned (canonical list)
+  journeys.yaml              # UI journeys (canonical list, ≤8)
+  api_journeys.yaml          # API journeys (≥1 per merged backend BL, ≤20)
   report.md                  # the human-readable acceptance report
   report.json                # machine-readable per-journey outcomes
+                              # (includes BOTH ui journeys + api_journeys)
   tests/_acceptance/         # playwright spec(s) — sandbox, NOT in main test tree
     journey_<NN>_<slug>.spec.ts
   screenshots/
@@ -154,9 +156,19 @@ Before you emit `done`:
    - What actually happened (with screenshot path)
    - Whether the failure is in the product OR in your test (be calibrated;
      when uncertain, say so)
-8. **Emit the final summary** as a `_meta phase=acceptance.done` event
+8. **(API Acceptance, mandatory when backend BLs ship)** For every
+   merged backend BL listed in the prompt, write ≥1 api_journey in
+   `api_journeys.yaml`, drive the routes against the seeded gate stack
+   as a portal-authenticated client, log each request/response under
+   `fixtures/api_logs/`, classify any failures with the same taxonomy as
+   UI journeys, and add an `api_journeys: [...]` array to `report.json`
+   with the per-journey outcome. See the **API Acceptance** section
+   below for the full schema and contract. If the sprint shipped zero
+   backend BLs, still produce `api_journeys.yaml` with `api_journeys: []`.
+9. **Emit the final summary** as a `_meta phase=acceptance.done` event
    containing `journeys_planned`, `journeys_passed`, `journeys_failed`,
-   `journeys_unshippable`, `report_path`, `screenshots_dir`.
+   `journeys_unshippable`, `api_journeys_planned`, `api_journeys_passed`,
+   `api_journeys_failed`, `report_path`, `screenshots_dir`.
 
 ---
 
@@ -316,6 +328,154 @@ Every journey in `journeys.yaml` MUST match:
 ```
 
 Each step MUST end with a screenshot.
+
+---
+
+## API Acceptance (mandatory when backend BLs ship)
+
+**Why this exists (ABL-0014 Item 1, 2026-06-01):** UI journeys exercise
+what a user can *reach*. A sprint can merge backend BLs whose routes are
+not reachable from any shipped UI screen — the Client_Portal sprint
+(`run-20260601T032339Z-dd81c5`) shipped 4 such BLs (comments, documents,
+support tickets, branding). UI journeys cannot exercise them, so the only
+assurance left is per-BL QA — and per-BL QA is the thing acceptance was
+created to backstop. **API Acceptance closes that gap.**
+
+### The contract
+
+For **every merged BL whose commit touched a backend route file** (e.g.
+`backend/app/api/routes/*.py`, `*/routers/*.py`, or analogues in
+non-FastAPI targets), you MUST produce **at least one api_journey** that
+drives that BL's routes as a portal-authenticated client against the
+seeded gate stack.
+
+The orchestrator will pass you the list of backend-touching BLs in the
+acceptance prompt (Batch B wiring; until then, infer them from `git log
+--name-only ^target_ref HEAD` on the merged agent branch).
+
+**Coverage is enforced by the validator:** `api_journeys.yaml` must contain
+≥1 entry whose `backend_bl:` field equals each backend BL in the supplied
+list. If any backend BL has no covering api_journey, the validator emits a
+`missing` row, the run goes through the R10.1 retry loop with a focused
+fix prompt, and you are re-spawned with the gap named.
+
+### How to drive an api_journey
+
+The acceptance compose stack already has the backend container running.
+Drive it from inside that container with `curl` (or from your worktree
+host with `httpx`/`curl` against the published port — whichever is
+simpler given the gate stack's networking).
+
+**Auth source:** use the SAME seeded identities from `fixtures/seed.py`.
+For each seeded actor, mint a token via the real login route and stash it
+in `fixtures/seed_log.txt` (e.g. `alice_portal_token=ey…`). Every
+api_journey request names the actor and the harness resolves the token at
+run time. Never hard-code tokens; never share tokens across actors.
+
+### api_journeys.yaml schema
+
+```yaml
+api_journeys:
+  - id: api_01
+    slug: comments_create_and_read_as_grantee
+    backend_bl: BL-0006                          # REQUIRED — coverage key
+    brief_refs: [REQ-0603]
+    actors: [alice]                              # seeded identities used
+    description: |
+      Alice (portal client with comment grant on project 1) POSTs a
+      comment, then GETs the project's comment list and asserts her
+      comment is present and attributed to her client_user_id.
+    requests:
+      - method: POST
+        path: /api/v1/portal/projects/1/comments
+        auth_actor: alice
+        body: { "body": "Looks good — let's ship." }
+        assert_status: 201
+        assert_json:                              # optional, jq-style
+          - "$.body == 'Looks good — let's ship.'"
+          - "$.client_user_id != null"
+      - method: GET
+        path: /api/v1/portal/projects/1/comments
+        auth_actor: alice
+        assert_status: 200
+        assert_json:
+          - "$.items | length >= 1"
+          - "$.items[0].body == 'Looks good — let's ship.'"
+  - id: api_02
+    slug: comments_cross_tenant_isolation
+    backend_bl: BL-0006
+    brief_refs: [REQ-0601, REQ-0603]
+    actors: [alice, bob]
+    description: |
+      Bob (different tenant) MUST NOT see Alice's comment from api_01.
+      Same backend_bl: BL-0006 — multiple api_journeys per BL allowed.
+    requests:
+      - method: GET
+        path: /api/v1/portal/projects/1/comments
+        auth_actor: bob
+        assert_status: [404, 403]                 # either is acceptable
+```
+
+### Required schema fields (validator enforces)
+
+| field | type | required | notes |
+|---|---|---|---|
+| `id` | str | yes | ordering hint, agent's choice |
+| `slug` | str | yes | snake_case identifier |
+| `backend_bl` | str | yes | the merged BL this journey covers (e.g. `BL-0006`) |
+| `requests` | list | yes | ≥1, ≤25 |
+| `requests[].method` | str | yes | one of GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS |
+| `requests[].path` | str | yes | full URL path including query string if any |
+| `requests[].auth_actor` | str | yes | seeded identity name (matches `seed_log.txt`) |
+| `requests[].assert_status` | int OR list[int] | yes | 200, or [200, 201] for multi-accept |
+| `requests[].body` | mapping/string | no | request body (JSON or raw) |
+| `requests[].assert_json` | list[str] | no | jq-style path assertions on response |
+
+### How api_journeys feed report.json
+
+Add a sibling array `api_journeys: [...]` to `report.json`:
+
+```json
+{
+  "summary": {
+    "journeys_planned": 6, "journeys_passed": 6, "journeys_failed": 0,
+    "api_journeys_planned": 8, "api_journeys_passed": 7, "api_journeys_failed": 1
+  },
+  "journeys": [ ... existing UI shape ... ],
+  "api_journeys": [
+    { "id": "api_01", "slug": "comments_create_and_read_as_grantee",
+      "backend_bl": "BL-0006",
+      "status": "pass",
+      "requests": [
+        {"method": "POST", "path": "...", "actual_status": 201, "ok": true},
+        ...
+      ]
+    },
+    { "id": "api_03", "slug": "documents_upload_approval_workflow",
+      "backend_bl": "BL-0007",
+      "status": "fail",
+      "classification": "product_bug",
+      "hypothesis": "approve endpoint returns 500 when document already in 'approved' state; idempotency missing",
+      "evidence": "fixtures/api_logs/api_03_requests.jsonl"
+    }
+  ]
+}
+```
+
+### Honest-failure rule applies identically
+
+A failed api_journey gets the same classification taxonomy as UI
+journeys (`product_bug` / `test_bug` / `data_bug` / `infra_bug` /
+`uncertain`). Evidence for an API failure is the request/response log —
+not a screenshot. Save it as a jsonl under `fixtures/api_logs/` and
+reference it from the report.
+
+### When to skip
+
+If the sprint shipped **zero** backend BLs (pure frontend feature or
+docs-only sprint), no `api_journeys.yaml` is needed. The orchestrator
+detects this and skips the validation; you should still produce the file
+with `api_journeys: []` to make the empty intent explicit.
 
 ---
 
