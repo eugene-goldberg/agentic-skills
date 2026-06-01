@@ -1410,6 +1410,12 @@ class RunAcceptanceRequest(BaseModel):
     run_id: str = Field(..., min_length=1)
     feature_slug: str = Field(..., min_length=1)
     acceptance_timeout: int = Field(3600, ge=300, le=10800)
+    # ABL-0014 Item 1 Batch B (2026-06-01): override the auto-computed
+    # backend BL list (e.g. for re-runs against a fixed scope or for
+    # testing). When None, the orchestrator computes it from the merged
+    # agent_branch via `_compute_backend_bls`. An EMPTY list means
+    # "pure-frontend sprint — skip API validation entirely."
+    backend_bls_override: list[str] | None = None
 
 
 @router.post("/{repo}/run-acceptance")
@@ -1435,6 +1441,7 @@ async def run_acceptance(repo: str, req: RunAcceptanceRequest):
                 run_id=req.run_id,
                 feature_slug=req.feature_slug,
                 timeout=req.acceptance_timeout,
+                backend_bls_override=req.backend_bls_override,
             ):
                 yield _sse(event)
         except Exception as exc:  # noqa: BLE001

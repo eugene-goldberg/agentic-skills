@@ -29,6 +29,22 @@ CONFIG_FILENAME = ".agentic-skills.json"
 DEFAULT_AGENT_BRANCH = "agentic-skills-work"
 DEFAULT_MAIN_REF = "main"
 
+# ABL-0014 Item 1 (Batch B, 2026-06-01): default glob set for identifying
+# "backend route" files when computing which merged BLs need api_journey
+# coverage. Tuned for FastAPI/Flask-style trees; targets with different
+# layouts can override via the `api_route_globs` key in
+# .agentic-skills.json. Use forward-slash globs; matched case-insensitively
+# against repo-relative paths.
+DEFAULT_API_ROUTE_GLOBS: list[str] = [
+    "**/api/routes/*.py",
+    "**/api/routes/**/*.py",
+    "**/api/*.py",
+    "**/routers/*.py",
+    "**/routers/**/*.py",
+    "**/routes/*.py",
+    "**/routes/**/*.py",
+]
+
 
 @dataclass
 class RepoConfig:
@@ -38,6 +54,10 @@ class RepoConfig:
     test_cmd: list[str] | None  # None = auto-detect via brownfield.detect_test_command
     doctrine: str | None        # None = derive from target_status
     source: str                 # "file" | "default"
+    api_route_globs: list[str] | None = None  # None = use DEFAULT_API_ROUTE_GLOBS
+
+    def effective_api_route_globs(self) -> list[str]:
+        return self.api_route_globs or list(DEFAULT_API_ROUTE_GLOBS)
 
     def to_dict(self) -> dict:
         return {
@@ -45,6 +65,7 @@ class RepoConfig:
             "main_ref": self.main_ref,
             "test_cmd": self.test_cmd,
             "doctrine": self.doctrine,
+            "api_route_globs": self.api_route_globs,
             "source": self.source,
         }
 
@@ -80,12 +101,18 @@ def load(repo_root: Path) -> RepoConfig:
             main_ref = data.get("main_ref") or DEFAULT_MAIN_REF
             test_cmd = data.get("test_cmd")
             doctrine = data.get("doctrine")
+            api_route_globs = data.get("api_route_globs")
             return RepoConfig(
                 repo_root=repo_root,
                 agent_branch=agent_branch,
                 main_ref=main_ref,
                 test_cmd=list(test_cmd) if isinstance(test_cmd, list) else None,
                 doctrine=doctrine,
+                api_route_globs=(
+                    list(api_route_globs)
+                    if isinstance(api_route_globs, list) and api_route_globs
+                    else None
+                ),
                 source="file",
             )
         except (OSError, json.JSONDecodeError):

@@ -87,8 +87,16 @@ def _setup_happy_path(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(orch, "create_worktree", AsyncMock(return_value=fake_wt))
     monkeypatch.setattr(orch, "remove_worktree", AsyncMock(return_value=None))
     monkeypatch.setattr(orch.repo_config_svc, "load", MagicMock(
-        return_value=SimpleNamespace(agent_branch="agentic-skills-work")
+        return_value=SimpleNamespace(
+            agent_branch="agentic-skills-work",
+            main_ref="main",
+            effective_api_route_globs=lambda: [],
+        )
     ))
+    # ABL-0014 Item 1 Batch B: stub the backend-BL computation to []
+    # so the legacy flow tests don't depend on a real git repo.
+    monkeypatch.setattr(orch, "_compute_backend_bls",
+                        AsyncMock(return_value=([], {})))
     monkeypatch.setattr(orch.prompts_brownfield_svc, "_load_skill",
                         MagicMock(return_value="# fake acceptance SKILLS.md"))
     return repo

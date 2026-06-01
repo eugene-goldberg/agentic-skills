@@ -702,6 +702,109 @@ async def _gate_stack_present(run_id: str) -> bool:
     return bool(out and out.decode("utf-8", "replace").strip())
 
 
+async def _compute_backend_bls(
+    repo_dir: Path,
+    target_ref: str,
+    agent_branch: str,
+    api_route_globs: list[str],
+) -> tuple[list[str], dict[str, list[str]]]:
+    """ABL-0014 Item 1 Batch B: identify merged BLs that touched backend
+    route files.
+
+    Walks the commits on ``agent_branch`` since divergence from
+    ``target_ref`` and, for each commit whose subject begins with a
+    ``BL-NNNN`` prefix, checks whether its diff touches any path matching
+    one of ``api_route_globs``. Returns ``(backend_bls, evidence)``:
+
+    - ``backend_bls`` is the deduped, sort-stable BL ID list (e.g.
+      ``["BL-0006", "BL-0007"]``).
+    - ``evidence`` is ``{bl_id: [touched_path, ...]}`` capped at 5 paths
+      per BL, used by the acceptance prompt to show the agent WHY each BL
+      is on the list.
+
+    Best-effort: returns ``([], {})`` on any git failure. The validator
+    treats an empty list as "skip API-acceptance validation," matching
+    the pure-frontend-sprint contract.
+
+    Coverage rule matches the validator: a BL whose only backend touch is
+    a test file (``backend/tests/...``) does NOT need an api_journey — the
+    intent is to exercise SHIPPED behavior, not re-run QA tests through
+    a different harness.
+    """
+    import fnmatch
+    import re
+    bl_re = re.compile(r"^(BL-\d{4})\b", re.MULTILINE)
+
+    # 1. Range of commits on agent_branch since divergence from target_ref.
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "log", "--reverse", "--format=%H%x09%s",
+            f"{target_ref}..{agent_branch}",
+            cwd=str(repo_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, _err = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except (FileNotFoundError, asyncio.TimeoutError, OSError):
+        return [], {}
+    if proc.returncode != 0 or not out:
+        return [], {}
+
+    # 2. For each commit, extract BL-NNNN from subject, then diff its files.
+    bls_order: list[str] = []
+    seen: set[str] = set()
+    evidence: dict[str, list[str]] = {}
+
+    for line in out.decode("utf-8", "replace").splitlines():
+        if "\t" not in line:
+            continue
+        sha, subj = line.split("\t", 1)
+        m = bl_re.search(subj)
+        if not m:
+            continue
+        bl_id = m.group(1)
+
+        try:
+            diff_proc = await asyncio.create_subprocess_exec(
+                "git", "show", "--no-renames", "--name-only", "--format=",
+                sha,
+                cwd=str(repo_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            diff_out, _ = await asyncio.wait_for(diff_proc.communicate(), timeout=20)
+        except (FileNotFoundError, asyncio.TimeoutError, OSError):
+            continue
+        if diff_proc.returncode != 0:
+            continue
+
+        touched_routes: list[str] = []
+        for path in diff_out.decode("utf-8", "replace").splitlines():
+            path = path.strip()
+            if not path:
+                continue
+            # Skip test files — exercising shipped behavior is the intent.
+            if "/tests/" in path or path.startswith("tests/"):
+                continue
+            for glob in api_route_globs:
+                if fnmatch.fnmatch(path.lower(), glob.lower()):
+                    touched_routes.append(path)
+                    break
+        if not touched_routes:
+            continue
+
+        if bl_id not in seen:
+            seen.add(bl_id)
+            bls_order.append(bl_id)
+            evidence[bl_id] = []
+        # Cap evidence to 5 paths per BL — keeps the prompt readable.
+        for p in touched_routes:
+            if p not in evidence[bl_id] and len(evidence[bl_id]) < 5:
+                evidence[bl_id].append(p)
+
+    return bls_order, evidence
+
+
 def _build_acceptance_task(
     skill: str,
     *,
@@ -713,6 +816,8 @@ def _build_acceptance_task(
     compose_project: str,
     attempt: int,
     prior_missing: list[str] | None = None,
+    backend_bls: list[str] | None = None,
+    backend_bl_evidence: dict[str, list[str]] | None = None,
 ) -> str:
     """Construct the per-attempt task prompt for the acceptance agent.
 
@@ -728,6 +833,58 @@ def _build_acceptance_task(
             f"Your previous run did not satisfy the validator. Fix these "
             f"specifically, in the SAME worktree:\n\n{items}\n"
         )
+
+    # ABL-0014 Item 1 Batch B: backend BL coverage block.
+    api_block = ""
+    if backend_bls:
+        lines = [
+            "",
+            "---",
+            "",
+            "# API Acceptance — REQUIRED for this sprint",
+            "",
+            (
+                f"This sprint merged {len(backend_bls)} BL(s) that touched "
+                "backend route files. Per the **API Acceptance** section of "
+                "your SKILLS.md, every one of these BLs MUST be covered by "
+                "≥1 entry in `api_journeys.yaml` with a matching "
+                "`backend_bl:` field. The validator will fail the run "
+                "(triggering R10.1 retry) if any of these BLs has no "
+                "covering api_journey."
+            ),
+            "",
+            "Backend BLs to cover (and the route files that earned each its slot):",
+            "",
+        ]
+        for bl in backend_bls:
+            paths = (backend_bl_evidence or {}).get(bl) or []
+            cited = ", ".join(f"`{p}`" for p in paths) or "(no file evidence available)"
+            lines.append(f"- **{bl}** — touched: {cited}")
+        lines.extend([
+            "",
+            (
+                "For each backend BL, write at least one api_journey that "
+                "exercises its routes as a portal-authenticated seeded "
+                "client; classify any failure with the same taxonomy as "
+                "UI journeys (`product_bug | test_bug | data_bug | "
+                "infra_bug | uncertain`); log each request/response to "
+                "`fixtures/api_logs/<journey_id>.jsonl`; and add the "
+                "outcome to `report.json` under an `api_journeys: [...]` "
+                "array."
+            ),
+            "",
+        ])
+        api_block = "\n".join(lines)
+    elif backend_bls is not None:
+        # Caller explicitly computed zero — pure-frontend sprint. Tell
+        # the agent to emit the empty marker for honesty.
+        api_block = (
+            "\n\n---\n\n# API Acceptance — not required this sprint\n\n"
+            "No merged BLs touched backend route files. Emit "
+            "`api_journeys.yaml` with `api_journeys: []` to make the empty "
+            "intent explicit; no API requests are required.\n"
+        )
+
     return (
         f"{skill}\n\n"
         f"---\n\n"
@@ -757,7 +914,9 @@ def _build_acceptance_task(
         f"Follow the Required Completion Steps in your SKILLS.md, "
         f"emitting a final JSON summary with `journeys_planned`, "
         f"`journeys_passed`, `journeys_failed`, `journeys_unshippable`, "
-        f"`report_path`, `screenshots_dir`.{retry_block}\n"
+        f"`api_journeys_planned`, `api_journeys_passed`, "
+        f"`api_journeys_failed`, "
+        f"`report_path`, `screenshots_dir`.{retry_block}{api_block}\n"
     )
 
 
@@ -789,6 +948,7 @@ async def _acceptance_flow(
     run_id: str,
     feature_slug: str | None,
     timeout: int = 3600,
+    backend_bls_override: list[str] | None = None,
 ) -> AsyncIterator[dict]:
     """ABL-0014 Acceptance Agent.
 
@@ -859,6 +1019,22 @@ async def _acceptance_flow(
         )
         return
 
+    # ABL-0014 Item 1 Batch B: compute the backend BL list for coverage.
+    # Caller may override (e.g. /run-acceptance re-runs with a fixed list);
+    # otherwise we scan the merged agent_branch for BL commits that touched
+    # paths matching the target's api_route_globs.
+    backend_bls: list[str] = []
+    backend_bl_evidence: dict[str, list[str]] = {}
+    if backend_bls_override is not None:
+        backend_bls = list(backend_bls_override)
+    else:
+        backend_bls, backend_bl_evidence = await _compute_backend_bls(
+            repo_dir,
+            target_ref=cfg.main_ref,
+            agent_branch=agent_branch,
+            api_route_globs=cfg.effective_api_route_globs(),
+        )
+
     yield _evt(
         "acceptance.start",
         run_id=run_id,
@@ -869,6 +1045,10 @@ async def _acceptance_flow(
         agent_branch=agent_branch,
         compose_project=compose_project,
         timeout=timeout,
+        backend_bls=backend_bls,
+        backend_bls_source=(
+            "override" if backend_bls_override is not None else "computed"
+        ),
     )
 
     skill = prompts_brownfield_svc._load_skill("acceptance")
@@ -893,6 +1073,8 @@ async def _acceptance_flow(
                 compose_project=compose_project,
                 attempt=attempt,
                 prior_missing=prior_missing,
+                backend_bls=backend_bls,
+                backend_bl_evidence=backend_bl_evidence,
             )
             yield _evt(
                 "acceptance.attempt.start",
@@ -919,7 +1101,10 @@ async def _acceptance_flow(
                     error=str(exc),
                 )
 
-            validation = acceptance_validator_svc.validate_acceptance(acceptance_dir_wt)
+            validation = acceptance_validator_svc.validate_acceptance(
+                acceptance_dir_wt,
+                backend_bls=backend_bls or None,
+            )
             if validation["ok"]:
                 yield _evt(
                     "acceptance.validator.ok",
@@ -974,6 +1159,7 @@ async def _acceptance_flow(
         validator_ok=validation["ok"],
         attempts=last_attempt,
         acceptance_dir=str(feature_dir / "acceptance"),
+        backend_bls=backend_bls,
         batch="B",
     )
 
