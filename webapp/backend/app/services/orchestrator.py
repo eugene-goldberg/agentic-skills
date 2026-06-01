@@ -37,6 +37,7 @@ from app.services import run_state as run_state_svc
 from app.services import closure_check as closure_check_svc
 from app.services import acceptance_validator as acceptance_validator_svc
 from app.services import volume_reaper as volume_reaper_svc
+from app.services import findings_ledger as findings_ledger_svc
 from app.services.brownfield import classify_target, feature_artifact_dir
 from app.services.claude_agent import stream_agent_task
 from app.services.git_worktree import (
@@ -1265,6 +1266,45 @@ async def _acceptance_flow(
                 run_id=run_id,
                 archive=str(archive_dest),
             )
+        # ABL-0014 §I.3 Batch B: persist acceptance findings to the
+        # per-feature ledger. Prefer the archived copy (immutable,
+        # survives worktree cleanup); fall back to the worktree copy
+        # if archive failed but the worktree is still on disk. Never
+        # raises — ledger failures are advisory and must not abort
+        # the sprint, so a corrupt report.json yields an .error event
+        # but the flow continues to `remove_worktree` and `done`.
+        findings_persisted = 0
+        report_src: Path | None = None
+        if archive_dest is not None and (archive_dest / "report.json").exists():
+            report_src = archive_dest / "report.json"
+        elif (acceptance_dir_wt / "report.json").exists():
+            report_src = acceptance_dir_wt / "report.json"
+        if report_src is not None:
+            try:
+                report_dict = json.loads(report_src.read_text(encoding="utf-8"))
+                ledger = findings_ledger_svc.FindingsLedger(repo_dir, feature_slug)
+                persisted = await asyncio.to_thread(
+                    ledger.append_from_report,
+                    report_dict,
+                    run_id=run_id,
+                    report_path=str(report_src),
+                )
+                findings_persisted = len(persisted)
+                yield _evt(
+                    "acceptance.ledger.appended",
+                    run_id=run_id,
+                    feature_slug=feature_slug,
+                    findings_persisted=findings_persisted,
+                    ledger_path=str(ledger.path),
+                )
+            except Exception as exc:  # noqa: BLE001 — advisory: never abort sprint
+                yield _evt(
+                    "acceptance.ledger.error",
+                    run_id=run_id,
+                    feature_slug=feature_slug,
+                    error=str(exc),
+                    report_path=str(report_src),
+                )
         # Reap the worktree (I-1). Branch is left in place per the convention
         # in remove_worktree; closure_check.scan_orphan_agent_branches is the
         # canonical reaper for those (currently deferred).
@@ -1298,6 +1338,7 @@ async def _acceptance_flow(
         attempts=last_attempt,
         acceptance_dir=str(feature_dir / "acceptance"),
         backend_bls=backend_bls,
+        findings_persisted=findings_persisted,
         batch="B",
     )
 

@@ -282,7 +282,22 @@ def _extract_findings_from_report(
 ) -> list[Finding]:
     """Walk a report.json payload and produce one Finding per failed
     journey that carries a classification. Quiet on schema drift:
-    missing fields are skipped, not raised."""
+    missing fields are skipped, not raised.
+
+    Accepts the dual-shape contract documented in
+    ``brownfield-acceptance-agent/SKILLS.md`` lines 440-462 and enforced
+    by ``acceptance_validator.py`` lines 307-309:
+
+    - Canonical shape (top-level): journey has ``classification`` +
+      ``evidence``/``hypothesis`` at top level. This is the shape the
+      SKILLS.md example shows the agent producing for api_journeys.
+    - Defensive shape (nested): journey has ``failure: {classification,
+      evidence, message, ...}`` — the validator accepts this too, so
+      we do as well.
+
+    Status accepted: ``fail`` (SKILLS.md uses this) | ``failed`` |
+    ``error``.
+    """
     out: list[Finding] = []
     now = _now_iso()
     # Accept both ``ui_journeys``/``api_journeys`` (Batch B+) and a
@@ -303,14 +318,21 @@ def _extract_findings_from_report(
             status = j.get("status")
             if status not in ("failed", "fail", "error"):
                 continue
-            failure = j.get("failure") or {}
-            classification = failure.get("classification")
+            failure = j.get("failure") if isinstance(j.get("failure"), dict) else {}
+            # Validator pattern (acceptance_validator.py:307-309):
+            # top-level classification wins; fall back to nested.
+            classification = j.get("classification")
+            if classification is None:
+                classification = failure.get("classification")
             if classification not in VALID_CLASSIFICATIONS:
                 continue
             journey_id = str(j.get("id") or j.get("journey_id") or "")
             if not journey_id:
                 continue
-            evidence_raw = _extract_evidence_summary(failure)
+            # Evidence may live at top level (SKILLS.md canonical) or
+            # under failure (defensive). Hypothesis is an acceptable
+            # secondary signal — it carries the agent's diagnosis.
+            evidence_raw = _extract_evidence_summary_dual(j, failure)
             evidence_stored = _truncate_evidence(evidence_raw)
             fid = _compute_finding_id(
                 repo, feature_slug, journey_id, classification, evidence_raw,
@@ -329,3 +351,27 @@ def _extract_findings_from_report(
                 seen_count=1,
             ))
     return out
+
+
+def _extract_evidence_summary_dual(journey: dict, failure: dict) -> str:
+    """Pull an evidence string honoring the SKILLS.md top-level shape
+    AND the validator's nested-``failure`` fallback. Tries the most
+    descriptive sources first."""
+    # Top-level (SKILLS.md canonical) wins.
+    for key in ("evidence", "hypothesis", "message", "summary", "detail"):
+        v = journey.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    # Then the nested-failure fallback.
+    nested = _extract_evidence_summary(failure)
+    if nested:
+        return nested
+    # Last resort: stable JSON of whichever side carries content, so
+    # reruns of the same finding still hash consistently.
+    payload = failure if failure else {
+        k: journey.get(k) for k in ("id", "classification", "status")
+    }
+    try:
+        return json.dumps(payload, sort_keys=True, default=str)
+    except Exception:
+        return str(payload)

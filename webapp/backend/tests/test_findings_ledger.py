@@ -209,6 +209,80 @@ def test_evidence_truncated_in_storage(tmp_path: Path) -> None:
     assert stored.endswith("…")
 
 
+def test_top_level_classification_skills_md_shape(tmp_path: Path) -> None:
+    """SKILLS.md lines 440-462: agent emits classification + evidence +
+    hypothesis at the journey top level (not nested under `failure`).
+    Our extractor must consume this canonical shape."""
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    skills_md_shape = {
+        "api_journeys": [{
+            "id": "api_03",
+            "slug": "documents_upload_approval_workflow",
+            "backend_bl": "BL-0007",
+            "status": "fail",  # NOT "failed" — SKILLS.md uses this
+            "classification": "product_bug",  # top-level, not nested
+            "hypothesis": "approve endpoint returns 500 when document already in 'approved' state",
+            "evidence": "fixtures/api_logs/api_03_requests.jsonl",
+        }],
+    }
+    persisted = ledger.append_from_report(
+        skills_md_shape, run_id="run-1", report_path="r1.json",
+    )
+    assert len(persisted) == 1
+    f = persisted[0]
+    assert f.classification == "product_bug"
+    assert f.journey_kind == "api"
+    assert f.journey_id == "api_03"
+    # evidence_summary prefers top-level "evidence" over "hypothesis"
+    assert f.evidence_summary == "fixtures/api_logs/api_03_requests.jsonl"
+
+
+def test_top_level_classification_with_hypothesis_only(tmp_path: Path) -> None:
+    """When top-level evidence is absent, hypothesis is the next-best
+    signal per SKILLS.md (the agent's diagnosis)."""
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    rpt = {
+        "api_journeys": [{
+            "id": "api_05", "status": "fail",
+            "classification": "uncertain",
+            "hypothesis": "request hangs; could be db lock or upstream timeout",
+        }],
+    }
+    persisted = ledger.append_from_report(rpt, run_id="r", report_path="p")
+    assert len(persisted) == 1
+    assert "db lock" in persisted[0].evidence_summary
+
+
+def test_mixed_top_level_and_nested_classification(tmp_path: Path) -> None:
+    """Validator at acceptance_validator.py:307-309 accepts both shapes
+    in the same report. Our extractor must too."""
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    rpt = {
+        "api_journeys": [
+            {  # SKILLS.md top-level shape
+                "id": "api_01", "status": "fail",
+                "classification": "product_bug",
+                "evidence": "POST /orders 500",
+            },
+        ],
+        "ui_journeys": [
+            {  # Validator's defensive nested shape
+                "id": "ui_02", "status": "failed",
+                "failure": {
+                    "classification": "test_bug",
+                    "evidence": "selector .submit-btn not found within 5s",
+                },
+            },
+        ],
+    }
+    persisted = ledger.append_from_report(rpt, run_id="r", report_path="p")
+    assert len(persisted) == 2
+    by_kind = {f.journey_kind: f for f in persisted}
+    assert by_kind["api"].classification == "product_bug"
+    assert by_kind["ui"].classification == "test_bug"
+    assert "selector .submit-btn" in by_kind["ui"].evidence_summary
+
+
 def test_finding_id_stable_across_long_evidence_tail(tmp_path: Path) -> None:
     """Trailing churn beyond the hash-prefix window must not change
     the id — that's the upsert guarantee under noisy stack traces."""

@@ -176,3 +176,114 @@ def test_validator_ok_on_first_attempt(tmp_path: Path, monkeypatch) -> None:
     assert call_count["n"] == 1  # no retry on success
     # Archive event fires regardless of give_up vs ok
     assert "orchestrator.acceptance.archived" in phases
+    # ABL-0014 §I.3 Batch B: ledger append event fires after archive,
+    # and acceptance.done carries findings_persisted count (zero for
+    # a clean run — the validator helper builds an all-pass report).
+    assert "orchestrator.acceptance.ledger.appended" in phases
+    appended_evt = next(
+        e for e in events
+        if e.get("phase") == "orchestrator.acceptance.ledger.appended"
+    )
+    assert appended_evt["findings_persisted"] == 0
+    assert appended_evt["ledger_path"].endswith(
+        "_brownfield/features/demo/acceptance/findings_log.jsonl"
+    )
+    assert events[-1]["findings_persisted"] == 0
+
+
+# ─── happy-path: agent emits a failed journey → ledger persists 1 finding ──
+
+
+def _fake_stream_that_writes_failed_report(wt_path: Path):
+    """Stream that writes a minimal valid acceptance/ tree containing
+    one failed api_journey with SKILLS.md-shaped top-level classification.
+    Exercises the ledger integration end-to-end through _acceptance_flow."""
+    from tests.test_acceptance_validator import _build_valid_acceptance_dir
+
+    async def _g():
+        feature_dir = wt_path / "_brownfield" / "features" / "demo"
+        _build_valid_acceptance_dir(feature_dir)
+        # Overwrite report.json with one that contains a failed journey.
+        import json as _json
+        report_path = feature_dir / "acceptance" / "report.json"
+        report = _json.loads(report_path.read_text(encoding="utf-8"))
+        report.setdefault("api_journeys", []).append({
+            "id": "api_99",
+            "status": "fail",
+            "classification": "product_bug",
+            "evidence": "POST /api/widgets returned 500 with FK violation",
+            "hypothesis": "widget.owner_id constraint missing cascade",
+        })
+        report_path.write_text(_json.dumps(report), encoding="utf-8")
+        yield {"type": "assistant", "message": "I reported a product bug."}
+    return _g
+
+
+def test_ledger_persists_failed_journey_finding(tmp_path: Path, monkeypatch) -> None:
+    repo = _setup_happy_path(tmp_path, monkeypatch)
+    wt_path = tmp_path / "wt"
+
+    def stream_side_effect(*_args, **_kwargs):
+        return _fake_stream_that_writes_failed_report(wt_path)()
+
+    monkeypatch.setattr(orch, "stream_agent_task", stream_side_effect)
+    monkeypatch.setattr(orch, "TraceWriter", MagicMock())
+
+    events = asyncio.run(_collect(
+        orch._acceptance_flow(repo, "demo", "run-x", "demo")
+    ))
+    phases = [e.get("phase") for e in events if e.get("phase")]
+    appended = next(
+        e for e in events
+        if e.get("phase") == "orchestrator.acceptance.ledger.appended"
+    )
+    assert appended["findings_persisted"] == 1
+    assert events[-1]["findings_persisted"] == 1
+    # Ledger file was actually written under the repo root (not the
+    # worktree — the ledger is per-feature persistence, not per-run).
+    ledger_path = (
+        repo / "_brownfield" / "features" / "demo" / "acceptance"
+        / "findings_log.jsonl"
+    )
+    assert ledger_path.exists()
+    line = ledger_path.read_text(encoding="utf-8").strip().splitlines()[0]
+    import json as _json
+    parsed = _json.loads(line)
+    assert parsed["classification"] == "product_bug"
+    assert parsed["journey_kind"] == "api"
+    assert parsed["journey_id"] == "api_99"
+
+
+# ─── ledger error path: corrupt report.json must not abort the flow ───────
+
+
+def test_ledger_error_event_on_corrupt_report(tmp_path: Path, monkeypatch) -> None:
+    repo = _setup_happy_path(tmp_path, monkeypatch)
+    wt_path = tmp_path / "wt"
+
+    def stream_side_effect(*_args, **_kwargs):
+        # Build a valid tree first, then clobber report.json with bad JSON.
+        from tests.test_acceptance_validator import _build_valid_acceptance_dir
+
+        async def _g():
+            feature_dir = wt_path / "_brownfield" / "features" / "demo"
+            _build_valid_acceptance_dir(feature_dir)
+            (feature_dir / "acceptance" / "report.json").write_text(
+                "{this is not valid json", encoding="utf-8",
+            )
+            yield {"type": "assistant", "message": "I produced bad output."}
+        return _g()
+
+    monkeypatch.setattr(orch, "stream_agent_task", stream_side_effect)
+    monkeypatch.setattr(orch, "TraceWriter", MagicMock())
+
+    events = asyncio.run(_collect(
+        orch._acceptance_flow(repo, "demo", "run-x", "demo")
+    ))
+    phases = [e.get("phase") for e in events if e.get("phase")]
+    # Validator catches the corrupt JSON first, so flow ends in give_up,
+    # but the ledger step still runs in the finally block and surfaces
+    # an error event (and acceptance.done still fires — flow not aborted).
+    assert "orchestrator.acceptance.ledger.error" in phases
+    assert "orchestrator.acceptance.done" in phases
+    assert events[-1]["findings_persisted"] == 0
