@@ -27,6 +27,7 @@ from pathlib import Path
 
 from app.services.brownfield import detect_test_command, pick_artifact_dir
 from app.services import repo_config as repo_config_svc
+from app.services import volume_reaper as volume_reaper_svc
 from app.services.doctrine_validator import detect_infra_failure
 
 # A26: minimum free disk space (in GB) on the docker storage mount before
@@ -338,3 +339,18 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
     finally:
         for wt in (wt_pre, wt_post):
             await _git(["worktree", "remove", "--force", str(wt)], cwd=repo_root)
+        # A48 fix #2 (2026-06-01): reap anonymous postgres-data volumes
+        # left detached by the gate's compose down. Both pre and post
+        # are scoped by their compose project label so Milvus, retrieval
+        # cache, and other operator-owned volumes are never touched.
+        # Best-effort: failures are returned in the ReapResult but never
+        # raised; the gate result already returned above remains the
+        # authoritative outcome.
+        for proj in (pre_proj, post_proj):
+            try:
+                await volume_reaper_svc.reap(proj)
+            except Exception:
+                # Belt-and-suspenders: the reaper already swallows its
+                # own errors into ReapResult.reason; this guard catches
+                # any future regression that exposes them.
+                pass

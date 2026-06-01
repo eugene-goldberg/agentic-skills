@@ -36,6 +36,7 @@ from app.services import repo_config as repo_config_svc
 from app.services import run_state as run_state_svc
 from app.services import closure_check as closure_check_svc
 from app.services import acceptance_validator as acceptance_validator_svc
+from app.services import volume_reaper as volume_reaper_svc
 from app.services.brownfield import classify_target, feature_artifact_dir
 from app.services.claude_agent import stream_agent_task
 from app.services.git_worktree import (
@@ -1275,6 +1276,19 @@ async def _acceptance_flow(
                 run_id=run_id,
                 error=str(exc),
             )
+        # A48 fix #2 (2026-06-01): reap anonymous volumes from the
+        # acceptance compose project. Acceptance stacks are heavier
+        # than gate stacks (frontend + backend + db + mailcatcher +
+        # playwright), so leftover volumes here are a real cost.
+        try:
+            reap = await volume_reaper_svc.reap(compose_project)
+            yield _evt(
+                "acceptance.volume_reaper",
+                run_id=run_id,
+                **reap.to_event(),
+            )
+        except Exception:
+            pass
 
     yield _evt(
         "acceptance.done",
