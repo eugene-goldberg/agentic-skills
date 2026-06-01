@@ -805,6 +805,130 @@ async def _compute_backend_bls(
     return bls_order, evidence
 
 
+async def _compute_ui_coverage(
+    repo_dir: Path,
+    target_ref: str,
+    agent_branch: str,
+    ui_globs: list[str],
+    merged_bl_ids: list[str],
+) -> dict:
+    """ABL-0014 Item 2 (Batch C, 2026-06-01): UI-coverage breakdown.
+
+    For each merged BL, scan commits on ``agent_branch`` whose subject
+    starts with ``BL-NNNN`` and check whether the diff touches any path
+    matching ``ui_globs`` (tests excluded). A BL is "UI-covered" if any
+    of its commits touched at least one UI file.
+
+    Returns::
+
+        {
+          "merged_total": int,         # = len(merged_bl_ids)
+          "ui_bls":       [str, ...],  # sorted by first-merge order
+          "backend_only": [str, ...],  # merged_bl_ids - ui_bls
+          "ratio":        float,       # ui_bls / merged_total (0.0–1.0)
+          "evidence":     {bl: [paths]},
+        }
+
+    Best-effort: returns zero-ratio with the supplied ids on any git
+    failure. The caller decides what to do with the ratio (Item 2's
+    operator-tunable ``min_ui_coverage_ratio`` threshold drives the
+    partial-vs-full subtype).
+    """
+    import fnmatch
+    import re
+
+    if not merged_bl_ids:
+        return {
+            "merged_total": 0, "ui_bls": [], "backend_only": [],
+            "ratio": 0.0, "evidence": {},
+        }
+    bl_re = re.compile(r"^(BL-\d{4})\b", re.MULTILINE)
+    merged_set = set(merged_bl_ids)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "log", "--reverse", "--format=%H%x09%s",
+            f"{target_ref}..{agent_branch}",
+            cwd=str(repo_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, _err = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except (FileNotFoundError, asyncio.TimeoutError, OSError):
+        return {
+            "merged_total": len(merged_bl_ids),
+            "ui_bls": [], "backend_only": list(merged_bl_ids),
+            "ratio": 0.0, "evidence": {},
+        }
+    if proc.returncode != 0:
+        return {
+            "merged_total": len(merged_bl_ids),
+            "ui_bls": [], "backend_only": list(merged_bl_ids),
+            "ratio": 0.0, "evidence": {},
+        }
+
+    ui_bls_order: list[str] = []
+    seen_ui: set[str] = set()
+    evidence: dict[str, list[str]] = {}
+
+    for line in out.decode("utf-8", "replace").splitlines():
+        if "\t" not in line:
+            continue
+        sha, subj = line.split("\t", 1)
+        m = bl_re.search(subj)
+        if not m:
+            continue
+        bl_id = m.group(1)
+        if bl_id not in merged_set:
+            continue  # commit references a BL that didn't reach merged_*
+
+        try:
+            diff_proc = await asyncio.create_subprocess_exec(
+                "git", "show", "--no-renames", "--name-only", "--format=",
+                sha,
+                cwd=str(repo_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            diff_out, _ = await asyncio.wait_for(diff_proc.communicate(), timeout=20)
+        except (FileNotFoundError, asyncio.TimeoutError, OSError):
+            continue
+        if diff_proc.returncode != 0:
+            continue
+
+        touched_ui: list[str] = []
+        for path in diff_out.decode("utf-8", "replace").splitlines():
+            path = path.strip()
+            if not path:
+                continue
+            if "/tests/" in path or path.startswith("tests/"):
+                continue
+            for glob in ui_globs:
+                if fnmatch.fnmatch(path.lower(), glob.lower()):
+                    touched_ui.append(path)
+                    break
+        if not touched_ui:
+            continue
+        if bl_id not in seen_ui:
+            seen_ui.add(bl_id)
+            ui_bls_order.append(bl_id)
+            evidence[bl_id] = []
+        for p in touched_ui:
+            if p not in evidence[bl_id] and len(evidence[bl_id]) < 5:
+                evidence[bl_id].append(p)
+
+    backend_only = [bl for bl in merged_bl_ids if bl not in seen_ui]
+    merged_total = len(merged_bl_ids)
+    ratio = (len(ui_bls_order) / merged_total) if merged_total else 0.0
+    return {
+        "merged_total": merged_total,
+        "ui_bls": ui_bls_order,
+        "backend_only": backend_only,
+        "ratio": ratio,
+        "evidence": evidence,
+    }
+
+
 def _build_acceptance_task(
     skill: str,
     *,
@@ -1323,6 +1447,7 @@ async def run_brief(
     feature_slug: str | None = None,
     run_acceptance: bool = True,  # ABL-0014 default flipped 2026-05-31 after 3 clean smokes
     acceptance_timeout: int = 3600,
+    min_ui_coverage_ratio: float = 0.0,  # ABL-0014 Item 2 (Batch C); 0.0 = informational-only
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -1583,7 +1708,54 @@ async def run_brief(
             yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
 
         terminal_status = "sprint_complete"  # A7: flip from default "aborted"
-        yield _evt("sprint_complete", summary=summary)
+
+        # ABL-0014 Item 2 (Batch C, 2026-06-01): UI-coverage breakdown.
+        # Informational by default (min_ui_coverage_ratio=0.0). When the
+        # operator sets a positive floor, a partial flag is added to the
+        # sprint_complete event for downstream UI/log surfacing.
+        coverage = {
+            "merged_total": 0, "ui_bls": [], "backend_only": [],
+            "ratio": 0.0, "evidence": {},
+        }
+        try:
+            cfg_cov = repo_config_svc.load(repo_dir)
+            merged_ids = [
+                o["bl_id"] for o in bl_outcomes_compact
+                if str(o.get("outcome", "")).startswith("merged")
+            ]
+            coverage = await _compute_ui_coverage(
+                repo_dir,
+                target_ref=cfg_cov.main_ref,
+                agent_branch=cfg_cov.agent_branch,
+                ui_globs=cfg_cov.effective_ui_globs(),
+                merged_bl_ids=merged_ids,
+            )
+        except Exception as exc:  # noqa: BLE001 — informational; never abort
+            yield _evt("coverage_check.error", run_id=run_id, error=str(exc))
+
+        subtype = "full"
+        if min_ui_coverage_ratio > 0.0 and coverage["merged_total"] > 0:
+            if coverage["ratio"] < min_ui_coverage_ratio:
+                subtype = "partial"
+
+        yield _evt(
+            "coverage_check",
+            run_id=run_id,
+            merged_total=coverage["merged_total"],
+            ui_bls=coverage["ui_bls"],
+            backend_only=coverage["backend_only"],
+            ratio=round(coverage["ratio"], 4),
+            threshold=min_ui_coverage_ratio,
+            subtype=subtype,
+        )
+
+        yield _evt(
+            "sprint_complete",
+            summary=summary,
+            coverage_subtype=subtype,
+            ui_coverage_ratio=round(coverage["ratio"], 4),
+            ui_coverage_threshold=min_ui_coverage_ratio,
+        )
 
         # ABL-0014: acceptance pass — runs AFTER sprint_complete and BEFORE
         # doctrine_meta + closure_check. Advisory only (§E.1 Q3): exceptions

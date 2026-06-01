@@ -1140,6 +1140,16 @@ class RunBriefRequest(BaseModel):
     # advisory-only semantics. §E.1 Q2: 3600s default timeout.
     run_acceptance: bool = True
     acceptance_timeout: int = Field(3600, ge=300, le=10800)
+    # ABL-0014 Item 2 (Batch C, 2026-06-01): operator-tunable UI-coverage
+    # floor. When 0.0 (default), the orchestrator emits the coverage
+    # breakdown as informational only — sprint_complete fires with
+    # coverage_subtype="full" regardless. When > 0.0, sprint_complete
+    # carries coverage_subtype="partial" if the merged ratio of UI-touching
+    # BLs falls below the threshold. This is operator-visibility, not a
+    # gate: terminal_status remains "sprint_complete" either way (the
+    # framework already merged everything; partial is a UX signal that the
+    # assembled product may not be usable end-to-end from the user seat).
+    min_ui_coverage_ratio: float = Field(0.0, ge=0.0, le=1.0)
     # A18: per-feature isolation. Operator-supplied feature name; server
     # slugifies it and creates <target>/_brownfield/features/<slug>/ which
     # holds the brief, BACKLOG.md, CODEBASE_CONTEXT.md, SPRINT_PLAN.md, the
@@ -1293,6 +1303,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 feature_slug=feature_slug,
                 run_acceptance=req.run_acceptance,
                 acceptance_timeout=req.acceptance_timeout,
+                min_ui_coverage_ratio=req.min_ui_coverage_ratio,
             ):
                 # Track current_bl from bl.start so 409 responses can name it.
                 if event.get("phase") == "orchestrator.bl.start":

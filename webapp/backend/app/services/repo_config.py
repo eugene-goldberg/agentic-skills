@@ -45,6 +45,24 @@ DEFAULT_API_ROUTE_GLOBS: list[str] = [
     "**/routes/**/*.py",
 ]
 
+# ABL-0014 Item 2 (Batch C, 2026-06-01): default glob set for identifying
+# "user-facing UI" files for the sprint UI-coverage ratio check. A merged
+# BL whose commit touches at least one matching path is counted as a
+# "UI BL." Tuned for React/Vue/Svelte/Angular trees; targets with other
+# stacks (Flutter, native mobile, server-rendered Django templates) can
+# override via the `ui_globs` key in .agentic-skills.json.
+DEFAULT_UI_GLOBS: list[str] = [
+    "**/*.tsx",
+    "**/*.jsx",
+    "**/*.vue",
+    "**/*.svelte",
+    "frontend/**/*",
+    "web/**/*",
+    "ui/**/*",
+    "**/templates/**/*.html",
+    "**/templates/**/*.jinja",
+]
+
 
 @dataclass
 class RepoConfig:
@@ -55,9 +73,13 @@ class RepoConfig:
     doctrine: str | None        # None = derive from target_status
     source: str                 # "file" | "default"
     api_route_globs: list[str] | None = None  # None = use DEFAULT_API_ROUTE_GLOBS
+    ui_globs: list[str] | None = None          # None = use DEFAULT_UI_GLOBS
 
     def effective_api_route_globs(self) -> list[str]:
         return self.api_route_globs or list(DEFAULT_API_ROUTE_GLOBS)
+
+    def effective_ui_globs(self) -> list[str]:
+        return self.ui_globs or list(DEFAULT_UI_GLOBS)
 
     def to_dict(self) -> dict:
         return {
@@ -102,6 +124,7 @@ def load(repo_root: Path) -> RepoConfig:
             test_cmd = data.get("test_cmd")
             doctrine = data.get("doctrine")
             api_route_globs = data.get("api_route_globs")
+            ui_globs = data.get("ui_globs")
             return RepoConfig(
                 repo_root=repo_root,
                 agent_branch=agent_branch,
@@ -111,6 +134,11 @@ def load(repo_root: Path) -> RepoConfig:
                 api_route_globs=(
                     list(api_route_globs)
                     if isinstance(api_route_globs, list) and api_route_globs
+                    else None
+                ),
+                ui_globs=(
+                    list(ui_globs)
+                    if isinstance(ui_globs, list) and ui_globs
                     else None
                 ),
                 source="file",
