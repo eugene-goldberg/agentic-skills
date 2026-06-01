@@ -47,6 +47,7 @@ from app.services.prompts import (
     build_score_prompt,
 )
 from app.services.brownfield import classify_target
+from app.services import findings_ledger as findings_ledger_svc
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -1588,3 +1589,106 @@ async def get_trace(repo: str, trace_id: str):
             except json.JSONDecodeError:
                 pass
     return {"meta": meta, "stream": stream, "retrieval": retrieval}
+
+
+# ─── ABL-0014 §I.3 Batch C: findings ledger endpoints ─────────────────────
+#
+# Operator triage surface for acceptance findings. The ledger is owned by
+# app.services.findings_ledger and populated by orchestrator._acceptance_flow
+# (Batch B). These endpoints expose read + verdict-write for the AppV2
+# triage panel shipping in Batch D, and (later) for the ABL-0015 auto-
+# dispatch reader.
+
+import re as _re
+from enum import Enum as _Enum
+
+# Slug grammar matches what /init-feature accepts and what SKILLS.md
+# documents. Anchored to prevent path-traversal via "../" or absolute
+# paths landing in FindingsLedger(repo_root, slug).
+_SLUG_RE = _re.compile(r"^[a-z0-9_][a-z0-9_-]{0,127}$")
+
+
+def _validate_feature_slug(slug: str) -> None:
+    if not _SLUG_RE.match(slug):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "invalid feature_slug: must match [a-z0-9_][a-z0-9_-]{0,127} "
+                "(prevents path traversal into the ledger directory)"
+            ),
+        )
+
+
+class _Verdict(str, _Enum):
+    confirmed = "confirmed"
+    refuted = "refuted"
+    deferred = "deferred"
+
+
+class VerdictRequest(BaseModel):
+    feature_slug: str = Field(..., min_length=1, max_length=128)
+    finding_id: str = Field(..., min_length=1)
+    verdict: _Verdict
+    note: str | None = None
+
+
+@router.get("/{repo}/findings")
+async def list_findings(repo: str, feature_slug: str, status: str = "pending"):
+    """List findings from the per-feature acceptance ledger.
+
+    ``status=pending`` (default) returns only un-verdict'd findings —
+    what the AppV2 triage panel needs by default. ``status=all`` returns
+    everything (used for the audit view and the ABL-0015 prior loader).
+
+    Returns ``[]`` (not 404) when the ledger file doesn't exist yet, so
+    the UI can call this unconditionally on every feature.
+    """
+    if status not in ("pending", "all"):
+        raise HTTPException(
+            status_code=400,
+            detail="status must be 'pending' or 'all'",
+        )
+    repo_dir = _repo_dir(repo)
+    _validate_feature_slug(feature_slug)
+    ledger = findings_ledger_svc.FindingsLedger(repo_dir, feature_slug)
+    method = ledger.list_pending if status == "pending" else ledger.list_all
+    findings = await asyncio.to_thread(method)
+    # Pydantic-free serialization: dataclass → dict via asdict (already in
+    # Finding.to_jsonl, but we want a dict here, not a JSON string).
+    from dataclasses import asdict as _asdict
+    return {"findings": [_asdict(f) for f in findings], "count": len(findings)}
+
+
+@router.post("/{repo}/verdict")
+async def set_finding_verdict(repo: str, req: VerdictRequest):
+    """Record an operator verdict on a finding.
+
+    Verdict semantics:
+      - confirmed: classifier was right; this is a real bug — eligible
+        for ABL-0015 auto-dispatch (Batch B of §I.4).
+      - refuted: classifier was wrong; finding will count against the
+        classification's accuracy prior (Batch E).
+      - deferred: real but intentionally deferred (e.g., post-MVP).
+
+    Returns the updated finding on success. 404 if finding_id is unknown
+    to the ledger.
+    """
+    repo_dir = _repo_dir(repo)
+    _validate_feature_slug(req.feature_slug)
+    ledger = findings_ledger_svc.FindingsLedger(repo_dir, req.feature_slug)
+    try:
+        updated = await asyncio.to_thread(
+            ledger.set_verdict,
+            req.finding_id,
+            req.verdict.value,
+            req.note,
+        )
+    except ValueError as exc:
+        # Two paths raise ValueError: unknown finding_id (404) and invalid
+        # verdict enum (422-ish — but Pydantic already caught it; defensive).
+        msg = str(exc)
+        if "unknown finding_id" in msg:
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=422, detail=msg)
+    from dataclasses import asdict as _asdict
+    return {"finding": _asdict(updated)}
