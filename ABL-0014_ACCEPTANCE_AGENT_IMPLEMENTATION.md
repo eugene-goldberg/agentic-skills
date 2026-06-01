@@ -337,3 +337,240 @@ coverage). `arch_acceptance_agent.md` memory rewritten.
 calibration smokes against backend-heavy sprints remain before the
 new Item 1 default is "operational" with the same confidence as the
 2026-05-31 UI-only flip.*
+
+---
+
+## I. Path to production-ready (95% certainty floor)
+
+Added 2026-06-01 after the Batch B proof-point passed on its first
+attempt against Client_Portal (12/12 api_journeys, 100% coverage of
+BL-0001..BL-0009, validator_ok=true attempts=1). Items 1+2 close the
+**structural** gap A46 named; this section catalogues what still
+blocks an honest "production-ready" claim under CLAUDE.md Rule 6
+(95% verified/tested certainty floor).
+
+### I.0 Architect's headline verdict
+
+**Current confidence the agent is production-ready: ~70%.** Below
+the 95% floor. To reach 95% requires landing all five TIER-A items
+below; without them I cannot honestly claim more than ~85% even
+with additional sprint runs, because some gaps (notably the
+classification-accuracy bound — I.3) cannot be reduced by execution
+volume alone.
+
+### I.1 — Calibration smokes for the API path (n=1 → n=3)
+
+**Evidence basis:** Batch B proof-point passed clean. That is **one**
+data point. ABL-0014's original `run_acceptance=True` flip required
+three clean smokes against time-tracking (smoke-1 surfaced 5
+validator gaps fixed at `aa0e9ef`, smoke-2 surfaced 1 fixed at
+`eb075ad`, smoke-3 ran clean attempt 1). We have direct historical
+evidence that the agent's natural output drifts from the validator
+contract on first encounter with a new contract shape.
+
+**Required:** Two more clean smokes against different feature
+shapes. Recommend:
+- One backend-heavy small sprint (3–4 BLs, all backend) to stress
+  the api_journeys schema in isolation
+- One mixed-shape sprint (7–8 BLs, balanced UI/backend) to stress
+  cross-section coverage
+
+Both with `run_acceptance=True` and `min_ui_coverage_ratio=0.5` to
+exercise Item 2's threshold path. After smoke #3 clean, Item 1 has
+the same evidence base UI-only ABL-0014 had on 2026-05-31.
+
+**Owner:** operator (triggers sprint runs); architect (analyzes
+validator gaps, ships calibration commits like the original
+`aa0e9ef`/`eb075ad`).
+
+**Estimated cost:** 1–2 calendar days (depends on sprint duration).
+
+### I.2 — Acceptance trace observability gaps
+
+**Evidence basis:** Observations 7416 / 7418 / 7421 surfaced
+2026-05-31, never landed as a ledger entry. Verifiable now:
+acceptance traces lack `retrieval.jsonl`, lack a populated
+`phase_events.jsonl`, and tool invocations don't appear in
+`stream.jsonl`. The Batch B proof-point produced a well-formed
+`api_journeys.yaml` — but if it had produced bad output, **the
+architect could not diagnose why** without a re-run. A system whose
+failures are non-diagnosable cannot be trusted in production.
+
+**Required (3 sub-fixes):**
+1. **`retrieval.jsonl` for acceptance** — inject the retrieval-
+   logging shim into the acceptance agent spawn (currently only
+   PO/engineer/QA/scorer get this).
+2. **`phase_events.jsonl` emission** — `_acceptance_flow` writes
+   only spawn/exit `_meta` phases; should emit the same
+   doctrine_check / validator_ok / retry phases as other roles for
+   structural symmetry.
+3. **Tool-invocation capture in `stream.jsonl`** — configure the
+   `stream-json` output mode to include `tool_use` entries so the
+   architect can post-hoc reconstruct what the agent actually did
+   beyond aggregate counts.
+
+**Owner:** architect (single ~2-day batch).
+
+**Risk:** Low. Read-only additions to the trace stream; no behavior
+change for the agent.
+
+**Named rollback:** Single revert; pre-fix traces still parseable.
+
+### I.3 — Findings feedback ledger (false-positive/negative bound)
+
+**Evidence basis:** 4 production-class acceptance runs to date
+(time-tracking smoke-2, health-version, Client_Portal initial,
+Client_Portal rerun). Across them, agent produced findings
+classified `product_bug | test_bug | data_bug | infra_bug |
+uncertain`. **Zero records exist of which classifications operator
+confirmed vs refuted.** Without that signal, the classifier's
+accuracy is unbounded. CLAUDE.md Rule 6 says recommendations need
+verified/tested certainty — I cannot claim ≥95% on "this is a real
+product bug" without a verified-correctness baseline.
+
+**This is the single most important gap.** Without it, no amount of
+additional work pushes the agent's certainty past ~85%. Tactical
+fixes don't compound into trust; a verdict ledger does.
+
+**Required:**
+- New file per repo: `_brownfield/features/<slug>/acceptance/findings_log.jsonl`
+- Each line: `{run_id, finding_id, classification, operator_verdict:
+  confirmed|refuted|deferred, notes, recorded_at}`
+- AppV2 triage UI: list of un-verdict'd findings; click to mark
+  confirmed/refuted/deferred
+- Agent reads prior verdicts at spawn as priors — "in this codebase,
+  classification X for surface pattern Y has been refuted N times;
+  raise the falsification bar"
+- Surface aggregate accuracy in HARNESS.md §5.6.2 as a footer
+  metric: "across last 10 sprints, agent classification accuracy:
+  N/M confirmed"
+
+**Owner:** architect (backend + spec); operator (uses triage UI).
+
+**Estimated cost:** 3 days. Requires ≥10 sprint-verdicts in the
+ledger to produce a meaningful classifier-accuracy bound; that
+accumulates over multiple sprints, not in one batch.
+
+**Risk:** Medium — schema choices lock the future of feedback
+analysis. Worth a SPIKE before commit (one operator-triaged
+acceptance run to validate the JSON shape).
+
+### I.4 — ABL-0015 auto-dispatch follow-up engineer
+
+**Evidence basis:** Health-version sprint (2026-05-31) found 3
+product_bug findings. They sat in `traces_archive/.../acceptance/
+report.md` for the operator to manually triage. Client_Portal
+flagged 4 capability_gaps; operator manually decided "planned vs
+defect." Today every finding requires synchronous operator
+attention — the opposite of "production ready" for an autonomous
+synthetic crew.
+
+**Required:** ABL-0015 spec drafted but not implemented:
+- After `acceptance.done`, scan report.json for findings with
+  `classification=product_bug AND operator_verdict != refuted` (read
+  from I.3's findings_log)
+- For each, spawn one follow-up engineer in a fresh worktree off
+  agent_branch with the finding's hypothesis as the fix prompt
+- R10.1 retry budget applies; closure_check covers the new worktrees
+- New `_meta phase=acceptance.followup.{start,done}` events per
+  finding
+
+**Owner:** architect (spec + flow + tests).
+
+**Estimated cost:** 3–4 days. **Hard prerequisite: I.3 findings
+ledger must exist first** so the dispatcher can filter on
+operator verdicts (otherwise it would re-spawn engineers for
+already-refuted classifications).
+
+**Risk:** Medium-high — auto-spawning engineers based on agent
+classifications is the highest-leverage action this framework
+takes. Must be gated by I.3's verdict mechanism.
+
+### I.5 — Multi-target validation (repo-configurable globs untested)
+
+**Evidence basis:** Every production acceptance run has been
+against `full-stack-fastapi-template`. `RepoConfig.api_route_globs`
+defaults to FastAPI shapes; `ui_globs` defaults to React. These
+have never run against Django, Rails, Next.js, Vue, or any
+non-FastAPI brownfield target. The defaults were chosen by
+reasoning about layouts, not by execution. A Rails app whose routes
+live in `config/routes.rb` + `app/controllers/*.rb` would produce
+empty `backend_bls`, silently skip api_journey requirements, and
+regress acceptance to pre-Item-1 behavior with no error signal.
+
+**Required:** Bootstrap a second brownfield target (recommend
+Django for shape difference; Django REST Framework gives a
+realistic API to exercise). Run one full sprint with acceptance,
+verify `_compute_backend_bls` produces sane output. May surface
+that the default globs need per-stack tuning.
+
+**Owner:** operator (target selection + bootstrap); architect
+(verifies + adjusts defaults if needed).
+
+**Estimated cost:** 1 day to bootstrap + 1 sprint run.
+
+**Risk:** Low. May find sane defaults work; may need a tuning
+commit. Either way, n=2 targets vs n=1 reduces a real unknown.
+
+### I.6 — Sequencing recommendation
+
+```
+1. I.2  Acceptance trace observability gaps           (~2 days)
+2. I.3  Findings feedback ledger + AppV2 triage UI    (~3 days; gates I.4)
+3. I.5  Multi-target validation (Django smoke)        (~1 day)
+4. I.1  Two more API-acceptance calibration smokes    (~1–2 days)
+5. I.4  ABL-0015 auto-dispatch                        (~3–4 days)
+```
+
+≈ 10–13 days of focused work to legitimately claim 95%
+production-ready.
+
+### I.7 — Lower-priority gaps (TIER B — high confidence, not blockers)
+
+Tracked for transparency; not required for the 95% floor but
+materially improve operator experience:
+
+| ID | Gap | Confidence |
+|----|-----|------------|
+| I.7.a | Cross-sprint regression detection — current report is sprint-local; a journey that *used* to pass is structurally indistinguishable from a brand-new failure | ~85% |
+| I.7.b | A45 idle-timeout risk on acceptance agents (filed 2026-05-31; not fixed) — acceptance does long sync work (docker compose up, playwright, seed.py); a quiet stretch >600s triggers the kill | ~85% |
+| I.7.c | `closure_check` orphan gate-worktree from `run-20260601T032339Z-dd81c5` — single instance (`gate_worktree pre-cbb9ad2d`), needs investigation | ~75% |
+| I.7.d | NFR-aware journey inference — agent reads the full brief but isn't prompted to map NFRs ("must handle 100 concurrent clients") to specific journeys | ~80% |
+
+### I.8 — TIER C gaps (medium confidence; explicit design deferrals)
+
+| ID | Gap | Confidence |
+|----|-----|------------|
+| I.8.a | API-journey retry budget for transient flakes (currently no retry; classified as `infra_bug`) | ~60% |
+| I.8.b | HTTP method discrimination in coverage — one GET api_journey "covers" a BL that ships POST/PUT/DELETE | ~60% |
+| I.8.c | Enforced state isolation between api_journeys (no reseed contract) | ~50% |
+| I.8.d | Concurrency / race / load exercise (deferred per ABL-0014 design; matters for production) | ~70% |
+| I.8.e | Security beyond auth + tenant isolation (CSRF, injection, RBAC, rate-limit) | ~70% |
+| I.8.f | Performance baseline + regression detection (today: pass/fail; not pass/fail/slow) | ~55% |
+| I.8.g | A48 fix #4 (tmpfs cap on gate PG dirs) — fixes #1–#3 may make it unnecessary | ~30% |
+
+### I.9 — Explicit unknowns (cannot estimate at any confidence)
+
+1. False-positive rate on `product_bug` classifications (no verdict ledger ⇒ no data — see I.3)
+2. Whether the API-journey contract holds under shapes not yet tested (1-backend-BL sprints, 20+ BL sprints, non-English briefs)
+3. Behavior under concurrent `/run-acceptance` invocations against different repos
+4. Whether `_compute_backend_bls` handles file renames correctly (currently uses `--no-renames`; commits that rename route files under a BL may be missed)
+
+### I.10 — A48 cross-references
+
+A48 fixes #1+#2+#3 shipped 2026-06-01 (`40840b6` / `f527c93` /
+`8b23409`) substantially close the disk-creep failure mode that
+threatens acceptance runs (acceptance compose stacks are heavier
+than gate stacks). Pre-flight check + per-BL anonymous-volume
+reaper + DiskFull-aware classifier together defend at submission,
+teardown, and diagnosis layers. A48 fix #4 (tmpfs override)
+deferred — likely unnecessary until DiskFull recurs under #1–#3.
+
+---
+
+*§I added 2026-06-01 after Batch B proof-point validated Items 1+2
+end-to-end. The 5 TIER-A items above are the architect's calibrated
+95%-confidence floor for "production-ready." TIER-B and TIER-C
+catalog gaps the architect is aware of but does not consider
+blocking; they are tracked here so a future session inherits the
+full picture rather than rediscovering them.*
