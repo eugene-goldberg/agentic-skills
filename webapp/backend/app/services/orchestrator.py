@@ -931,6 +931,70 @@ async def _compute_ui_coverage(
     }
 
 
+def _build_priors_block(repo_dir: Path, feature_slug: str) -> str:
+    """ABL-0014 §I.3 Batch E — classifier accuracy priors injection.
+
+    Read the per-feature findings ledger and summarize operator
+    verdicts as a falsification prior. Only classifications with at
+    least one non-pending verdict appear in the block; an empty or
+    all-pending ledger yields the empty string (silent — agent gets
+    no extra noise).
+
+    Per spec (§I.3): a high refuted count for a classification means
+    the agent over-classified in past runs; the prompt should raise
+    its falsification bar before reporting that classification again.
+    """
+    try:
+        ledger = findings_ledger_svc.FindingsLedger(repo_dir, feature_slug)
+        rows: list[tuple[str, dict]] = []
+        for cls in (
+            "product_bug", "test_bug", "data_bug", "infra_bug", "uncertain",
+        ):
+            priors = ledger.get_priors_for_classification(cls)
+            verdicted = (
+                priors.get("confirmed", 0)
+                + priors.get("refuted", 0)
+                + priors.get("deferred", 0)
+            )
+            if verdicted > 0:
+                rows.append((cls, priors))
+    except Exception:
+        # Best-effort: never break the agent spawn over a ledger read.
+        return ""
+    if not rows:
+        return ""
+    lines = [
+        "",
+        "---",
+        "",
+        "# Prior verdict history for this feature",
+        "",
+        (
+            "Operator has triaged findings in this feature's acceptance "
+            "ledger. By classification (confirmed · refuted · deferred):"
+        ),
+        "",
+    ]
+    for cls, p in rows:
+        lines.append(
+            f"- **{cls}**: {p.get('confirmed', 0)} · "
+            f"{p.get('refuted', 0)} · {p.get('deferred', 0)}"
+        )
+    lines.extend([
+        "",
+        (
+            "A high `refuted` count means you have over-classified that "
+            "type in prior runs. Raise your falsification bar before "
+            "reporting that classification — cite specific evidence that "
+            "distinguishes the current failure from the historical "
+            "refuted patterns. Treat these as priors, not bans: a real "
+            "bug is still a real bug."
+        ),
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def _build_acceptance_task(
     skill: str,
     *,
@@ -944,6 +1008,8 @@ def _build_acceptance_task(
     prior_missing: list[str] | None = None,
     backend_bls: list[str] | None = None,
     backend_bl_evidence: dict[str, list[str]] | None = None,
+    repo_dir: Path | None = None,
+    inject_acceptance_priors: bool = False,
 ) -> str:
     """Construct the per-attempt task prompt for the acceptance agent.
 
@@ -1011,6 +1077,12 @@ def _build_acceptance_task(
             "intent explicit; no API requests are required.\n"
         )
 
+    # ABL-0014 §I.3 Batch E: classifier priors block (default OFF until
+    # 3-smoke calibration per §I.1). Silent when ledger is empty.
+    priors_block = ""
+    if inject_acceptance_priors and repo_dir is not None:
+        priors_block = _build_priors_block(repo_dir, feature_slug)
+
     return (
         f"{skill}\n\n"
         f"---\n\n"
@@ -1042,7 +1114,7 @@ def _build_acceptance_task(
         f"`journeys_passed`, `journeys_failed`, `journeys_unshippable`, "
         f"`api_journeys_planned`, `api_journeys_passed`, "
         f"`api_journeys_failed`, "
-        f"`report_path`, `screenshots_dir`.{retry_block}{api_block}\n"
+        f"`report_path`, `screenshots_dir`.{retry_block}{api_block}{priors_block}\n"
     )
 
 
@@ -1075,6 +1147,7 @@ async def _acceptance_flow(
     feature_slug: str | None,
     timeout: int = 3600,
     backend_bls_override: list[str] | None = None,
+    inject_acceptance_priors: bool = False,
 ) -> AsyncIterator[dict]:
     """ABL-0014 Acceptance Agent.
 
@@ -1201,6 +1274,8 @@ async def _acceptance_flow(
                 prior_missing=prior_missing,
                 backend_bls=backend_bls,
                 backend_bl_evidence=backend_bl_evidence,
+                repo_dir=repo_dir,
+                inject_acceptance_priors=inject_acceptance_priors,
             )
             yield _evt(
                 "acceptance.attempt.start",
@@ -1503,6 +1578,7 @@ async def run_brief(
     run_acceptance: bool = True,  # ABL-0014 default flipped 2026-05-31 after 3 clean smokes
     acceptance_timeout: int = 3600,
     min_ui_coverage_ratio: float = 0.0,  # ABL-0014 Item 2 (Batch C); 0.0 = informational-only
+    inject_acceptance_priors: bool = False,  # ABL-0014 §I.3 Batch E; OFF until 3-smoke calibration
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -1824,6 +1900,7 @@ async def run_brief(
                     run_id,
                     feature_slug,
                     timeout=acceptance_timeout,
+                    inject_acceptance_priors=inject_acceptance_priors,
                 ):
                     yield evt
             except Exception as exc:

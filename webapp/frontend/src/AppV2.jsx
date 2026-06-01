@@ -20,6 +20,11 @@ export function AppV2() {
   const [skipPo, setSkipPo] = useState(false);
   // ABL-0014 — DEFAULT ON (2026-05-31, after 3 clean calibration smokes).
   const [runAcceptance, setRunAcceptance] = useState(true);
+  // ABL-0014 §I.3 Batch E — inject classifier-accuracy priors from the
+  // findings ledger into the acceptance agent's spawn prompt. Default OFF
+  // until the 3-smoke calibration discipline (§I.1) clears the flip;
+  // mirrors the run_acceptance default-OFF→ON history.
+  const [injectAcceptancePriors, setInjectAcceptancePriors] = useState(false);
   // ABL-0014 — last acceptance.done/skipped/error event, surfaced as a tile.
   const [acceptance, setAcceptance] = useState(null);
   // ABL-0014 Item 2 (Batch C/D, 2026-06-01) — UI-coverage breakdown from
@@ -297,6 +302,8 @@ export function AppV2() {
         stop_on_failure: true,
         timeout_per_role: 2400,
         run_acceptance: runAcceptance,
+        // ABL-0014 §I.3 Batch E — classifier priors injection (default OFF).
+        inject_acceptance_priors: injectAcceptancePriors,
         // ABL-0014 Item 2 Batch D — operator-tunable UI-coverage floor.
         min_ui_coverage_ratio: parseFloat(minUiCoverageRatio) || 0.0,
         // A18: per-feature isolation — server creates
@@ -352,6 +359,7 @@ export function AppV2() {
                  placeholder="all" style={{ width: 60 }} disabled={running} />
           <label><input type="checkbox" checked={skipPo} onChange={(e) => setSkipPo(e.target.checked)} disabled={running} /> Skip PO (re-run on existing backlog)</label>
           <label title="ABL-0014 — runs the Acceptance Agent after sprint_complete to exercise end-to-end user journeys and produce a report. Default OFF for first 3 calibration sprints (§E.1 Q6)."><input type="checkbox" checked={runAcceptance} onChange={(e) => setRunAcceptance(e.target.checked)} disabled={running} /> Run acceptance pass</label>
+          <label title="ABL-0014 §I.3 Batch E — inject classifier-accuracy priors from the findings ledger into the acceptance agent's spawn prompt. Default OFF until §I.1 3-smoke calibration clears the flip."><input type="checkbox" checked={injectAcceptancePriors} onChange={(e) => setInjectAcceptancePriors(e.target.checked)} disabled={running || !runAcceptance} /> Inject priors</label>
           <label title="ABL-0014 Item 2 (Batch C) — minimum fraction of merged BLs that must touch UI for sprint_complete to surface as 'full'. 0.0 = informational only (no partial flag ever); 0.5 = at least half the merged BLs must have UI surface; 1.0 = every merged BL must touch UI. Operator-visibility only — sprint still completes either way.">
             UI cov ≥
             <input

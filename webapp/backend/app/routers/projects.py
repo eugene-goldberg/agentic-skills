@@ -1152,6 +1152,11 @@ class RunBriefRequest(BaseModel):
     # framework already merged everything; partial is a UX signal that the
     # assembled product may not be usable end-to-end from the user seat).
     min_ui_coverage_ratio: float = Field(0.0, ge=0.0, le=1.0)
+    # ABL-0014 §I.3 Batch E (2026-06-01): inject classifier-accuracy priors
+    # from the findings ledger into the acceptance agent's spawn prompt.
+    # Default OFF until the 3-smoke calibration discipline (§I.1) clears
+    # the flip; mirrors the run_acceptance default-OFF→ON history.
+    inject_acceptance_priors: bool = False
     # A48 pre-flight disk-free check (2026-06-01). Default advisory:
     # the check ALWAYS runs and emits an SSE event with the breakdown,
     # but only refuses the run (HTTP 409) when enforce=True. This
@@ -1354,6 +1359,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 run_doctrine_meta=req.run_doctrine_meta,
                 feature_slug=feature_slug,
                 run_acceptance=req.run_acceptance,
+                inject_acceptance_priors=req.inject_acceptance_priors,
                 acceptance_timeout=req.acceptance_timeout,
                 min_ui_coverage_ratio=req.min_ui_coverage_ratio,
             ):
@@ -1479,6 +1485,10 @@ class RunAcceptanceRequest(BaseModel):
     # agent_branch via `_compute_backend_bls`. An EMPTY list means
     # "pure-frontend sprint — skip API validation entirely."
     backend_bls_override: list[str] | None = None
+    # ABL-0014 §I.3 Batch E (2026-06-01): inject classifier-accuracy priors
+    # from the findings ledger into the agent's spawn prompt. Default OFF
+    # until the 3-smoke calibration discipline (§I.1) clears the flip.
+    inject_acceptance_priors: bool = False
 
 
 @router.post("/{repo}/run-acceptance")
@@ -1505,6 +1515,7 @@ async def run_acceptance(repo: str, req: RunAcceptanceRequest):
                 feature_slug=req.feature_slug,
                 timeout=req.acceptance_timeout,
                 backend_bls_override=req.backend_bls_override,
+                inject_acceptance_priors=req.inject_acceptance_priors,
             ):
                 yield _sse(event)
         except Exception as exc:  # noqa: BLE001

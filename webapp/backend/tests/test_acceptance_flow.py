@@ -287,3 +287,81 @@ def test_ledger_error_event_on_corrupt_report(tmp_path: Path, monkeypatch) -> No
     assert "orchestrator.acceptance.ledger.error" in phases
     assert "orchestrator.acceptance.done" in phases
     assert events[-1]["findings_persisted"] == 0
+
+
+# ─── ABL-0014 §I.3 Batch E: classifier priors injection ──────────────────
+
+
+def test_priors_block_injected_when_flag_on_and_ledger_seeded(tmp_path: Path) -> None:
+    """With inject_acceptance_priors=True and a ledger carrying verdicts,
+    the assembled prompt must include the priors block with exact counts."""
+    from app.services.findings_ledger import FindingsLedger
+
+    # Seed the per-feature ledger: 3 product_bug refuted, 1 confirmed.
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    rpt = {"api_journeys": [
+        {"id": f"j{i:02d}", "status": "fail",
+         "classification": "product_bug",
+         "evidence": f"refuted #{i}"} for i in range(3)
+    ] + [{"id": "j99", "status": "fail",
+          "classification": "product_bug",
+          "evidence": "confirmed real bug"}]}
+    persisted = ledger.append_from_report(rpt, run_id="seed", report_path="s")
+    for f in persisted[:3]:
+        ledger.set_verdict(f.finding_id, "refuted")
+    ledger.set_verdict(persisted[3].finding_id, "confirmed")
+
+    task = orch._build_acceptance_task(
+        skill="# fake SKILLS",
+        run_id="r1", feature_slug="feat_a",
+        brief_rel="brief.md", backlog_rel="BACKLOG.md",
+        acceptance_rel="acc", compose_project="acc-r1", attempt=1,
+        repo_dir=tmp_path,
+        inject_acceptance_priors=True,
+    )
+    assert "Prior verdict history for this feature" in task
+    # Format: "product_bug: 1 · 3 · 0"
+    assert "product_bug" in task
+    assert "1 · 3 · 0" in task
+    # Don't list classifications with all-zero verdicts:
+    assert "test_bug" not in task or "test_bug: 0 · 0 · 0" not in task
+
+
+def test_priors_block_absent_when_flag_off(tmp_path: Path) -> None:
+    """inject_acceptance_priors=False (default) → no block even with seeded
+    ledger. Verifies the flag actually gates the injection."""
+    from app.services.findings_ledger import FindingsLedger
+
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    persisted = ledger.append_from_report(
+        {"api_journeys": [{"id": "j01", "status": "fail",
+                           "classification": "product_bug",
+                           "evidence": "x"}]},
+        run_id="seed", report_path="s",
+    )
+    ledger.set_verdict(persisted[0].finding_id, "refuted")
+
+    task = orch._build_acceptance_task(
+        skill="# fake SKILLS",
+        run_id="r1", feature_slug="feat_a",
+        brief_rel="brief.md", backlog_rel="BACKLOG.md",
+        acceptance_rel="acc", compose_project="acc-r1", attempt=1,
+        repo_dir=tmp_path,
+        inject_acceptance_priors=False,  # explicit OFF
+    )
+    assert "Prior verdict history" not in task
+
+
+def test_priors_block_silent_on_empty_ledger(tmp_path: Path) -> None:
+    """inject_acceptance_priors=True but no verdicts → silent (no block).
+    Avoids prompt noise when the ledger has not yet accrued data."""
+    # No seeding — fresh tmp_path, no ledger file.
+    task = orch._build_acceptance_task(
+        skill="# fake SKILLS",
+        run_id="r1", feature_slug="feat_a",
+        brief_rel="brief.md", backlog_rel="BACKLOG.md",
+        acceptance_rel="acc", compose_project="acc-r1", attempt=1,
+        repo_dir=tmp_path,
+        inject_acceptance_priors=True,
+    )
+    assert "Prior verdict history" not in task
