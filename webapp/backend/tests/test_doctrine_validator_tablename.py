@@ -204,3 +204,126 @@ class NewThing(SQLModel, table=True):
     _check_tablename_consistency(tmp_path, [model_rel, mig_rel], acc)
     assert len(acc["missing"]) == 1
     assert "newthing" in acc["missing"][0].lower()
+
+
+# ─── A36b: base_ref scoping (incremental-BL false-positive fix) ──────────
+
+
+def _git_init_with_baseline(tmp_path, model_body: str, mig_files: dict[str, str]):
+    """Initialize a git repo, commit a baseline models.py + migrations
+    representing 'prior BLs', and return the baseline ref name."""
+    import subprocess as sp
+    sp.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    sp.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, check=True)
+    sp.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    sp.run(["git", "config", "commit.gpgsign", "false"], cwd=tmp_path, check=True)
+    _write(tmp_path, "backend/app/models.py", model_body)
+    for rel, body in mig_files.items():
+        _write(tmp_path, rel, body)
+    sp.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    sp.run(["git", "commit", "-q", "-m", "baseline"], cwd=tmp_path, check=True)
+    # Branch off so that base_ref ('main') and HEAD diverge once the
+    # BL commit lands — matches real agent-worktree layout.
+    sp.run(["git", "checkout", "-q", "-b", "agent/bl"], cwd=tmp_path, check=True)
+    return "main"
+
+
+def test_a36b_incremental_bl_does_not_flag_prior_models(tmp_path):
+    """A36b: an incremental BL adds ONE new table=True class + ONE new
+    migration. Pre-existing models (added on prior BLs, present at HEAD
+    but unchanged in this diff) MUST NOT be flagged as missing.
+
+    Reproduces and pins the BL-0004 false-positive that killed
+    run-20260531T211839Z-1f47e6: 5 prior tables (User, ClientUser,
+    PortalInvitation, PortalAuditLog, Item) were reported missing
+    when only PortalAccessGrant was new.
+    """
+    import subprocess as sp
+    # Baseline: 2 prior tables and their migrations
+    baseline_models = """
+class User(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+
+class ClientUser(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+"""
+    baseline_migs = {
+        "backend/app/alembic/versions/0001_user.py":
+            "op.create_table('user', sa.Column('id', sa.Uuid()))",
+        "backend/app/alembic/versions/0002_clientuser.py":
+            "op.create_table('clientuser', sa.Column('id', sa.Uuid()))",
+    }
+    base_ref = _git_init_with_baseline(tmp_path, baseline_models, baseline_migs)
+
+    # New BL: add ONE new table + ONE new migration only
+    new_models = baseline_models + """
+class PortalAccessGrant(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+"""
+    _write(tmp_path, "backend/app/models.py", new_models)
+    new_mig = _write(
+        tmp_path,
+        "backend/app/alembic/versions/0003_portalaccessgrant.py",
+        "op.create_table('portalaccessgrant', sa.Column('id', sa.Uuid()))",
+    )
+    sp.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    sp.run(["git", "commit", "-q", "-m", "BL: PortalAccessGrant"], cwd=tmp_path, check=True)
+
+    acc = {"missing": [], "empty": [], "dangling_refs": []}
+    _check_tablename_consistency(
+        tmp_path,
+        ["backend/app/models.py", new_mig],
+        acc,
+        base_ref=base_ref,
+    )
+    # Pre-A36b this would emit 2 false positives (User, ClientUser).
+    # Post-A36b: zero — PortalAccessGrant is new AND matches.
+    assert acc["missing"] == [], (
+        f"A36b regression: false-positive(s) on pre-existing tables: {acc['missing']}"
+    )
+
+
+def test_a36b_incremental_bl_still_catches_real_mismatch(tmp_path):
+    """A36b must NOT mask a real mismatch on a NEW class — the
+    workspacemember case (A36 original) still fires when scoped."""
+    import subprocess as sp
+    baseline_models = """
+class User(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+"""
+    base_ref = _git_init_with_baseline(
+        tmp_path,
+        baseline_models,
+        {"backend/app/alembic/versions/0001_user.py":
+            "op.create_table('user', sa.Column('id', sa.Uuid()))"},
+    )
+
+    # New BL adds WorkspaceMember (default tablename: workspacemember)
+    # but migration uses snake_case workspace_member — real A36 defect.
+    new_models = baseline_models + """
+class WorkspaceMember(SQLModel, table=True):
+    id: int = Field(default=None, primary_key=True)
+"""
+    _write(tmp_path, "backend/app/models.py", new_models)
+    new_mig = _write(
+        tmp_path,
+        "backend/app/alembic/versions/0002_wsm.py",
+        "op.create_table('workspace_member', sa.Column('id', sa.Uuid()))",
+    )
+    sp.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    sp.run(["git", "commit", "-q", "-m", "BL: WorkspaceMember mismatch"], cwd=tmp_path, check=True)
+
+    acc = {"missing": [], "empty": [], "dangling_refs": []}
+    _check_tablename_consistency(
+        tmp_path,
+        ["backend/app/models.py", new_mig],
+        acc,
+        base_ref=base_ref,
+    )
+    assert len(acc["missing"]) == 1
+    msg = acc["missing"][0]
+    assert "WorkspaceMember" in msg
+    assert "workspace_member" in msg
+    # User must NOT be flagged (pre-existing).
+    assert not any("User" in m and "WorkspaceMember" not in m
+                   for m in acc["missing"])

@@ -285,7 +285,14 @@ def validate_engineer(
 
         # A36 fix #4: tablename consistency between new SQLModel classes
         # and the migrations that create their tables.
-        _check_tablename_consistency(repo_root, changed, acc)
+        # A36b (2026-05-31): scope-bug fix — restrict to classes whose
+        # `table=True` *declaration line* is newly added in this diff.
+        # The prior implementation parsed the whole models file at HEAD,
+        # so every pre-existing table=True class (added by earlier BLs)
+        # was flagged as "missing a migration" when an incremental BL
+        # added only one new table. Killed BL-0004 of
+        # run-20260531T211839Z-1f47e6 with 5 false positives.
+        _check_tablename_consistency(repo_root, changed, acc, base_ref)
 
     if retrieval_log is not None:
         n = _count_grounded_retrieval(retrieval_log)
@@ -345,10 +352,41 @@ def _parse_migration_table_names(content: str) -> set[str]:
     return set(_OP_CREATE_TABLE_RE.findall(content))
 
 
+def _added_lines(repo_root: Path, base_ref: str, rel_path: str) -> str:
+    """Return ONLY the newly-added lines (concatenated) for a file in
+    base_ref...HEAD. Lines are returned without the leading `+`.
+
+    Used by A36b to scope tablename-consistency checks to classes whose
+    declarations are NEW in this commit, not pre-existing ones inherited
+    from prior BLs on the branch.
+
+    Best-effort: returns empty string on any git error.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "diff", "--unified=0", f"{base_ref}...HEAD", "--", rel_path],
+            cwd=repo_root, capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return ""
+        added: list[str] = []
+        for line in r.stdout.splitlines():
+            # Skip diff metadata lines that start with '+++'
+            if line.startswith("+++"):
+                continue
+            if line.startswith("+"):
+                added.append(line[1:])
+        return "\n".join(added)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
 def _check_tablename_consistency(
-    repo_root: Path, changed_files: list[str], acc: dict
+    repo_root: Path, changed_files: list[str], acc: dict,
+    base_ref: str | None = None,
 ) -> None:
-    """A36 fix #4: assert new SQLModel tables match their migration names.
+    """A36 fix #4 (+ A36b scope-bug fix): assert new SQLModel tables
+    match their migration names.
 
     If the engineer's commit adds/modifies BOTH a models file AND an
     alembic migration in the same diff, ensure every newly-table=True
@@ -361,9 +399,17 @@ def _check_tablename_consistency(
 
     Tolerant by design:
     - If only models OR only migrations changed (not both), skip.
-    - If a model class is modified but not newly table=True, the
-      mismatch may be pre-existing — we still report it (defense vs
-      drift), but only against the files in the diff.
+    - **A36b:** when base_ref is provided, restrict `declared` to
+      classes whose `class X(...table=True)` declaration line is part
+      of the ADDED-lines slice of the diff (not the full HEAD file).
+      Without this, every pre-existing table=True class in models.py
+      is flagged as "missing a migration" whenever an incremental BL
+      adds a new table — false-positive that killed BL-0004 of
+      run-20260531T211839Z-1f47e6 (5 spurious missing rows for
+      User/ClientUser/PortalInvitation/PortalAuditLog/Item).
+    - If base_ref is None (e.g. unit tests passing changed_files
+      directly), fall back to whole-file parsing — preserves prior
+      tests' semantics.
     - Path tolerance: walks any `models*.py` under the diff and any
       `alembic/versions/*.py` under the diff. No assumption about
       `backend/app/` prefix (some templates use `app/`).
@@ -383,10 +429,25 @@ def _check_tablename_consistency(
     for rel in model_files:
         path = repo_root / rel
         try:
-            content = path.read_text(encoding="utf-8")
+            full_content = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        declared.update(_parse_models_for_tables(content))
+        if base_ref:
+            # A36b: only check classes whose declaration line is new
+            # in this diff. We still need the FULL file to resolve
+            # __tablename__ overrides that may sit alongside an added
+            # class, so:
+            #   1. Parse full file → {cls -> expected_table} (all classes)
+            #   2. Parse added-lines slice → set(added_cls_names)
+            #   3. Restrict declared to intersection.
+            all_classes = _parse_models_for_tables(full_content)
+            added_slice = _added_lines(repo_root, base_ref, rel)
+            added_classes = set(_parse_models_for_tables(added_slice).keys())
+            declared.update({
+                c: t for c, t in all_classes.items() if c in added_classes
+            })
+        else:
+            declared.update(_parse_models_for_tables(full_content))
 
     migration_names: set[str] = set()
     for rel in migration_files:
