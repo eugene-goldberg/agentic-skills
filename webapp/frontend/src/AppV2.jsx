@@ -34,6 +34,10 @@ export function AppV2() {
   const [bls, setBls] = useState([]); // {id, title, deps, steps:{engineer, reindex_e, qa, reindex_q, scorer}, outcome}
   const [events, setEvents] = useState([]);
   const [detail, setDetail] = useState(null);
+  // ABL-0014 §I.3 Batch D — when an acceptance tile is open in the rail,
+  // default the rail to the FindingsTriagePanel (operator-facing) and
+  // let the user toggle to raw JSON for deep debugging.
+  const [showRawDetail, setShowRawDetail] = useState(false);
   const abortRef = useRef(null);
   const logEndRef = useRef(null);
   // Init-feature bootstrap state
@@ -456,6 +460,13 @@ export function AppV2() {
                   API coverage: {acceptance.backend_bls.length} backend BL{acceptance.backend_bls.length === 1 ? "" : "s"} ({acceptance.backend_bls.join(", ")})
                 </div>
               )}
+              {/* ABL-0014 §I.3 Batch B+D — findings count from the ledger. */}
+              {typeof acceptance.findings_persisted === "number" && (
+                <div style={{ marginTop: 4, opacity: 0.85, fontSize: 12 }}>
+                  Findings: {acceptance.findings_persisted}
+                  {acceptance.findings_persisted > 0 && " · click tile → triage panel"}
+                </div>
+              )}
               {acceptance.archive && (
                 <div style={{ marginTop: 4, opacity: 0.8, fontFamily: "monospace", fontSize: 11 }}>
                   archive: {acceptance.archive}
@@ -492,8 +503,27 @@ export function AppV2() {
         </div>
 
         <div className="v2-rail">
-          <h2>Detail</h2>
-          <pre className="v2-detail">{detail ? JSON.stringify(detail, null, 2) : "Click a stage or BL step to inspect."}</pre>
+          <h2>
+            Detail
+            {/* ABL-0014 §I.3 Batch D — when the acceptance tile is open
+                and has a feature_slug, default the rail to the
+                FindingsTriagePanel; let the user toggle to raw JSON. */}
+            {detail?.acceptance && detail?.feature_slug && (
+              <button
+                onClick={() => setShowRawDetail((v) => !v)}
+                className="v2-secondary"
+                style={{ marginLeft: 12, fontSize: 11, padding: "2px 8px" }}
+                title="Toggle between the findings triage panel and the raw event JSON."
+              >
+                {showRawDetail ? "Show triage panel" : "Show raw JSON"}
+              </button>
+            )}
+          </h2>
+          {detail?.acceptance && detail?.feature_slug && !showRawDetail ? (
+            <FindingsTriagePanel repo={repo} featureSlug={detail.feature_slug} />
+          ) : (
+            <pre className="v2-detail">{detail ? JSON.stringify(detail, null, 2) : "Click a stage or BL step to inspect."}</pre>
+          )}
         </div>
       </section>
 
@@ -588,4 +618,243 @@ function shortDesc(e) {
   if (e.phase === "worktree_ready") return e.role || "";
   if (e.summary) return typeof e.summary === "string" ? e.summary.slice(0, 80) : "";
   return "";
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// ABL-0014 §I.3 Batch D — Findings Triage Panel
+//
+// Operator surface for the per-feature acceptance findings ledger.
+// Lists pending (default) or all findings for the open feature, with
+// color-coded classification badges and three verdict actions per row
+// (confirmed / refuted / deferred). Optimistic disable during in-flight
+// POST; auto-refetch on success; inline error div on failure (matches
+// the init-feature error pattern at AppV2 line 397-401).
+//
+// Backend contract: GET /api/projects/{repo}/findings?feature_slug=…&status=…
+//                   POST /api/projects/{repo}/verdict
+//                   (shipped Batch C, sha 3994a12)
+// ─────────────────────────────────────────────────────────────────────
+
+const CLASSIFICATION_BG = {
+  product_bug: "#3b1f1f",  // red — matches the acceptance.error tile
+  test_bug:    "#1f2a3b",  // blue — matches the acceptance.running tile
+  data_bug:    "#2a2a2a",  // gray — matches the acceptance.skipped tile
+  infra_bug:   "#3b2f1f",  // orange — matches the acceptance.done-failed tile
+  uncertain:   "#2a2a2a",  // gray
+};
+
+function FindingsTriagePanel({ repo, featureSlug }) {
+  const [findings, setFindings] = useState([]);
+  const [statusFilter, setStatusFilter] = useState("pending");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [inflight, setInflight] = useState(() => new Set());
+  const [noteByFid, setNoteByFid] = useState({});
+  const [expanded, setExpanded] = useState(() => new Set());
+
+  async function refetch() {
+    setLoading(true); setError(null);
+    try {
+      const url = `${API}/api/projects/${encodeURIComponent(repo)}` +
+                  `/findings?feature_slug=${encodeURIComponent(featureSlug)}` +
+                  `&status=${statusFilter}`;
+      const r = await fetch(url);
+      const body = await r.json();
+      if (!r.ok) { setError(body.detail || JSON.stringify(body)); setFindings([]); }
+      else { setFindings(body.findings || []); }
+    } catch (e) {
+      setError(e.message || String(e));
+      setFindings([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (repo && featureSlug) refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo, featureSlug, statusFilter]);
+
+  async function submitVerdict(finding_id, verdict) {
+    setInflight((prev) => { const n = new Set(prev); n.add(finding_id); return n; });
+    setError(null);
+    try {
+      const r = await fetch(`${API}/api/projects/${encodeURIComponent(repo)}/verdict`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          feature_slug: featureSlug,
+          finding_id,
+          verdict,
+          note: (noteByFid[finding_id] || "").trim() || null,
+        }),
+      });
+      const body = await r.json();
+      if (!r.ok) {
+        const detail = body.detail || JSON.stringify(body);
+        setError(`Verdict POST failed (${r.status}): ${detail}`);
+      } else {
+        // Drop the just-submitted note from local state, then refetch
+        // so the list reflects the new verdict (Pending tab will hide
+        // the row; All tab will show it with verdict + ts).
+        setNoteByFid((prev) => { const { [finding_id]: _, ...rest } = prev; return rest; });
+        await refetch();
+      }
+    } catch (e) {
+      setError(`Verdict POST failed: ${e.message || String(e)}`);
+    } finally {
+      setInflight((prev) => { const n = new Set(prev); n.delete(finding_id); return n; });
+    }
+  }
+
+  function toggleExpand(fid) {
+    setExpanded((prev) => {
+      const n = new Set(prev);
+      if (n.has(fid)) n.delete(fid); else n.add(fid);
+      return n;
+    });
+  }
+
+  return (
+    <div className="v2-findings-panel">
+      <div className="v2-row" style={{ marginBottom: 8, alignItems: "center", gap: 8 }}>
+        <strong style={{ fontSize: 13 }}>Findings ({findings.length})</strong>
+        <span style={{ flex: 1 }} />
+        <button
+          onClick={() => setStatusFilter("pending")}
+          className={statusFilter === "pending" ? "v2-primary" : "v2-secondary"}
+          style={{ fontSize: 11, padding: "2px 8px" }}
+        >Pending</button>
+        <button
+          onClick={() => setStatusFilter("all")}
+          className={statusFilter === "all" ? "v2-primary" : "v2-secondary"}
+          style={{ fontSize: 11, padding: "2px 8px" }}
+        >All</button>
+        <button
+          onClick={refetch} disabled={loading}
+          className="v2-secondary"
+          style={{ fontSize: 11, padding: "2px 8px" }}
+        >{loading ? "Refreshing…" : "Refresh"}</button>
+      </div>
+
+      {error && (
+        <div style={{ background: "#3b1f1f", padding: "8px 12px", borderRadius: 4, fontSize: 12, marginBottom: 8 }}>
+          ❌ {error}
+        </div>
+      )}
+
+      {!loading && findings.length === 0 && !error && (
+        <div style={{ opacity: 0.65, fontSize: 12, padding: 12 }}>
+          {statusFilter === "pending"
+            ? "No pending findings — all acceptance signals are triaged."
+            : "Ledger is empty for this feature."}
+        </div>
+      )}
+
+      {findings.map((f) => {
+        const isInflight = inflight.has(f.finding_id);
+        const isExpanded = expanded.has(f.finding_id);
+        const bg = CLASSIFICATION_BG[f.classification] || "#2a2a2a";
+        const evidenceShort = (f.evidence_summary || "").slice(0, 200);
+        const evidenceTrunc = (f.evidence_summary || "").length > 200;
+        return (
+          <div
+            key={f.finding_id}
+            className="v2-finding-card"
+            style={{
+              border: "1px solid #333", borderRadius: 6, padding: 10,
+              marginBottom: 8, fontSize: 12,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <span style={{
+                background: bg, padding: "2px 8px", borderRadius: 3,
+                fontFamily: "monospace", fontSize: 11, fontWeight: 600,
+              }}>{f.classification}</span>
+              <span style={{ opacity: 0.7 }}>
+                {f.journey_kind}:{f.journey_id}
+              </span>
+              <span style={{ flex: 1 }} />
+              {f.verdict && (
+                <span style={{
+                  background: f.verdict === "confirmed" ? "#1f3b1f"
+                            : f.verdict === "refuted"   ? "#3b1f1f"
+                            : "#2a2a2a",
+                  padding: "2px 8px", borderRadius: 3, fontSize: 11,
+                }}>
+                  {f.verdict} · {f.verdict_ts}
+                </span>
+              )}
+              {f.seen_count > 1 && (
+                <span style={{ opacity: 0.6, fontSize: 11 }}>seen×{f.seen_count}</span>
+              )}
+            </div>
+
+            <div style={{
+              fontFamily: "monospace", fontSize: 11,
+              background: "#181818", padding: 8, borderRadius: 3, marginBottom: 6,
+              whiteSpace: "pre-wrap", wordBreak: "break-word",
+            }}>
+              {isExpanded || !evidenceTrunc ? f.evidence_summary : evidenceShort + "…"}
+              {evidenceTrunc && (
+                <button
+                  onClick={() => toggleExpand(f.finding_id)}
+                  className="v2-secondary"
+                  style={{ marginLeft: 8, fontSize: 10, padding: "1px 6px" }}
+                >
+                  {isExpanded ? "less" : "more"}
+                </button>
+              )}
+            </div>
+
+            {f.verdict_note && (
+              <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 6 }}>
+                <strong>Note:</strong> {f.verdict_note}
+              </div>
+            )}
+
+            {!f.verdict && (
+              <>
+                <input
+                  type="text"
+                  placeholder="Optional note (one line) before recording verdict…"
+                  value={noteByFid[f.finding_id] || ""}
+                  onChange={(e) => setNoteByFid((p) => ({ ...p, [f.finding_id]: e.target.value }))}
+                  disabled={isInflight}
+                  style={{ width: "100%", fontSize: 11, padding: "4px 6px", marginBottom: 6 }}
+                />
+                <div className="v2-row" style={{ gap: 6 }}>
+                  <button
+                    onClick={() => submitVerdict(f.finding_id, "confirmed")}
+                    disabled={isInflight}
+                    className="v2-primary"
+                    style={{ fontSize: 11, padding: "4px 10px" }}
+                    title="Classifier was right; this is a real bug."
+                  >Confirm</button>
+                  <button
+                    onClick={() => submitVerdict(f.finding_id, "refuted")}
+                    disabled={isInflight}
+                    className="v2-secondary"
+                    style={{ fontSize: 11, padding: "4px 10px" }}
+                    title="Classifier was wrong; not a real bug."
+                  >Refute</button>
+                  <button
+                    onClick={() => submitVerdict(f.finding_id, "deferred")}
+                    disabled={isInflight}
+                    className="v2-secondary"
+                    style={{ fontSize: 11, padding: "4px 10px" }}
+                    title="Real but intentionally deferred (post-MVP, etc.)."
+                  >Defer</button>
+                  {isInflight && <span style={{ opacity: 0.7, fontSize: 11 }}>…submitting</span>}
+                </div>
+              </>
+            )}
+
+            <div style={{ marginTop: 6, opacity: 0.5, fontSize: 10, fontFamily: "monospace" }}>
+              {f.finding_id.slice(0, 20)}… · first={f.first_seen_ts} · run={f.run_id}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
