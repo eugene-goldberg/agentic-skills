@@ -50,9 +50,78 @@ async def create_worktree(repo_root: Path, task_id: str | None = None, *, base_r
     return Worktree(task_id=task_id, path=base, branch=branch)
 
 
+async def _reap_worktree_compose_stacks(wt: Worktree) -> None:
+    """A48 follow-up (2026-06-02): reap any docker compose stack the agent
+    spawned inside the worktree before we remove the worktree itself.
+
+    Engineers/QA/scorers/acceptance agents have Bash access to their
+    worktree and may `docker compose up` to test code interactively
+    (verified: BL-0006 financial-management engineer left
+    `9b04804af277-db-1` running for 2h after sprint completion).
+    Without this hook these stacks orphan: their postgres data volume
+    counts against Docker.raw's 60 GB VM disk cap and eventually triggers
+    ENOSPC mid-sprint.
+
+    Two passes, defense in depth:
+
+      1. Default-project-name reap: when an agent runs ``docker compose
+         up`` without ``-p``, the project name defaults to the basename
+         of the cwd — which is the worktree dir, which is the task_id.
+         ``docker compose -p <task_id> down -v --remove-orphans`` is
+         exact and cheap.
+
+      2. Label-based safety net: if the agent picked an explicit ``-p``,
+         step 1 misses it. Sweep for any container whose
+         ``com.docker.compose.project.working_dir`` label is inside the
+         worktree path and force-remove those.
+
+    Best-effort throughout. Never raises — docker absence, bad container
+    IDs, or a hung daemon must not block the git-worktree-remove path.
+    """
+    # Pass 1: default-project-name (task_id) reap.
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "compose", "-p", wt.task_id,
+            "down", "-v", "--remove-orphans",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=30.0)
+    except Exception:
+        pass
+    # Pass 2: label-based safety net for explicit-`-p` cases.
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "ps", "-aq",
+            "--filter",
+            f"label=com.docker.compose.project.working_dir={wt.path}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        container_ids = [c for c in out.decode().split() if c]
+        if container_ids:
+            proc2 = await asyncio.create_subprocess_exec(
+                "docker", "rm", "-fv", *container_ids,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc2.communicate(), timeout=30.0)
+    except Exception:
+        pass
+
+
 async def remove_worktree(repo_root: Path, wt: Worktree, *, force: bool = True) -> None:
     """Detach and delete the worktree directory. Branch is left in place
-    (caller may want to inspect or merge it)."""
+    (caller may want to inspect or merge it).
+
+    Reaps any docker compose stack spawned by the agent inside the
+    worktree BEFORE removing the worktree dir, to prevent postgres data
+    volumes accumulating into Docker.raw's 60 GB cap across a multi-BL
+    sprint. See ``_reap_worktree_compose_stacks`` for the two-pass
+    reaper detail.
+    """
+    await _reap_worktree_compose_stacks(wt)
     args = ["git", "worktree", "remove"]
     if force:
         args.append("--force")

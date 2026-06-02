@@ -1196,7 +1196,13 @@ async def _acceptance_flow(
     # Resolve the merged agent_branch we fork the read-only worktree off of.
     cfg = repo_config_svc.load(repo_dir)
     agent_branch = cfg.agent_branch
-    compose_project = f"acceptance-{run_id}"
+    # A48 follow-up (2026-06-02): lowercase to satisfy docker compose's
+    # project-name validator + the volume_reaper's matching regex. ISO-8601
+    # run_ids carry uppercase T/Z which fail
+    # `_PROJECT_NAME_RE = ^[a-z0-9][a-z0-9_-]*$` and cause the reaper to
+    # no-op every acceptance run (verified on 2026-06-01 client_portal
+    # smoke). Mirrors the lowercase fix already in regression_gate.py:50-71.
+    compose_project = f"acceptance-{run_id}".lower()
     feature_rel = f"_brownfield/features/{feature_slug}"
     brief_rel = f"{feature_rel}/brief.md"
     backlog_rel = f"{feature_rel}/BACKLOG.md"

@@ -1,4 +1,5 @@
 """FastAPI entrypoint."""
+import asyncio
 import os
 from pathlib import Path
 
@@ -64,3 +65,43 @@ def health() -> dict:
         "embedding_provider": os.environ.get("EMBEDDING_PROVIDER"),
         "milvus": os.environ.get("MILVUS_ADDRESS"),
     }
+
+
+# A48 follow-up (2026-06-02): force-down any orchestrator-spawned compose
+# stacks on uvicorn shutdown so a SIGTERM (operator Ctrl+C, kill, container
+# restart) doesn't orphan postgres data volumes into Docker.raw's 60 GB
+# VM-disk cap. Catches gate stacks (project=agentic-skills-*), acceptance
+# stacks (project=acceptance-*), and engineer-spawned worktree stacks
+# (whose worktree-removal hook in git_worktree.py didn't get to run before
+# the shutdown).
+_ORCHESTRATOR_PROJECT_PATTERNS = ("agentic-skills-", "acceptance-")
+
+
+@app.on_event("shutdown")
+async def _reap_orchestrator_compose_stacks() -> None:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "ps", "-a",
+            "--format", "{{.Label \"com.docker.compose.project\"}}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+    except Exception:
+        return
+    projects = set()
+    for line in out.decode().splitlines():
+        line = line.strip()
+        if line and any(line.startswith(p) for p in _ORCHESTRATOR_PROJECT_PATTERNS):
+            projects.add(line)
+    for project in projects:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "compose", "-p", project,
+                "down", "-v", "--remove-orphans",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=30.0)
+        except Exception:
+            continue
