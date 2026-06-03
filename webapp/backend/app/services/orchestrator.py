@@ -1148,6 +1148,8 @@ async def _acceptance_flow(
     timeout: int = 3600,
     backend_bls_override: list[str] | None = None,
     inject_acceptance_priors: bool = False,
+    retrieval_kwargs_builder=None,  # ABL-0015 Batch B: needed to spawn followup engineer
+    run_acceptance_followup: bool = False,  # ABL-0015: auto-dispatch; OFF until calibrated
 ) -> AsyncIterator[dict]:
     """ABL-0014 Acceptance Agent.
 
@@ -1585,6 +1587,7 @@ async def run_brief(
     acceptance_timeout: int = 3600,
     min_ui_coverage_ratio: float = 0.0,  # ABL-0014 Item 2 (Batch C); 0.0 = informational-only
     inject_acceptance_priors: bool = False,  # ABL-0014 §I.3 Batch E; OFF until 3-smoke calibration
+    run_acceptance_followup: bool = False,  # ABL-0015 auto-dispatch; OFF until calibrated
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -1907,6 +1910,8 @@ async def run_brief(
                     feature_slug,
                     timeout=acceptance_timeout,
                     inject_acceptance_priors=inject_acceptance_priors,
+                    retrieval_kwargs_builder=retrieval_kwargs_builder,
+                    run_acceptance_followup=run_acceptance_followup,
                 ):
                     yield evt
             except Exception as exc:

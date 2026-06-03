@@ -1157,6 +1157,12 @@ class RunBriefRequest(BaseModel):
     # Default OFF until the 3-smoke calibration discipline (§I.1) clears
     # the flip; mirrors the run_acceptance default-OFF→ON history.
     inject_acceptance_priors: bool = False
+    # ABL-0015 (2026-06-02): auto-dispatch a follow-up engineer on
+    # operator-confirmed product_bug acceptance findings. Default OFF —
+    # this is the framework's highest-risk action (acceptance becomes a
+    # writer; engineer gets non-PO work). Flipped only after a live
+    # calibration smoke per ABL-0015_AUTO_DISPATCH_DESIGN.md §11 Batch E.
+    run_acceptance_followup: bool = False
     # A48 pre-flight disk-free check (2026-06-01). Default advisory:
     # the check ALWAYS runs and emits an SSE event with the breakdown,
     # but only refuses the run (HTTP 409) when enforce=True. This
@@ -1360,6 +1366,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 feature_slug=feature_slug,
                 run_acceptance=req.run_acceptance,
                 inject_acceptance_priors=req.inject_acceptance_priors,
+                run_acceptance_followup=req.run_acceptance_followup,
                 acceptance_timeout=req.acceptance_timeout,
                 min_ui_coverage_ratio=req.min_ui_coverage_ratio,
             ):
