@@ -186,6 +186,9 @@ Read these in this order on any non-trivial session:
 | 13 | [`RUNBOOK_clean_brownfield_reset.md`](RUNBOOK_clean_brownfield_reset.md) | Procedure to launch a new brownfield feature on a target that already hosted a prior sprint, with no cross-contamination (branch fork, harness-commit cherry-pick, `_brownfield/` strip, graphify+Milvus purge, orchestrator-state sweep, docker `-v` restart, feature-key collision check). |
 | 14 | [`CONTINUATION_PROMPT.md`](CONTINUATION_PROMPT.md) | The handoff document for the next session. Update when context changes. |
 | 15 | [`PREFLIGHT.md`](PREFLIGHT.md) | PF-1..10 pre-sprint verification checklist (Milvus stack, Ollama probe, indexer end-to-end, target tree, leftover worktrees, Docker.raw budget). Run before every `/run-brief` or sprint resume. Added 2026-06-02. |
+| 16 | [`CUMULATIVE_LEARNING_ROADMAP.md`](CUMULATIVE_LEARNING_ROADMAP.md) | Strategy for the mission's *cumulative* property — the 4-stage path (lessons-as-retrieval → closed-loop doctrine → cross-target transfer → pattern profile). |
+| 17 | [`CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md`](CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md) | The whole-feature program plan (ABL-0016→0019), shared architecture, per-stage batches, Batch-0 verification gates. |
+| 18 | [`ABL-0016_LESSONS_AS_CONTEXT.md`](ABL-0016_LESSONS_AS_CONTEXT.md) | Stage 1 plan — surface prior confirmed lessons to all brownfield roles. Batches A–C shipped (flag-OFF); calibration smoke open. |
 
 The `.claude/memory/` directory carries cross-session memory files (see
 `MEMORY.md` index). Architectural memory entries (`arch_*.md`) summarize

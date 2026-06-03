@@ -275,6 +275,33 @@ open step before the flag can flip ON.
 
 ---
 
+### ABL-0016 — Lessons-as-context (cumulative learning, Stage 1)
+**Priority:** MEDIUM · **Effort:** 2 · **Dependencies:** ABL-0014 §I.3 · **State:** Implemented (flag-OFF, pending live calibration smoke)
+
+**Story:** As the framework, I want every brownfield role (PO, engineer, QA, scorer) to see prior operator-confirmed lessons for the target as advisory context, so the crew's hard-won findings become inputs to future work — "what's learned on one target carries forward" (the mission's *cumulative* property, its least-mature axis).
+
+**Acceptance:**
+1. A target-scoped lessons reader unions confirmed/deferred findings across all feature ledgers in the repo. ✅
+2. A shared advisory block (silent when empty) is injected into all four brownfield role prompts at the verified seams. ✅
+3. Flag `inject_lessons: bool` (default OFF until calibrated). ✅
+4. Injection provenance recorded per run/role/bl_id (the Stage-2 efficacy hook). ✅
+
+**Risk level:** Low (advisory context, no new R-rule, no subprocess/closure impact; lessons are falsification priors, not binding rules).
+
+**Status (2026-06-03):** Code batches A–C shipped on `cumulative_learning`
+(roadmap `f259439`; ABL-0016 plan `e600044`; program plan `29b9503`;
+A `eb20d6f`; B `294f725`; C provenance `512a1c5`). Design + grounding in
+[`ABL-0016_LESSONS_AS_CONTEXT.md`](ABL-0016_LESSONS_AS_CONTEXT.md); whole-
+feature program in [`CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md`](CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md).
+v1 = Option A (prompt injection), target-scoped. 233/233 backend tests
+pass. The **live calibration smoke** (one sprint with `inject_lessons=true`
+on a target with prior confirmed findings) is operator-gated and is the
+only open step before the flag can flip ON. This is **Stage 1 of a 4-stage
+program** — ABL-0017 (closed-loop doctrine efficacy), ABL-0018 (cross-target
+transfer), ABL-0019 (pattern profile) follow.
+
+---
+
 ### ABL-0013 — Cost + telemetry layer
 **Priority:** HIGH · **Effort:** 3 · **Dependencies:** ABL-0001 · **State:** Blocked
 
