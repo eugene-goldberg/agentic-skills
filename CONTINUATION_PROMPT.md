@@ -1,11 +1,15 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-02 ~19:30 CDT. This session executed a
+> Hand-off written 2026-06-02 ~20:30 CDT. This session executed a
 > full end-to-end autonomous brownfield feature delivery
 > (Financial_Management, 12 BLs) AND shipped the four A48 disk-leak
-> fixes (lowercase acceptance, worktree reaper, shutdown handler) AND
-> two gate fixes (180s stack_healthy, PLAYWRIGHT_TEST_BASE_URL). All
-> work is committed and pushed.
+> fixes AND two gate fixes AND closed the §I.3 ledger
+> pass-with-caveat gap. All work is committed and pushed.
+>
+> **§I.4 ABL-0015 auto-dispatch is now unblocked** — the
+> financial-management ledger carries Journey 03's real product_bug
+> (UI Edit dialog bypasses BL-0005 transition state machine), which
+> will be the first real test case for the dispatcher.
 
 ---PROMPT START---
 
@@ -25,7 +29,7 @@ git log --oneline @{u}..HEAD   # MUST be empty (synced with origin)
 git log --oneline -1           # expect 02ebd7b (or further) on architect-prereqs
 ```
 
-Expected tip: `02ebd7b fix(A48): three-layer disk-leak prevention`.
+Expected tip: `17919a8 fix(I.3): extract pass_with_caveat findings into the ledger`.
 
 ## 1. Identity
 
@@ -47,9 +51,14 @@ feature delivery.
    PASS, with 1 real cross-BL bug found by the acceptance agent that
    per-BL QA structurally could not catch.
 
-✅ **§I.3 ledger pipeline (Batches A–E) exercised live:**
+✅ **§I.3 ledger pipeline (Batches A–E) exercised live AND the
+   pass-with-caveat gap closed (commit `17919a8`).**
    acceptance.ledger.appended event fired; lowercase compose project
-   path (Fix #1) verified verbatim.
+   path (Fix #1) verified verbatim. Extractor now consumes the
+   structured `caveat` object on `pass_with_caveat` journeys — the
+   real cross-BL `product_bug` from Journey 03 is persisted to the
+   financial-management ledger (backfilled from the existing
+   acceptance archive).
 
 ✅ **Four A48 disk-leak fixes shipped + verified live** (commit
    `02ebd7b`):
@@ -70,9 +79,10 @@ feature delivery.
 ### Test posture
 
 ```
-171/171 backend pass (was 160 pre-A48 fixes)
+176/176 backend pass (was 160 pre-A48 fixes)
   +7  test_worktree_reaper
   +4  test_shutdown_reaper
+  +5  test_findings_ledger (pass_with_caveat extraction)
 ```
 
 ### Financial_Management sprint metrics (this session's headline)
@@ -124,30 +134,43 @@ acceptance agent exists to catch — per-BL QA cannot see it. The find
 itself is also the strongest single piece of evidence that the
 acceptance agent works as designed.
 
-### 3b — §I.3 LEDGER GAP discovered
+### 3b — §I.3 LEDGER GAP — CLOSED this session (commit `17919a8`)
 
-`acceptance.ledger.appended findings_persisted=0` for this run, but
-the report.md names a real `product_bug` in Journey 03. Why didn't
-it persist?
+Root cause turned out to be at the **extractor**, not the agent.
+The agent already emits structured `caveat` objects on
+`pass_with_caveat` journeys:
 
-Because Journey 03 was marked **PASS with caveat** (the legal
-draft→sent step succeeded), and the ledger extractor in
-`findings_ledger._extract_findings_from_report` only persists from
-journeys whose status is `fail`/`failed`/`error`. **Caveats in
-passing journeys don't reach the ledger.**
+```json
+{
+  "id": "03",
+  "status": "pass_with_caveat",
+  "caveat": {
+    "classification": "product_bug",
+    "severity": "medium",
+    "summary": "Edit Invoice dialog calls PUT, bypasses state machine...",
+    "hypothesis": "backend/app/api/routes/billing/invoices.py update_invoice..."
+  }
+}
+```
 
-Real architectural gap in §I.3 Batch B. Two possible fixes (operator
-chooses):
+The pre-fix extractor only consumed journeys with status in
+{failed, fail, error}, so the structured caveat data was silently
+dropped.
 
-1. Have the acceptance agent emit a structured `findings: [...]` array
-   in `report.json` (separate from per-journey status), and extend the
-   ledger extractor to read it. Cleanest fix.
-2. Extend the extractor to also persist findings from
-   `pass-with-caveat`-shaped journey objects. Faster fix; depends on
-   the agent consistently emitting the caveat field.
+**Fix:** Split `_extract_findings_from_report` into a per-journey
+helper that handles three shapes — failed-top-level, failed-nested
+(validator-defensive), and pass_with_caveat (new). No SKILLS.md
+change required. Backward compatible with all existing test cases.
 
-This blocks **ABL-0015 auto-dispatch** (§I.4) from being useful: the
-auto-dispatcher would have nothing to dispatch on for this sprint.
+**Backfill:** the new extractor was run against the existing
+`run-20260602T143035Z-c5868e` archive, and Journey 03's
+`product_bug` is now persisted at
+`_brownfield/features/financial-management/acceptance/findings_log.jsonl`
+with finding_id `sha256:6e533e84...`. This is the first real
+operator-verdict-eligible finding the system has produced.
+
+**§I.4 ABL-0015 auto-dispatch is now unblocked.** It has a real
+finding to dispatch on.
 
 ### 3c — Item 2 coverage check signal
 
@@ -178,26 +201,27 @@ No real data loss.
 | Batch | Status |
 |---|---|
 | A — ledger module | ✅ shipped, exercised live |
-| B — orchestrator wiring | ✅ shipped, exercised live; **gap above (3b) to address** |
-| C — HTTP endpoints | ✅ shipped (not exercised live yet — no findings to verdict in this sprint) |
-| D — AppV2 triage panel | ✅ shipped (not exercised live — no findings to triage) |
-| E — agent-prior injection | ✅ shipped, silent path verified (empty ledger → no block) |
+| B — orchestrator wiring | ✅ shipped + pass-with-caveat gap closed (`17919a8`) |
+| C — HTTP endpoints | ✅ shipped — **the financial-management ledger now carries 1 pending finding the operator can verdict via GET/POST or the AppV2 panel** |
+| D — AppV2 triage panel | ✅ shipped — ready for the operator to triage Journey 03's `product_bug` |
+| E — agent-prior injection | ✅ shipped, silent path verified |
 
-**The whole §I.3 stack works. The gap is at the extractor layer
-where caveat-in-passing-journey doesn't trigger persistence.**
+**§I.3 is fully closed.** Every batch works end-to-end against a
+real finding.
 
 ## 5. §I production-readiness roadmap status
 
 | Item | Status |
 |---|---|
-| **I.1** 3 calibration smokes for API-acceptance | **+1 this session** (financial-management smoke = #3 of 3 ✓). Item 1 default-flip discipline now satisfied. |
+| **I.1** 3 calibration smokes for API-acceptance | ✅ closed (financial-management = smoke #3 of 3) |
 | **I.2** observability gaps | not started |
-| **I.3** ledger + triage UI | shipped, gap noted |
-| **I.4** ABL-0015 auto-dispatch | blocked on 3b (need findings to dispatch on) |
+| **I.3** ledger + triage UI + extractor | ✅ closed (`17919a8` gap fix) |
+| **I.4** ABL-0015 auto-dispatch | **unblocked** — Journey 03 finding in ledger as first test case |
 | **I.5** Django smoke | not started |
 
-So Items 1 + 3 are effectively closed (modulo the 3b gap). Items 2, 4,
-5 remain.
+Items 1 + 3 closed. Items 2, 4, 5 remain. **§I.4 is now the highest-
+leverage next move** because the dispatcher's input contract is
+finally satisfied.
 
 ## 6. Other open ledger items
 
@@ -220,13 +244,20 @@ So Items 1 + 3 are effectively closed (modulo the 3b gap). Items 2, 4,
 
 ## 8. Likely next moves (in priority order)
 
-1. **Address §I.3 ledger gap (3b)** — extend the extractor to capture
-   pass-with-caveat findings, OR change the SKILLS.md contract to
-   require a structured findings array. ~2-4 hours.
-2. **Then implement ABL-0015 auto-dispatch (§I.4)** — now unblocked
-   if the ledger captures product_bugs reliably. The Journey 03 PUT
-   bypass would be its first real test case.
-3. **§I.2 observability** — observability gaps for trace inspection.
+1. **§I.4 ABL-0015 auto-dispatch design + Batch A** — the ledger
+   contract is now satisfied. The dispatcher reads `findings_log.jsonl`,
+   filters by `verdict ∈ {confirmed, null}` (or per the §I.4 design),
+   and spawns a fresh engineer worktree off `agent_branch` with the
+   finding's `summary` + `hypothesis` as the fix prompt. Journey 03's
+   finding (`sha256:6e533e84...`) is the first real test case sitting
+   on disk waiting to be dispatched on.
+2. **Operator-verdict the existing finding** via either the AppV2
+   triage panel (manual smoke) or the `POST /verdict` endpoint. This
+   exercises Batches C + D against a real finding and produces the
+   first non-null verdict the priors-injection path (Batch E) can
+   ever surface.
+3. **§I.2 observability** — observability gaps for trace inspection
+   (retrieval.jsonl, phase_events.jsonl, tool_use in stream.jsonl).
 4. **§I.5 Django smoke** — multi-target validation.
 5. **Fold the two target-repo gate fixes (`2b107f8`, `b1d616d`) into
    agentic-skills' init-feature scaffolding** so future brownfield
@@ -268,7 +299,7 @@ So Items 1 + 3 are effectively closed (modulo the 3b gap). Items 2, 4,
 
 | | |
 |---|---|
-| uvicorn | up PID 52249 with all 4 A48 fixes loaded |
+| uvicorn | up PID 52249 with all 4 A48 fixes loaded — note the §I.3 extractor change in `17919a8` won't take effect until uvicorn is restarted; manual backfill already added Journey 03's finding to disk so the next acceptance run is not required to produce it |
 | Milvus stack | running (standalone + etcd + minio) |
 | Ollama | running, bge-m3 loaded |
 | Docker.raw | ~4-5 GB used (clean) |
