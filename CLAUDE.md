@@ -191,6 +191,7 @@ Read these in this order on any non-trivial session:
 | 18 | [`ABL-0016_LESSONS_AS_CONTEXT.md`](ABL-0016_LESSONS_AS_CONTEXT.md) | Stage 1 plan — surface prior confirmed lessons to all brownfield roles. Batches A–C shipped (flag-OFF); calibration smoke open. |
 | 19 | [`ABL-0017_DOCTRINE_EFFICACY.md`](ABL-0017_DOCTRINE_EFFICACY.md) | Stage 2 — closed-loop doctrine efficacy. Batch-0 verification done; unblocked by ABL-0020; design + batches pending. |
 | 20 | [`ABL-0020_DOCTRINE_SPEC_REGISTRY.md`](ABL-0020_DOCTRINE_SPEC_REGISTRY.md) | Keystone — the I-2 doctrine-spec registry (`doctrine_spec.py`) + per-run manifest. Complete; fulfills I-2; unblocks ABL-0017. |
+| 21 | [`ABL-0021_ONDEMAND_DISPATCH_UI.md`](ABL-0021_ONDEMAND_DISPATCH_UI.md) | Operator-facing on-demand "Dispatch fix" — `POST /dispatch-followup` + FindingsTriagePanel button. Complete on `followup-dispatch-ui`; closes the triage-UI ↔ ABL-0015-engine seam. |
 
 The `.claude/memory/` directory carries cross-session memory files (see
 `MEMORY.md` index). Architectural memory entries (`arch_*.md`) summarize

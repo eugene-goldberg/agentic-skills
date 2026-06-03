@@ -1,165 +1,152 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-03. This session implemented **ABL-0016
-> Lessons-as-context** (cumulative learning, Stage 1) — code batches A–C —
-> on a new branch `cumulative_learning`, on top of the ABL-0015
-> auto-dispatch work that lives on `architect-prereqs`.
->
-> **Two flag-OFF features now await an operator-gated calibration smoke:**
-> ABL-0015 auto-dispatch (Batch E) and ABL-0016 lessons-as-context. The
-> architect cannot run either.
+> Hand-off written 2026-06-03.
 
 ---PROMPT START---
 
 You are picking up the agentic-skills project. **You are the architect.**
-Read `CLAUDE.md` first — especially **"Operating principle: quality over
-speed"** (Rules 1–6, the **95% verified/tested certainty floor**, Rule 3
-on **narrative momentum**).
+Read `CLAUDE.md` first — especially the **"Operating principle: quality
+over speed"** section (Rules 1–6, the **95% verified/tested certainty
+floor**, Rule 3 on **narrative momentum**). The main project is the crew
+itself; brownfield targets and their `_brownfield/` derivatives are never
+committed to this repo — we only commit/push/maintain agentic-skills.
 
-## ⚠️ Priority 0 — Verify branch state (30 sec)
+## ⭐ THIS SESSION'S GOAL (operator-stated, top priority)
+
+**Run a NEW brownfield sprint end-to-end via the web app UI, observe and
+react to any findings the acceptance pass exposes, and review / approve
+immediate engineering fixes — exercising the new ABL-0021 "Dispatch fix"
+flow live.**
+
+This is a **live, operator-driven session.** Your job as architect is to
+support the operator through it: get the environment green, launch the
+sprint from the UI, watch the stream, and then drive the
+findings-review-and-fix loop. Concretely, the loop we are validating:
+
+```
+launch sprint (web UI) → BLs run (engineer/QA/scorer, auto-merge)
+   → acceptance pass exposes cross-BL findings
+   → operator reviews findings in the FindingsTriagePanel
+   → Confirm the real ones (verdict)
+   → click "🛠 Dispatch fix" → a follow-up engineer fixes it on-demand
+   → observe the fix clear the regression gate + auto-merge
+```
+
+The "Dispatch fix" facility (ABL-0021) was just built and is the headline
+thing to exercise. It needs **no flag** — it's an explicit operator action
+on a confirmed product_bug.
+
+### Run from the right branch
+
+**Check out `followup-dispatch-ui`** to run the webapp — it carries
+everything this loop needs: the ABL-0015 dispatch engine, the §I.3 triage
+panel + verdict/findings endpoints, AND the ABL-0021 `POST
+/dispatch-followup` endpoint + the "Dispatch fix" button. (It was branched
+off `cumulative_learning`, so it also has ABL-0016 lessons + ABL-0020
+registry.)
 
 ```bash
 cd /Users/eugenegoldberg/dev/ai-projects/agentic-skills
-git branch --show-current        # likely cumulative_learning
-git status -s                    # MUST be clean
-git log --oneline @{u}..HEAD     # MUST be empty (synced)
+git checkout followup-dispatch-ui && git status -s   # clean, synced
 ```
 
-Two active feature branches:
-- `architect-prereqs` — ABL-0015 auto-dispatch (A–D shipped, flag-OFF).
-- `cumulative_learning` — branched off the above; adds ABL-0016 (A–C
-  shipped, flag-OFF). **Current branch.**
+### Pre-flight (do the FULL checklist — don't skip)
 
-## 1. Identity
+Run `PREFLIGHT.md` (PF-1..10) before launching: Milvus stack (3 containers
+healthy + 19530 reachable), Ollama `bge-m3` + a real embedding probe,
+indexer end-to-end against the target, `claude` binary version, target tree
+on the right branch/head, leftover worktrees reaped, Docker.raw room,
+`254/254` backend tests. Lessons from prior sessions (don'ts §below) bite
+hardest when pre-flight is skipped.
 
-**agentic-skills** — autonomous synthetic AI crew for brownfield feature
-delivery. Operator: Eugene Goldberg. The main project is the *crew itself*;
-brownfield targets and their `_brownfield/` derivatives are never committed
-to this repo. We only commit/push/maintain agentic-skills.
+### How to launch + what to watch
 
-## 2. State at hand-off
+- Start the webapp per `webapp/PROJECT_STATE.md` §13 ("How to run from a
+  fresh clone" — backend uvicorn + `vite`/built frontend). Use **Ctrl+C
+  (SIGTERM)** to stop uvicorn, never `kill -9` (the SIGTERM handler reaps
+  Docker stacks; A48).
+- Submit a brief via the UI (`POST /run-brief` under the hood). Watch the
+  SSE stream: per-BL `engineer/qa/scorer`, `regression_gate`,
+  `merge_to_target`, then `sprint_complete`, then the **acceptance** phase
+  (`acceptance.start` … `acceptance.ledger.appended` with
+  `findings_persisted`, `acceptance.done`).
+- When acceptance persists findings, the acceptance tile surfaces them and
+  the **FindingsTriagePanel** opens in the detail rail.
 
-### ABL-0016 Lessons-as-context — cumulative learning Stage 1 (this session)
+### The findings-review + fix loop (ABL-0021 — the thing to exercise)
 
-The mission's **cumulative** property ("what's learned on one target
-carries forward") was its least-mature axis. ABL-0016 closes the
-**read-path gap**: prior operator-confirmed findings now surface to every
-brownfield role (PO/engineer/QA/scorer) as *advisory* context.
+In the FindingsTriagePanel (`webapp/frontend/src/AppV2.jsx`):
+1. Each finding shows classification + evidence + a `fix:<state>` badge.
+2. **Confirm** a real `product_bug` (verdict). Refute/Defer the others.
+3. A **"🛠 Dispatch fix"** button appears on confirmed product_bugs →
+   click it → `POST /dispatch-followup` spawns a follow-up engineer,
+   streams `acceptance.followup.*` + engineer sub-events live, and shows the
+   terminal outcome (✅ merged + sha / ⚠ awaiting review / ❌ error).
+4. The fix clears the **same** regression-gate + auto-merge bar as any BL
+   (it reuses the ABL-0015 engine). Verify the merge; the finding's
+   `dispatch_state` becomes `merged`.
 
-Code batches A–C, all on `cumulative_learning` (233/233 backend tests):
+**React to what you see, honestly** (Rule 1/3/6): if the acceptance agent
+misclassifies, or a dispatched fix fails the gate, that's signal — capture
+it, don't paper over it. A real product_bug example already lives in the
+financial-management ledger (Journey 03: `PUT /billing/invoices/{id}`
+bypasses the BL-0005 transition state machine) if you want a known case.
 
-| Commit | What |
-|---|---|
-| `f259439` | cumulative-learning strategy roadmap |
-| `e600044` | ABL-0016 Stage-1 plan |
-| `29b9503` | whole-feature program plan (ABL-0016→0019) |
-| `eb20d6f` | A — `lessons.py` reader (`list_lessons`, target-scoped union) + renderer (`render_lessons_block`, silent-empty) |
-| `294f725` | B — `inject_lessons` flag through request→run_brief→3 flows; block wired into 4 brownfield builders at verified seams |
-| `512a1c5` | C — `record_injection` provenance (`logs/lessons/<run_id>.jsonl`); Stage-2 hook |
+## State at hand-off
 
-Design: **Option A** (prompt injection, mirrors `_build_priors_block`),
-**target-scoped** (union across `_brownfield/features/*/acceptance/findings_log.jsonl`),
-advisory (falsification priors, not bans), **no new R-rule** (I-2
-unaffected). Docs: `ABL-0016_LESSONS_AS_CONTEXT.md`,
-`CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md`, `CUMULATIVE_LEARNING_ROADMAP.md`.
+- **Branch:** `followup-dispatch-ui` (tip `3db7705`), synced with origin.
+- **ABL-0021 on-demand "Dispatch fix" — COMPLETE** (this session): backend
+  `8bfbec7`, frontend `3db7705`. The only remaining verification is exactly
+  this session's live click-through. See `ABL-0021_ONDEMAND_DISPATCH_UI.md`
+  + `arch-ondemand-dispatch-ui` memory.
+- **Test posture:** 254/254 backend (scoped `cd webapp/backend && pytest
+  tests/` — bare pytest recurses into gitignored target repos and errors on
+  sqlmodel; not a failure). `vite build` clean.
+- Built on: ABL-0015 auto-dispatch engine (flag-OFF), §I.3 findings ledger +
+  triage panel, ABL-0016 lessons (flag-OFF), ABL-0020 doctrine-spec registry.
 
-### ABL-0020 doctrine-spec registry — the keystone (this session)
+### Optional flags for this session (not required for the Dispatch-fix loop)
+- `run_acceptance_followup=true` → ABL-0015 would ALSO auto-dispatch inline
+  during the sprint on *pre-confirmed* findings (a fresh sprint's findings
+  are pending, so this mostly matters on a re-run). The on-demand button is
+  the simpler path and needs no flag.
+- `inject_lessons=true` → surfaces prior confirmed lessons to the roles
+  (ABL-0016). Independent of the dispatch loop.
 
-Started as ABL-0017 Batch 0; the verification gate found Stage 2 couldn't
-attribute outcomes to rules because the **I-2 doctrine-spec registry was
-unfulfilled**. Operator chose Option C → built the registry first. Now
-**complete** (A `624886f`, B `016ef5c`, C `db7d8d7`):
-- `app/services/doctrine_spec.py` — single in-code registry of all 13
-  canonical rules (enforcement_point, enforced flag, resolvable `check_ref`,
-  `targeted_failure_class`); `KNOWN_GAPS={R9}`; `manifest()`.
-- I-2 meta-test + a CI consistency guard (registry ↔ CLAUDE.md table).
-- Per-run `doctrine_manifest` snapshotted into `.orchestrator-state` via
-  `write_checkpoint` (the rule-state half of Stage 2's input contract).
-- **I-2 marked FULFILLED** in ARCHITECTURE_INVARIANTS.md (synthetic-harness
-  residual flagged). This discharged the project's oldest architectural debt
-  AND unblocked ABL-0017.
+## Deferred architect-doable work (AFTER the live session)
 
-### ABL-0015 auto-dispatch (on `architect-prereqs`, flag-OFF)
+1. **ABL-0017 Stage 2 efficacy** (unblocked by ABL-0020) — outcome-label
+   deriver → rule-efficacy index (join `doctrine_manifest` × `bl_outcomes`)
+   → `retire` proposal kind in doctrine-meta → calibration. Plan:
+   `CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md` §4.
+2. **Branch consolidation** — `architect-prereqs` (ABL-0015), then
+   `cumulative_learning` (ABL-0016/0020), then `followup-dispatch-ui`
+   (ABL-0021) stack on each other. Consider the merge/PR strategy back to a
+   trunk once the live session validates the flow.
+3. Two flag-flip calibration smokes still open (ABL-0016 lessons, ABL-0015
+   Batch E auto-dispatch).
 
-A–D shipped: ledger dispatch schema, `run_acceptance_followup` flag,
-selector + dispatch block (R15 dispatch-at-most-once), closure coverage.
-Reuses `_engineer_flow` unchanged (selector + invoker). See
-`ABL-0015_AUTO_DISPATCH_DESIGN.md` + `arch_auto_dispatch.md` memory.
+## Other open ledger items
+A39 (gate parser baseline-vs-regressed), A45 (B5 idle-timeout), A47
+(ScheduleWakeup/Glob bypass), A48 (closeable), doctrine-meta R-CHAR
+characterization-ownership proposal.
 
-### Test posture
+## Mandatory reading order
+1. `CLAUDE.md` — architect role + Operating principle
+2. This file's ⭐ GOAL section
+3. `ABL-0021_ONDEMAND_DISPATCH_UI.md` + `webapp/PROJECT_STATE.md` (run + the
+   findings/dispatch endpoints) + `PREFLIGHT.md`
+4. `THESIS.md`, `ARCHITECTURE_INVARIANTS.md` (if going deeper than the live run)
 
-```
-233/233 backend pass. Run scoped:
-  cd webapp/backend && python3 -m pytest tests/ -q -p no:cacheprovider
-```
-Bare `pytest` from `backend/` recurses into the gitignored target repos
-under `repos/` and errors on `sqlmodel` — invocation artifact, not a
-failure.
-
-## 3. The two open operator-gated smokes (architect cannot run these)
-
-1. **ABL-0016 lessons calibration:** run one sprint with
-   `inject_lessons=true` on a target carrying prior **confirmed** findings;
-   confirm the "## Relevant prior lessons (advisory)" block renders into
-   the role prompts, `logs/lessons/<run_id>.jsonl` is written, and no
-   regression. Clean → architect proposes flipping the flag default.
-2. **ABL-0015 auto-dispatch (Batch E):** operator-verdict the Journey 03
-   `product_bug` (`sha256:6e533e84…`) `confirmed`, run one sprint with
-   `run_acceptance_followup=true`, observe one clean follow-up dispatch +
-   0 `followup_worktree` closure violations.
-
-## 4. Highest-leverage next architect-doable work
-
-**ABL-0017 — Stage 2: closed-loop doctrine efficacy — NOW UNBLOCKED.**
-Its **Batch 0 is done** (`ABL-0017_DOCTRINE_EFFICACY.md`) and ABL-0020
-resolved its blocker. Both halves of Stage 2's input contract now persist
-per run on disk: `bl_outcomes` (run_state) + `doctrine_manifest`
-(ABL-0020). Stage 2 *closes* I-7: measure whether an enforced rule reduced
-its `targeted_failure_class`, propose retirement for ones that don't help
-(operator-gated, never auto-retires).
-
-It would proceed straight to design + batches (per the program plan §4):
-(A) per-BL outcome-label deriver from persisted state; (B) rule-efficacy
-index joining `doctrine_manifest` × `bl_outcomes` × per-rule
-`targeted_failure_class`; (C) `retire` proposal kind in doctrine-meta
-(one Direction value + SKILLS guidance); (D) calibration. Medium-fidelity
-(per-rule trigger events / A13 closure deferred — see ABL-0017 §options C).
-
-(Alternatively ABL-0019 Stage 4 pattern profile — lower risk; or ABL-0018
-Stage 3 cross-target transfer — higher value, pairs with the §I.5 Django
-multi-target smoke.)
-
-## 5. Other open items
-
-| ID | Status |
-|---|---|
-| ABL-0016 calibration smoke | open (operator) |
-| ABL-0015 Batch E smoke | open (operator) |
-| A39 | gate parser conflates baseline-broken vs engineer-regressed |
-| A45 | B5 idle-timeout false-positive |
-| A47 | ScheduleWakeup/Glob bypass `--allowedTools` |
-| A48 | closeable pending operator review |
-| doctrine-meta proposal | characterization-test ownership contradiction (R-CHAR proposed) |
-
-## 6. Mandatory reading order
-
-1. `CLAUDE.md` — architect role + "Operating principle"
-2. `THESIS.md`, `ARCHITECTURE_INVARIANTS.md`
-3. `CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md` — the program you'd continue
-4. `ABL-0016_LESSONS_AS_CONTEXT.md`, `ABL-0015_AUTO_DISPATCH_DESIGN.md`
-5. This file's §3 (open smokes) + §4 (next work)
-
-## 7. Don'ts (carried lessons)
-
-1. Don't commit brownfield targets or their `_brownfield/` derivatives —
-   only the main agentic-skills repo.
-2. Don't run `docker … prune -af` without naming what to keep (wiped
-   Milvus + a ledger once).
-3. Don't auto-skip pre-flight (`PREFLIGHT.md`) after a clean cleanup.
+## Don'ts (carried lessons)
+1. Don't commit brownfield targets / `_brownfield/` derivatives — only
+   agentic-skills.
+2. Don't run `docker … prune -af` without naming what to keep (wiped Milvus
+   + a ledger once).
+3. Don't skip the full pre-flight after a "clean" cleanup.
 4. Don't lose narrative-momentum awareness — read post_tail + gate fields
-   carefully even when the pattern looks like prior runs.
-5. Don't force-kill uvicorn mid-sprint — Ctrl+C (SIGTERM) so the shutdown
-   handler reaps Docker stacks; worktrees only reap from `finally`.
-6. No later cumulative-learning stage starts before its Batch-0 closes.
+   carefully every time, even when the pattern looks like prior runs.
+5. Don't force-kill uvicorn mid-sprint — Ctrl+C (SIGTERM) reaps Docker
+   stacks; worktrees only reap from `finally`.
 
 ---PROMPT END---

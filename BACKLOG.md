@@ -326,6 +326,29 @@ are follow-up.
 
 ---
 
+### ABL-0021 — Operator-facing on-demand follow-up dispatch ("Dispatch fix")
+**Priority:** HIGH · **Effort:** 2 · **Dependencies:** ABL-0015, ABL-0014 §I.3 · **State:** Implemented (complete)
+
+**Story:** As the operator, after a sprint lands and acceptance exposes findings, I want to review them, approve the real ones, and trigger an immediate engineering fix on-demand from the web UI — so the review→approve→fix loop happens in one place without running another whole sprint.
+
+**Acceptance:**
+1. `POST /api/projects/{repo}/dispatch-followup` — on-demand dispatch of a single confirmed product_bug; SSE-streamed; eligibility pre-validated (404/409, R15). ✅
+2. Reuses the ABL-0015 engine unchanged (`_dispatch_one_followup` extracted + shared with the inline loop). ✅
+3. FindingsTriagePanel: `dispatch_state` badge + "Dispatch fix" button on confirmed product_bugs; streamed progress + terminal outcome. ✅
+4. Two-step per-finding UX (Confirm → Dispatch fix). ✅
+
+**Risk level:** Low (reuses the gated ABL-0015 machinery; confirmed-product_bug-only, R15-guarded, explicit button press).
+
+**Status (2026-06-03):** Complete on branch `followup-dispatch-ui`
+(A backend `8bfbec7`, B frontend `3db7705`). Plan:
+[`ABL-0021_ONDEMAND_DISPATCH_UI.md`](ABL-0021_ONDEMAND_DISPATCH_UI.md).
+Closes the seam between the §I.3 triage UI and the ABL-0015 dispatch engine
+— the operator-control surface the engine was missing. 254/254 backend
+tests; `vite build` clean. **Live operator click-through is the remaining
+verification** (no frontend test infra by design).
+
+---
+
 ### ABL-0013 — Cost + telemetry layer
 **Priority:** HIGH · **Effort:** 3 · **Dependencies:** ABL-0001 · **State:** Blocked
 
