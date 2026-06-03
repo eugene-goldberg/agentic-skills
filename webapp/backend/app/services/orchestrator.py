@@ -39,6 +39,8 @@ from app.services import acceptance_validator as acceptance_validator_svc
 from app.services import volume_reaper as volume_reaper_svc
 from app.services import findings_ledger as findings_ledger_svc
 from app.services import lessons as lessons_svc
+from app.services import doctrine_spec as doctrine_spec_svc
+from app.services import traces as traces_svc
 from app.services.brownfield import classify_target, feature_artifact_dir
 from app.services.claude_agent import stream_agent_task
 from app.services.git_worktree import (
@@ -1821,6 +1823,12 @@ async def run_brief(
     # sprint_complete path flips this just before the terminal yield.
     terminal_status = "aborted"
 
+    # ABL-0020: snapshot which doctrine rules were in force for this run, so
+    # ABL-0017 Stage-2 efficacy can join rule-state against bl_outcomes.
+    # Static for the run; computed once, written on every checkpoint.
+    _doctrine_manifest = doctrine_spec_svc.manifest()
+    _doctrine_manifest["harness_sha"] = traces_svc.harness_sha()
+
     def _checkpoint(current_bl: str | None) -> None:
         try:
             run_state_svc.write_checkpoint(
@@ -1831,6 +1839,7 @@ async def run_brief(
                 current_bl=current_bl,
                 bl_outcomes=bl_outcomes_compact,
                 status="active",
+                doctrine_manifest=_doctrine_manifest,
             )
         except OSError:
             pass  # checkpoints are advisory; never block the sprint on disk I/O

@@ -46,6 +46,13 @@ def _harness_sha() -> str:
 _HARNESS_SHA: str = _harness_sha()
 
 
+def harness_sha() -> str:
+    """Public accessor for the captured agentic-skills HEAD sha (B14).
+    Used by the ABL-0020 per-run doctrine manifest to record which doctrine
+    *version* was active for the run."""
+    return _HARNESS_SHA
+
+
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 

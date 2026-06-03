@@ -52,11 +52,18 @@ def write_checkpoint(
     current_bl: str | None,
     bl_outcomes: list[dict[str, Any]],
     status: str = "active",
+    doctrine_manifest: dict | None = None,
 ) -> Path:
     """Atomically write the run's current state. Returns the file path.
 
     Atomic write: open tmp file, write+fsync, then rename → never leaves a
     half-written active file even on crash.
+
+    ``doctrine_manifest`` (ABL-0020): the per-run snapshot of which doctrine
+    rules were in force (from ``doctrine_spec.manifest()`` + harness_sha).
+    Nullable — old state files / callers that omit it load unchanged. This
+    is the rule-state record ABL-0017 Stage-2 efficacy joins against
+    ``bl_outcomes``.
     """
     _ensure_dirs()
     payload = {
@@ -68,6 +75,7 @@ def write_checkpoint(
         "current_bl": current_bl,
         "bl_outcomes": list(bl_outcomes),
         "status": status,
+        "doctrine_manifest": doctrine_manifest,
     }
     dst = _state_path(run_id)
     tmp = dst.with_suffix(".json.tmp")
