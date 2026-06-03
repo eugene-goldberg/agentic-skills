@@ -284,10 +284,12 @@ async def _po_flow(
     run_id: str | None = None,
     brief_hash: str | None = None,
     feature_slug: str | None = None,
+    inject_lessons: bool = False,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
-    prompt = prompts_svc.build_po(family, brief, project_name, repo_dir, feature_slug=feature_slug)
+    prompt = prompts_svc.build_po(family, brief, project_name, repo_dir, feature_slug=feature_slug,
+                                  inject_lessons=inject_lessons)
     wt: Worktree | None = None
     trace: TraceWriter | None = None
     try:
@@ -415,11 +417,13 @@ async def _engineer_flow(
     feature_slug: str | None = None,
     section_override: str | None = None,
     task_id: str | None = None,
+    inject_lessons: bool = False,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
     section = _resolve_engineer_section(repo_dir, bl_id, feature_slug, section_override)
-    prompt = prompts_svc.build_engineer(family, bl_id, section, repo_dir, feature_slug=feature_slug)
+    prompt = prompts_svc.build_engineer(family, bl_id, section, repo_dir, feature_slug=feature_slug,
+                                        inject_lessons=inject_lessons)
 
     wt: Worktree | None = None
     trace: TraceWriter | None = None
@@ -565,15 +569,18 @@ async def _qa_or_scorer_flow(
     *,
     run_id: str | None = None,
     feature_slug: str | None = None,
+    inject_lessons: bool = False,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
     bf = backlog_svc.find_backlog(repo_dir, feature_slug=feature_slug)
     section = backlog_svc.extract_section(bf.read_text(encoding="utf-8"), bl_id)
     if role == "qa":
-        prompt = prompts_svc.build_qa(family, bl_id, section, repo_dir, feature_slug=feature_slug)
+        prompt = prompts_svc.build_qa(family, bl_id, section, repo_dir, feature_slug=feature_slug,
+                                      inject_lessons=inject_lessons)
     else:
-        prompt = prompts_svc.build_score(family, bl_id, section, repo_dir, feature_slug=feature_slug)
+        prompt = prompts_svc.build_score(family, bl_id, section, repo_dir, feature_slug=feature_slug,
+                                         inject_lessons=inject_lessons)
 
     wt: Worktree | None = None
     trace: TraceWriter | None = None
@@ -1774,6 +1781,7 @@ async def run_brief(
     min_ui_coverage_ratio: float = 0.0,  # ABL-0014 Item 2 (Batch C); 0.0 = informational-only
     inject_acceptance_priors: bool = False,  # ABL-0014 §I.3 Batch E; OFF until 3-smoke calibration
     run_acceptance_followup: bool = False,  # ABL-0015 auto-dispatch; OFF until calibrated
+    inject_lessons: bool = False,  # ABL-0016 cumulative learning; OFF until calibrated
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -1834,7 +1842,7 @@ async def run_brief(
             async for e in _po_flow(repo_dir, repo_name, brief, project_name,
                                     timeout_per_role, retrieval_kwargs_builder,
                                     run_id=run_id, brief_hash=brief_hash,
-                                    feature_slug=feature_slug):
+                                    feature_slug=feature_slug, inject_lessons=inject_lessons):
                 if "_orchestrator_outcome" in e:
                     summary["po"] = e
                     po_ok = e.get("doctrine_ok", False)
@@ -1883,7 +1891,8 @@ async def run_brief(
             eng_outcome = None
             async for e in _engineer_flow(repo_dir, repo_name, bl_id,
                                            timeout_per_role, retrieval_kwargs_builder,
-                                           run_id=run_id, feature_slug=feature_slug):
+                                           run_id=run_id, feature_slug=feature_slug,
+                                           inject_lessons=inject_lessons):
                 if "_orchestrator_outcome" in e:
                     eng_outcome = e
                     continue
@@ -1944,7 +1953,8 @@ async def run_brief(
             qa_outcome = None
             async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "qa",
                                                 timeout_per_role, retrieval_kwargs_builder,
-                                                run_id=run_id, feature_slug=feature_slug):
+                                                run_id=run_id, feature_slug=feature_slug,
+                                                inject_lessons=inject_lessons):
                 if "_orchestrator_outcome" in e:
                     qa_outcome = e
                     continue
@@ -2008,7 +2018,8 @@ async def run_brief(
             score_outcome = None
             async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "scorer",
                                                 timeout_per_role, retrieval_kwargs_builder,
-                                                run_id=run_id, feature_slug=feature_slug):
+                                                run_id=run_id, feature_slug=feature_slug,
+                                                inject_lessons=inject_lessons):
                 if "_orchestrator_outcome" in e:
                     score_outcome = e
                     continue

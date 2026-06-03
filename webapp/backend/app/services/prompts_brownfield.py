@@ -108,7 +108,7 @@ Rules:
 # ─────────────────────────────── PO (Brownfield) ───────────────────────────
 
 
-def build_po_prompt_brownfield(brief: str, project_name: str | None = None, artifact_dir: str = "_brownfield") -> str:
+def build_po_prompt_brownfield(brief: str, project_name: str | None = None, artifact_dir: str = "_brownfield", lessons_block: str = "") -> str:
     name = project_name or "Project"
     skills_md = _load_skill("po")
     body = f"""You are a Brownfield Agile Product Owner. The operational doctrine below is your binding rulebook; you must follow it literally.
@@ -122,7 +122,7 @@ def build_po_prompt_brownfield(brief: str, project_name: str | None = None, arti
 # ────────────────────────── DOCTRINE (SKILLS.md, binding) ──────────────────────────
 
 {skills_md}
-
+{lessons_block}
 # ────────────────────── WEBAPP CONTRACT (in addition to doctrine) ──────────────────────
 
 {RETRIEVAL_HINT_BROWNFIELD}
@@ -270,7 +270,7 @@ Halt conditions (do NOT commit):
 # ─────────────────────────────── Engineer (Brownfield) ─────────────────────
 
 
-def build_engineer_prompt_brownfield(bl_id: str, bl_section: str, repo_summary: str = "", artifact_dir: str = "_brownfield") -> str:
+def build_engineer_prompt_brownfield(bl_id: str, bl_section: str, repo_summary: str = "", artifact_dir: str = "_brownfield", lessons_block: str = "") -> str:
     repo_block = (
         f"\n## Current repo summary\n{repo_summary}\n" if repo_summary.strip() else ""
     )
@@ -284,7 +284,7 @@ def build_engineer_prompt_brownfield(bl_id: str, bl_section: str, repo_summary: 
 # ────────────────────────── DOCTRINE (SKILLS.md, binding) ──────────────────────────
 
 {skills_md}
-
+{lessons_block}
 # ────────────────────── WEBAPP CONTRACT (in addition to doctrine) ──────────────────────
 
 {RETRIEVAL_HINT_BROWNFIELD}
@@ -418,7 +418,7 @@ Halt immediately (do NOT commit) if:
 # ─────────────────────────────── QA (Brownfield) ───────────────────────────
 
 
-def build_qa_prompt_brownfield(bl_id: str, bl_section: str, artifact_dir: str = "_brownfield") -> str:
+def build_qa_prompt_brownfield(bl_id: str, bl_section: str, artifact_dir: str = "_brownfield", lessons_block: str = "") -> str:
     skills_md = _load_skill("qa")
     body = f"""You are a Brownfield QA Engineer validating ONE backlog item on a real-world codebase. The operational doctrine below is your binding rulebook; you must follow it literally.
 
@@ -428,7 +428,7 @@ def build_qa_prompt_brownfield(bl_id: str, bl_section: str, artifact_dir: str = 
 # ────────────────────────── DOCTRINE (SKILLS.md, binding) ──────────────────────────
 
 {skills_md}
-
+{lessons_block}
 # ────────────────────── WEBAPP CONTRACT (in addition to doctrine) ──────────────────────
 
 {RETRIEVAL_HINT_BROWNFIELD}
@@ -520,11 +520,11 @@ Verdict guidance (brownfield):
 # ─────────────────────────────── Scorer (Brownfield) ───────────────────────
 
 
-def build_score_prompt_brownfield(bl_id: str, bl_section: str, rubric_text: str, artifact_dir: str = "_brownfield") -> str:
+def build_score_prompt_brownfield(bl_id: str, bl_section: str, rubric_text: str, artifact_dir: str = "_brownfield", lessons_block: str = "") -> str:
     body = f"""You are a strict, fair scoring agent evaluating ONE backlog item's implementation on a brownfield codebase. You score against the BROWNFIELD rubric, which adds five dimensions (Pattern Fidelity, Regression Coverage, Characterization Tests, Invariant Preservation, Blast Radius) to the standard core+role scoring.
 
 {RETRIEVAL_HINT_BROWNFIELD}
-
+{lessons_block}
 ## Scorer-specific grounding requirements (HARNESS-ENFORCED)
 
 You are read-only (no source edits) but your scoring is meaningless unless

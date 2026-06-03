@@ -328,6 +328,7 @@ Be honest. Cite specific files / line ranges / commits as evidence. A perfect 75
 
 from pathlib import Path as _Path
 from app.services import prompts_brownfield as _bf
+from app.services import lessons as _lessons
 from app.services.brownfield import pick_artifact_dir as _pick_dir, feature_artifact_dir as _feature_dir, RUBRIC_PATHS as _RUBRIC_PATHS
 
 
@@ -336,6 +337,18 @@ def _resolve_art_dir(repo_root: _Path, feature_slug: str | None) -> str:
     brownfield-prompt path references through ``_brownfield/features/<slug>``
     so each feature's artifacts live in their own subtree."""
     return _feature_dir(repo_root, feature_slug)
+
+
+def _lessons_block(repo_root: _Path, feature_slug: str | None, inject_lessons: bool) -> str:
+    """ABL-0016 Batch B: render the advisory prior-lessons block for a
+    brownfield role prompt. Empty string when the flag is OFF or the target
+    has no lessons yet (silent injection). Target-scoped union over feature
+    ledgers; feature_slug only biases ranking. See lessons.py."""
+    if not inject_lessons:
+        return ""
+    return _lessons.render_lessons_block(
+        _lessons.list_lessons(repo_root, feature_slug, cap=_lessons.DEFAULT_LESSON_CAP)
+    )
 
 
 def select_family(target_status_result: dict | None) -> str:
@@ -351,34 +364,39 @@ def select_family(target_status_result: dict | None) -> str:
 
 
 def build_po(family: str, brief: str, project_name: str | None, repo_root: _Path,
-             feature_slug: str | None = None) -> str:
+             feature_slug: str | None = None, inject_lessons: bool = False) -> str:
     if family == "brownfield":
         return _bf.build_po_prompt_brownfield(brief, project_name,
-                                              artifact_dir=_resolve_art_dir(repo_root, feature_slug))
+                                              artifact_dir=_resolve_art_dir(repo_root, feature_slug),
+                                              lessons_block=_lessons_block(repo_root, feature_slug, inject_lessons))
     return build_po_prompt(brief, project_name)
 
 
 def build_engineer(family: str, bl_id: str, bl_section: str, repo_root: _Path,
-                   repo_summary: str = "", feature_slug: str | None = None) -> str:
+                   repo_summary: str = "", feature_slug: str | None = None,
+                   inject_lessons: bool = False) -> str:
     if family == "brownfield":
         return _bf.build_engineer_prompt_brownfield(bl_id, bl_section, repo_summary,
-                                                    artifact_dir=_resolve_art_dir(repo_root, feature_slug))
+                                                    artifact_dir=_resolve_art_dir(repo_root, feature_slug),
+                                                    lessons_block=_lessons_block(repo_root, feature_slug, inject_lessons))
     return build_engineer_prompt(bl_id, bl_section, repo_summary)
 
 
 def build_qa(family: str, bl_id: str, bl_section: str, repo_root: _Path,
-             feature_slug: str | None = None) -> str:
+             feature_slug: str | None = None, inject_lessons: bool = False) -> str:
     if family == "brownfield":
         return _bf.build_qa_prompt_brownfield(bl_id, bl_section,
-                                              artifact_dir=_resolve_art_dir(repo_root, feature_slug))
+                                              artifact_dir=_resolve_art_dir(repo_root, feature_slug),
+                                              lessons_block=_lessons_block(repo_root, feature_slug, inject_lessons))
     return build_qa_prompt(bl_id, bl_section)
 
 
 def build_score(family: str, bl_id: str, bl_section: str, repo_root: _Path,
-                feature_slug: str | None = None) -> str:
+                feature_slug: str | None = None, inject_lessons: bool = False) -> str:
     rubric_path = _RUBRIC_PATHS[family]
     rubric_text = rubric_path.read_text(encoding="utf-8") if rubric_path.exists() else ""
     if family == "brownfield":
         return _bf.build_score_prompt_brownfield(bl_id, bl_section, rubric_text,
-                                                 artifact_dir=_resolve_art_dir(repo_root, feature_slug))
+                                                 artifact_dir=_resolve_art_dir(repo_root, feature_slug),
+                                                 lessons_block=_lessons_block(repo_root, feature_slug, inject_lessons))
     return build_score_prompt(bl_id, bl_section, rubric_text)
