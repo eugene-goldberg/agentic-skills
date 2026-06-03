@@ -1,260 +1,294 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-01 ~10:00Z. This session shipped **Items 1+2
-> (API-acceptance + UI-coverage check) + A48 #1–#3 + §I production-ready
-> roadmap** across 8 commits. The acceptance agent is now "fully
-> functional for sprints with arbitrary UI/backend mix" — but **§I
-> tracks 5 TIER-A items required to claim 95% production-readiness.**
+> Hand-off written 2026-06-02 ~19:30 CDT. This session executed a
+> full end-to-end autonomous brownfield feature delivery
+> (Financial_Management, 12 BLs) AND shipped the four A48 disk-leak
+> fixes (lowercase acceptance, worktree reaper, shutdown handler) AND
+> two gate fixes (180s stack_healthy, PLAYWRIGHT_TEST_BASE_URL). All
+> work is committed and pushed.
 
 ---PROMPT START---
 
 You are picking up the agentic-skills project. **You are the architect.**
 Read `CLAUDE.md` first — note especially the **"Operating principle:
 quality over speed"** section (Rules 1–6, including the **95%
-verified/tested certainty floor**). These rules govern every diagnosis,
-recommendation, and commit you make this session.
+verified/tested certainty floor**) and Rule 3 on **narrative momentum**.
+I violated Rule 3 twice in this session (BL-0004 flake forensic and
+BL-0005 diag misconfiguration). Be vigilant.
 
-## ⚠️ TOP PRIORITY THIS SESSION
-
-**Execute the §I production-ready roadmap for the acceptance agent.**
-
-Read this section **in full** before doing anything else:
-
-```
-ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md §I
-```
-
-That section is the canonical, calibrated record of what remains to
-make the acceptance agent legitimately production-ready under
-CLAUDE.md Rule 6. Headline: **current confidence ~70%, below 95%
-floor.** Reaching 95% requires landing all 5 TIER-A items. §I has
-the cost estimates, owners, risks, named rollbacks, and the **hard
-sequencing constraint** (I.4 cannot land before I.3 because
-ABL-0015 auto-dispatch needs the verdict ledger).
-
-### Recommended execution sequence (per §I.6)
-
-```
-1. I.2  Acceptance trace observability gaps           (~2 days)
-2. I.3  Findings feedback ledger + AppV2 triage UI    (~3 days; GATES I.4)
-3. I.5  Multi-target validation (Django smoke)        (~1 day)
-4. I.1  Two more API-acceptance calibration smokes    (~1–2 days)
-5. I.4  ABL-0015 auto-dispatch                        (~3–4 days)
-```
-
-**Start with I.2 (observability) or I.3 (findings ledger) depending
-on operator's preference.** §I.0 explicitly flags I.3 as the
-single non-negotiable item — without it, classifier accuracy is
-structurally unbounded and confidence plateaus at ~85% regardless
-of other work.
-
-### Before writing any §I code
-
-Per CLAUDE.md "Calibrated proposals" discipline:
-1. Read §I in full (576-line file; §I starts at line 343)
-2. Propose batch breakdown to operator before code (same pattern as
-   Items 1+2 used Batches A/B/C/D)
-3. Each batch ships with: named risk, named verification test,
-   named rollback
-4. Operator approves batch by batch — do not bundle
-
----
-
-## ⚠️ Priority 1.5 — Verify branch state (30 sec)
+## ⚠️ Priority 0 — Verify branch state (30 sec)
 
 ```bash
 cd /Users/eugenegoldberg/dev/ai-projects/agentic-skills
 git status -s                  # MUST be clean
 git log --oneline @{u}..HEAD   # MUST be empty (synced with origin)
-git log --oneline -1
+git log --oneline -1           # expect 02ebd7b (or further) on architect-prereqs
 ```
 
-Expected tip: `181edd8` (§I addition). If this session added work,
-the tip may be one or more commits further.
-
----
+Expected tip: `02ebd7b fix(A48): three-layer disk-leak prevention`.
 
 ## 1. Identity
 
-**agentic-skills** — autonomous synthetic AI crew that adds complex
-features to brownfield codebases with no human in the loop for the
-bulk of work.
+**agentic-skills** — autonomous synthetic AI crew for brownfield
+feature delivery.
 
 - **Operator:** Eugene Goldberg
 - **Repo:** `/Users/eugenegoldberg/dev/ai-projects/agentic-skills`
 - **GitHub:** https://github.com/eugene-goldberg/agentic-skills
 - **Active branch:** `architect-prereqs` (in sync with origin)
 
-## 2. State at hand-off
+## 2. State at hand-off — major milestone
 
-### Branch
+### What works end-to-end NOW (verified live this session)
 
-`architect-prereqs` @ `181edd8` — synced to origin. 8 commits this
-session on top of `36fa328`.
+✅ **Full 12-BL autonomous brownfield delivery** of the
+   Financial_Management feature on the `full-stack-fastapi-template`
+   target. From operator brief → 12 merged BLs → acceptance-validated
+   PASS, with 1 real cross-BL bug found by the acceptance agent that
+   per-BL QA structurally could not catch.
 
-### Commits this session (oldest → newest)
+✅ **§I.3 ledger pipeline (Batches A–E) exercised live:**
+   acceptance.ledger.appended event fired; lowercase compose project
+   path (Fix #1) verified verbatim.
 
-| Commit | What |
-|---|---|
-| `2282c69` | **Item 1 Batch A** — API-acceptance validator + SKILLS.md (dormant, backward-compat) |
-| `3cc52ca` | **Item 1 Batch B** — orchestrator computes `backend_bls`, threads through prompt + validator |
-| `25a8d33` | **Item 2 Batch C** — UI-coverage check at `sprint_complete` |
-| `5716f1c` | **Items 1+2 Batch D** — AppV2 surface + HARNESS.md + memory + plan doc §G/§H |
-| `40840b6` | **A48 fix #1** — pre-flight disk-free check at `/run-brief` |
-| `f527c93` | **A48 fix #2** — per-BL + acceptance anonymous-volume reaper |
-| `8b23409` | **A48 fix #3** — DiskFull-aware regression-gate classifier |
-| `181edd8` | **§I production-ready roadmap** — added to ABL-0014 plan doc |
+✅ **Four A48 disk-leak fixes shipped + verified live** (commit
+   `02ebd7b`):
+   - Fix #1: lowercase acceptance compose project (`orchestrator.py:1199`)
+   - Fix #2: worktree compose-stack reaper in `remove_worktree`
+     (`git_worktree.py`)
+   - Fix #3: orchestrator shutdown handler (`main.py`)
+   - 11 new tests in `test_worktree_reaper.py` + `test_shutdown_reaper.py`
+
+✅ **Two gate fixes shipped on `financial-management` branch:**
+   - `2b107f8` widen stack_healthy budget 90s→180s
+   - `b1d616d` activate `PLAYWRIGHT_TEST_BASE_URL=http://frontend`
+     (eliminates Vite/chromium CPU contention in playwright container)
+   - These are committed on the *target repo* branch, not in
+     agentic-skills. Operator should fold them into init-feature
+     scaffolding so future targets get them by default.
 
 ### Test posture
 
 ```
-127/127 backend pass (was 64 pre-session)
-  +29  acceptance_validator + compute_backend_bls + compute_ui_coverage
-  +10  disk_preflight
-  +13  volume_reaper
-  +10  disk_full_classifier
+171/171 backend pass (was 160 pre-A48 fixes)
+  +7  test_worktree_reaper
+  +4  test_shutdown_reaper
 ```
 
-Frontend rebuilt cleanly (`npm run build` 494ms, 0 errors). UI ships
-the Coverage tile + acceptance tile's backend_bls line + the
-`min_ui_coverage_ratio` input.
-
-### Live processes (at hand-off)
+### Financial_Management sprint metrics (this session's headline)
 
 | | |
 |---|---|
-| uvicorn | PID 30286 (restarted mid-session for Batch B load) |
-| Docker daemon | up; healthy |
-| Milvus | up (auto-restarted) |
-| Batch B proof-point | **COMPLETED CLEAN** — `accept-rerun-batch-b-20260601T134813Z` validated all 9 backend BLs with 12 api_journeys, validator_ok=true attempts=1 |
+| BLs merged | 12/12 |
+| Acceptance verdict | PASS (with 1 caveat — cross-BL product_bug found) |
+| UI journeys | 4/4 green |
+| API journeys | 10/10 green (one per backend BL) |
+| Test count growth | 130 → 252 (backend tests added by engineer + QA across the 7 BLs this run) |
+| Disk leak observed | **zero** (A48 fixes working) |
+| Wall clock (this run) | ~5h for the 7-BL resume + ~30 min acceptance |
+| Sprint had to be relaunched | yes, twice — first time due to env/disk issues, second time after clean pre-flight |
 
-### Sprints / smokes executed this session
+### Acceptance archive (the canonical evidence location)
 
-| Run | Outcome |
+```
+webapp/backend/traces_archive/run-20260602T143035Z-c5868e/acceptance/
+  report.md           ← human-readable verdict + caveat
+  report.json         ← structured journey results
+  journeys.yaml       ← 4 UI journeys (alice/bob/superuser)
+  api_journeys.yaml   ← 10 API journeys, one per backend BL
+  fixtures/api_logs/  ← per-journey req/resp logs
+  screenshots/        ← full-page playwright captures, ~20 per UI journey
+  tests/_acceptance/  ← the playwright specs the agent wrote
+```
+
+When the operator wants to see what the agent did as a user, this is
+the directory to open.
+
+## 3. Critical findings the next session should act on
+
+### 3a — Real cross-BL `product_bug` Journey 03 caught
+
+`PUT /billing/invoices/{id}` writes the `status` field directly,
+bypassing BL-0005's guarded transition state machine
+(`POST /{id}/transition`). The state machine correctly rejects illegal
+transitions with 409 (proven by `api_05`); the PUT path has no
+equivalent guard.
+
+**Likely site:** `backend/app/api/routes/billing/invoices.py`
+`update_invoice` (PUT handler) assigns `InvoiceUpdate.status` straight
+onto the model. Should route status changes through
+`app/billing/workflow.py`.
+
+This is **exactly** the kind of cross-BL integration issue the
+acceptance agent exists to catch — per-BL QA cannot see it. The find
+itself is also the strongest single piece of evidence that the
+acceptance agent works as designed.
+
+### 3b — §I.3 LEDGER GAP discovered
+
+`acceptance.ledger.appended findings_persisted=0` for this run, but
+the report.md names a real `product_bug` in Journey 03. Why didn't
+it persist?
+
+Because Journey 03 was marked **PASS with caveat** (the legal
+draft→sent step succeeded), and the ledger extractor in
+`findings_ledger._extract_findings_from_report` only persists from
+journeys whose status is `fail`/`failed`/`error`. **Caveats in
+passing journeys don't reach the ledger.**
+
+Real architectural gap in §I.3 Batch B. Two possible fixes (operator
+chooses):
+
+1. Have the acceptance agent emit a structured `findings: [...]` array
+   in `report.json` (separate from per-journey status), and extend the
+   ledger extractor to read it. Cleanest fix.
+2. Extend the extractor to also persist findings from
+   `pass-with-caveat`-shaped journey objects. Faster fix; depends on
+   the agent consistently emitting the caveat field.
+
+This blocks **ABL-0015 auto-dispatch** (§I.4) from being useful: the
+auto-dispatcher would have nothing to dispatch on for this sprint.
+
+### 3c — Item 2 coverage check signal
+
+```
+merged_total: 7
+ui_bls:       [BL-0012]                                  ← 1
+backend_only: [BL-0006..BL-0011]                         ← 6
+ratio:        0.1429   (1/7 UI)
+```
+
+With operator-configurable `min_ui_coverage_ratio` > 0, this sprint
+would be classified `partial`. Currently default is 0 (informational
+only). Worth noting: this is a *legitimately* backend-heavy phase of
+the feature — REQ-0701..0705 are mostly backend semantics, REQ-0701
+mentions UI but most user-facing surface is in BL-0012.
+
+### 3d — `client_portal_self_service_platform` ledger entry lost
+
+Earlier this session I aggressive-Docker-reaped my way into wiping
+Milvus + that ledger file (the operator had stashed the directory,
+which is where the ledger file ended up). The single pending
+`product_bug` finding (audit trail not invoked) was un-verdict'd,
+so it can re-surface by re-running acceptance against client_portal.
+No real data loss.
+
+## 4. §I.3 remaining work after this session
+
+| Batch | Status |
 |---|---|
-| `accept-rerun-batch-b-20260601T134813Z` | **CLEAN** — UI: 5/5 passed; API: 12/12 passed; 100% backend BL coverage |
+| A — ledger module | ✅ shipped, exercised live |
+| B — orchestrator wiring | ✅ shipped, exercised live; **gap above (3b) to address** |
+| C — HTTP endpoints | ✅ shipped (not exercised live yet — no findings to verdict in this sprint) |
+| D — AppV2 triage panel | ✅ shipped (not exercised live — no findings to triage) |
+| E — agent-prior injection | ✅ shipped, silent path verified (empty ledger → no block) |
 
-That run is **smoke #1 of 3** for the API-acceptance calibration
-discipline (see §I.1). Two more clean runs against different sprint
-shapes required before flipping any default.
+**The whole §I.3 stack works. The gap is at the extractor layer
+where caveat-in-passing-journey doesn't trigger persistence.**
 
-## 3. What works end-to-end now
+## 5. §I production-readiness roadmap status
 
-- ✅ **Item 1 (API-acceptance) LIVE** — every merged backend BL exercised
-  via authenticated api_journeys; validator enforces coverage; R10.1
-  retry on gaps. Proven on Client_Portal sprint shape.
-- ✅ **Item 2 (UI-coverage) LIVE** — `orchestrator.coverage_check` event
-  + `sprint_complete.coverage_subtype`; operator-tunable threshold
-  (default 0.0 = informational).
-- ✅ **A48 disk-creep defense LIVE at 3 layers** — submission-time
-  pre-flight (#1), per-BL anonymous-volume reaper (#2), DiskFull-
-  aware classifier (#3). Fix #4 (tmpfs override) deferred.
-- ✅ **All Item 1+2 docs canonical** — HARNESS.md §5.6.2.{1,2},
-  ABL-0014 plan doc §G+§H+§I, arch_acceptance_agent.md, AppV2 UI.
+| Item | Status |
+|---|---|
+| **I.1** 3 calibration smokes for API-acceptance | **+1 this session** (financial-management smoke = #3 of 3 ✓). Item 1 default-flip discipline now satisfied. |
+| **I.2** observability gaps | not started |
+| **I.3** ledger + triage UI | shipped, gap noted |
+| **I.4** ABL-0015 auto-dispatch | blocked on 3b (need findings to dispatch on) |
+| **I.5** Django smoke | not started |
 
-## 4. The §I roadmap — top priority
+So Items 1 + 3 are effectively closed (modulo the 3b gap). Items 2, 4,
+5 remain.
 
-**Read `ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md §I`** for the
-authoritative version. Brief summary follows; **do not rely on this
-summary for execution detail — read §I**:
+## 6. Other open ledger items
 
-### TIER A — blocks ≥95% production-ready (all 5 required)
+| ID | Status |
+|---|---|
+| **A39** | open — regression_gate parser conflates baseline-broken with engineer-regressed (saw this bite us at BL-0004/05 gate timeout misclassification). Worth investigating. |
+| **A45** | open — B5 idle-timeout false-positive. |
+| **A48** | **#1+#2+#3+four-fix-extension all shipped this session.** Status closeable pending operator review. |
+| **A47** | open — ScheduleWakeup/Glob bypass `--allowedTools` |
 
-| ID | Item | Cost | Notes |
-|----|------|------|-------|
-| I.1 | 2 more API-acceptance calibration smokes (n=1 → n=3) | ~1–2 days | Same discipline that gated 2026-05-31 UI flip |
-| I.2 | Acceptance trace observability gaps (retrieval.jsonl, phase_events.jsonl, tool_use in stream.jsonl) | ~2 days | Read-only additions; system-diagnosability blocker |
-| I.3 | Findings feedback ledger + AppV2 triage UI | ~3 days | **Non-negotiable.** Gates I.4. Without it, classifier accuracy unbounded |
-| I.4 | ABL-0015 auto-dispatch on `product_bug` findings | ~3–4 days | **Hard prereq: I.3 must exist.** Closes find→fix loop |
-| I.5 | Multi-target validation (Django smoke) | ~1 day | Repo-configurable globs untested on non-FastAPI |
+## 7. Mandatory reading order for next session
 
-### TIER B / C / Unknowns
+1. `CLAUDE.md` — architect role + "Operating principle" (Rule 3 + Rule 6)
+2. `THESIS.md`
+3. `ARCHITECTURE_INVARIANTS.md`
+4. **`ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md` §I** — production roadmap
+5. `webapp/backend/traces_archive/run-20260602T143035Z-c5868e/acceptance/report.md` — the headline evidence from this session
+6. `webapp/backend/app/services/findings_ledger.py` — for understanding the 3b gap
+7. This file's §3 — the findings that should drive next session's priorities
 
-§I.7–§I.9 catalog 4 high-confidence improvements, 7 medium-confidence
-deferrals, and 4 explicit unknowns the architect cannot estimate. Do
-not rediscover these — read them.
+## 8. Likely next moves (in priority order)
 
-### A48 cross-references (§I.10)
+1. **Address §I.3 ledger gap (3b)** — extend the extractor to capture
+   pass-with-caveat findings, OR change the SKILLS.md contract to
+   require a structured findings array. ~2-4 hours.
+2. **Then implement ABL-0015 auto-dispatch (§I.4)** — now unblocked
+   if the ledger captures product_bugs reliably. The Journey 03 PUT
+   bypass would be its first real test case.
+3. **§I.2 observability** — observability gaps for trace inspection.
+4. **§I.5 Django smoke** — multi-target validation.
+5. **Fold the two target-repo gate fixes (`2b107f8`, `b1d616d`) into
+   agentic-skills' init-feature scaffolding** so future brownfield
+   features get them by default. Currently they live only on the
+   `financial-management` target branch.
 
-A48 fixes #1+#2+#3 substantially close the disk-creep failure mode
-that threatens acceptance runs. Fix #4 deferred and likely
-unnecessary.
+## 9. Don'ts (lessons specifically from this session)
 
-## 5. Open ledger items
+1. **Don't run `docker container prune -f && docker image prune -af`
+   without naming what you want to keep.** This session it wiped
+   Milvus and its data; cost ~10 minutes to redeploy + lost
+   client_portal ledger entry.
+2. **Don't auto-skip pre-flight after a clean cleanup.** Even with
+   Milvus port reachable, the indexer can fail for unrelated reasons
+   (env var not propagating to subprocess, deps missing, etc.). Do the
+   FULL pre-flight every time:
+   - Milvus stack 3 containers healthy + 19530 reachable
+   - Ollama bge-m3 + actual embedding probe
+   - Indexer end-to-end against the target
+   - claude binary version
+   - target tree on correct branch at correct head
+   - leftover worktrees reaped
+   - Docker.raw room
+   - 171/171 backend tests
+3. **Don't lose narrative momentum awareness** — when 3 BLs in a row
+   fail the same way, the cumulative weight of the "infra theory"
+   feels overwhelming. It also makes you skip checking the new
+   evidence properly. Twice this session I had to backtrack: BL-0004
+   "flake" turned out to be 90s budget; BL-0005 "130 errors" turned
+   out to be diag-setup mistake. **Read post_tail and gate result
+   fields carefully every time, even when the pattern looks like
+   prior runs.**
+4. **Don't force-kill uvicorn during live sprints.** Fix #3 reaps
+   Docker stacks but NOT git worktrees. Force-kill leaves leaked
+   worktrees that have to be manually `git worktree remove --force`'d
+   later. Use SIGTERM (Ctrl+C) which fires `finally` blocks.
 
-| ID | Status | Pri |
-|----|--------|-----|
-| **A39** | open, **5 worked examples** | HIGH — regression_gate parser conflates build failure with regressions. CONTINUATION_PROMPT prior session flagged "promote to immediate-fix." |
-| **A45** | open | HIGH — B5 idle-timeout false-positive kills agents on long sync waits. Causally coupled to A39. **Risk to acceptance** — see §I.7.b. |
-| **A46** | RESOLVED by ABL-0014 (extended end-to-end this session) | — |
-| **A47** | open | LOW — ScheduleWakeup/Glob bypass `--allowedTools` |
-| **A48** | **#1+#2+#3 of 4 SHIPPED** this session; #4 deferred | — |
-| **A40** | open | engineer prompt biome `--apply` vs `--write` |
-| **ABL-0015** | proposed / blocked on I.3 | HIGH — see §I.4 |
+## 10. Infrastructure state at hand-off
 
-## 6. Mandatory reading order for next session
+| | |
+|---|---|
+| uvicorn | up PID 52249 with all 4 A48 fixes loaded |
+| Milvus stack | running (standalone + etcd + minio) |
+| Ollama | running, bge-m3 loaded |
+| Docker.raw | ~4-5 GB used (clean) |
+| Host disk | 104 GB free |
+| target branch | `financial-management` clean at QA(BL-0012) tip |
 
-1. `CLAUDE.md` — architect role + "Operating principle: quality over speed" (Rules 1–6)
-2. `THESIS.md` — mission + done definition
-3. `ARCHITECTURE_INVARIANTS.md` — the 7 invariants
-4. **`ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md` §I** — the production-ready roadmap (top priority)
-5. `HARNESS.md` §5.6.2 + §5.6.2.1 + §5.6.2.2 — current acceptance contract
-6. `DESIGN_SHORTCOMINGS.md` — A39 (promote), A45 (acceptance risk), A47, A48 (#1–#3 shipped, #4 deferred)
-7. `.claude/memory/MEMORY.md` + `arch_acceptance_agent.md` (comprehensive Item 1+2 history)
+## 11. Where the proof-point evidence lives
 
-## 7. Likely next moves
-
-In approximate priority order **per §I.6 sequence**:
-
-- **Start §I.2 or §I.3** — operator's call. §I.3 is the non-negotiable
-  one; §I.2 is the prerequisite for diagnosing §I.3 calibration drift.
-- **Don't start §I.4 (ABL-0015) until §I.3 ships** — see §I.4's
-  "Hard prereq" note.
-- **§I.5 (Django smoke)** is parallelizable with §I.2/§I.3.
-- **§I.1 (2 more smokes)** requires sprint runs; can be triggered
-  any time after §I.2 lands.
-
-## 8. Don'ts (lessons from prior sessions)
-
-1. **Never claim "FOUND IT" before running the falsification check.**
-   95% verified/tested certainty floor (CLAUDE.md Rule 6) is a hard
-   floor, not a target.
-2. **Don't `git commit` while assuming a file was staged.** Verify
-   via `git diff --stat HEAD~`.
-3. **Don't POST to `/run-brief` from a finite-timeout client.** Use
-   `curl -N`, AppV2 UI, or a streaming-friendly client. (Prior
-   session burned 20 min on `urllib timeout=30` closing the SSE
-   stream.)
-4. **Don't assume QA can fix cross-component bugs** — that's what
-   acceptance is for; that's why Items 1+2 exist.
-5. **Don't ship a "feature done" claim without acceptance evidence.**
-6. **Don't conflate "tests exist" with "functionality thoroughly
-   tested"** — see §I.3 for why classifier accuracy needs a verdict
-   ledger.
-7. **Don't bundle Batch C of any new ABL with Batch B** — per
-   ABL-0014 history, each batch should land with its own rollback
-   so calibration gaps surface against a small surface.
-8. **Don't auto-flip new default flags without 3 clean smokes**
-   (the discipline that gated the 2026-05-31 UI flip; §I.1 applies
-   the same standard to the API-acceptance default).
-
-## 9. Where the proof-point evidence lives
-
-The Batch B proof-point (smoke #1 of 3 for API-acceptance) artifacts:
+The Financial_Management acceptance is the third clean
+calibration smoke for API-acceptance (Items 1+2 default-flip
+discipline now satisfied):
 
 ```
-webapp/backend/traces_archive/accept-rerun-batch-b-20260601T134813Z/acceptance/
-  report.md
-  report.json
-  journeys.yaml
-  api_journeys.yaml          ← all 9 backend BLs covered (12 journeys)
-  fixtures/seed_log.txt
-  fixtures/api_logs/          ← per-journey req/resp logs
-  screenshots/                ← UI journey evidence
-  tests/
+webapp/backend/traces_archive/run-20260602T143035Z-c5868e/acceptance/
 ```
 
-When operator wants to verify the contract works as documented,
-this is the canonical example.
+That's the canonical example of the full agent crew working as
+designed: brief → BACKLOG → 12 BLs through engineer/QA/scorer →
+acceptance found a real cross-BL bug → ledger persistence path
+exercised (Fix #1 lowercase verified) → doctrine_meta + closure_check
+ran cleanly.
 
 ---PROMPT END---
