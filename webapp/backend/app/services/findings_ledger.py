@@ -281,22 +281,31 @@ def _extract_findings_from_report(
     report_path: str,
 ) -> list[Finding]:
     """Walk a report.json payload and produce one Finding per failed
-    journey that carries a classification. Quiet on schema drift:
-    missing fields are skipped, not raised.
+    journey OR pass-with-caveat journey that carries a classification.
 
-    Accepts the dual-shape contract documented in
-    ``brownfield-acceptance-agent/SKILLS.md`` lines 440-462 and enforced
-    by ``acceptance_validator.py`` lines 307-309:
+    Three journey shapes produce findings:
 
-    - Canonical shape (top-level): journey has ``classification`` +
-      ``evidence``/``hypothesis`` at top level. This is the shape the
-      SKILLS.md example shows the agent producing for api_journeys.
-    - Defensive shape (nested): journey has ``failure: {classification,
-      evidence, message, ...}`` — the validator accepts this too, so
-      we do as well.
+    1. **Failed journey, top-level classification (SKILLS.md canonical
+       for api_journeys, lines 440-462).** ``status=fail|failed|error``
+       plus ``classification`` and ``evidence``/``hypothesis`` at the
+       journey top level.
 
-    Status accepted: ``fail`` (SKILLS.md uses this) | ``failed`` |
-    ``error``.
+    2. **Failed journey, nested-failure shape (validator-defensive,
+       see acceptance_validator.py:307-309).** Same status set, but
+       ``classification`` lives under ``failure: {...}``.
+
+    3. **Pass-with-caveat journey (gap closed 2026-06-02).** A journey
+       can complete successfully at the step it exercises but still
+       observe an architectural defect — e.g. UI Journey 03 from the
+       financial-management run, where the legal draft→sent step
+       passes but the PUT path is found to bypass BL-0005's transition
+       state machine. The agent emits these as
+       ``status=pass_with_caveat`` with a ``caveat: {classification,
+       severity, summary, hypothesis}`` object. Without this branch,
+       those findings vanish into report.md prose and never reach the
+       ledger — defeating the §I.4 ABL-0015 auto-dispatch loop.
+
+    Quiet on schema drift: missing fields are skipped, not raised.
     """
     out: list[Finding] = []
     now = _now_iso()
@@ -315,42 +324,98 @@ def _extract_findings_from_report(
         for j in items:
             if not isinstance(j, dict):
                 continue
-            status = j.get("status")
-            if status not in ("failed", "fail", "error"):
-                continue
-            failure = j.get("failure") if isinstance(j.get("failure"), dict) else {}
-            # Validator pattern (acceptance_validator.py:307-309):
-            # top-level classification wins; fall back to nested.
-            classification = j.get("classification")
-            if classification is None:
-                classification = failure.get("classification")
-            if classification not in VALID_CLASSIFICATIONS:
-                continue
-            journey_id = str(j.get("id") or j.get("journey_id") or "")
-            if not journey_id:
-                continue
-            # Evidence may live at top level (SKILLS.md canonical) or
-            # under failure (defensive). Hypothesis is an acceptable
-            # secondary signal — it carries the agent's diagnosis.
-            evidence_raw = _extract_evidence_summary_dual(j, failure)
-            evidence_stored = _truncate_evidence(evidence_raw)
-            fid = _compute_finding_id(
-                repo, feature_slug, journey_id, classification, evidence_raw,
-            )
-            out.append(Finding(
-                finding_id=fid,
-                run_id=run_id,
+            extracted = _extract_finding_from_journey(
+                j,
+                repo=repo,
                 feature_slug=feature_slug,
-                journey_id=journey_id,
-                journey_kind=journey_kind,
-                classification=classification,
-                evidence_summary=evidence_stored,
+                run_id=run_id,
                 report_path=report_path,
-                first_seen_ts=now,
-                last_seen_ts=now,
-                seen_count=1,
-            ))
+                journey_kind=journey_kind,
+                now=now,
+            )
+            if extracted is not None:
+                out.append(extracted)
     return out
+
+
+def _extract_finding_from_journey(
+    journey: dict,
+    *,
+    repo: str,
+    feature_slug: str,
+    run_id: str,
+    report_path: str,
+    journey_kind: str,
+    now: str,
+) -> "Finding | None":
+    """Single-journey extraction. Tries fail-shape first, then
+    pass-with-caveat shape. Returns ``None`` if neither produces a
+    valid classification."""
+    status = journey.get("status")
+    journey_id = str(journey.get("id") or journey.get("journey_id") or "")
+    if not journey_id:
+        return None
+
+    # Shape #3: pass_with_caveat — agent passed the step but found an
+    # architectural defect. Caveat object carries the structured finding.
+    if status == "pass_with_caveat":
+        caveat = journey.get("caveat")
+        if not isinstance(caveat, dict):
+            return None
+        classification = caveat.get("classification")
+        if classification not in VALID_CLASSIFICATIONS:
+            return None
+        evidence_raw = _extract_caveat_evidence(caveat)
+    elif status in ("failed", "fail", "error"):
+        # Shapes #1 + #2: failed journey.
+        failure = journey.get("failure") if isinstance(journey.get("failure"), dict) else {}
+        # Validator pattern (acceptance_validator.py:307-309):
+        # top-level classification wins; fall back to nested.
+        classification = journey.get("classification")
+        if classification is None:
+            classification = failure.get("classification")
+        if classification not in VALID_CLASSIFICATIONS:
+            return None
+        evidence_raw = _extract_evidence_summary_dual(journey, failure)
+    else:
+        return None
+
+    evidence_stored = _truncate_evidence(evidence_raw)
+    fid = _compute_finding_id(
+        repo, feature_slug, journey_id, classification, evidence_raw,
+    )
+    return Finding(
+        finding_id=fid,
+        run_id=run_id,
+        feature_slug=feature_slug,
+        journey_id=journey_id,
+        journey_kind=journey_kind,
+        classification=classification,
+        evidence_summary=evidence_stored,
+        report_path=report_path,
+        first_seen_ts=now,
+        last_seen_ts=now,
+        seen_count=1,
+    )
+
+
+def _extract_caveat_evidence(caveat: dict) -> str:
+    """Pull a stable evidence string out of a caveat object.
+
+    Prefers ``summary`` (the agent's full description of the
+    architectural gap) over ``hypothesis`` (the file-line guess) so
+    that the finding_id is stable across reruns even if the
+    hypothesis text shifts. Falls back to stable JSON if neither is
+    a non-empty string.
+    """
+    for key in ("summary", "hypothesis", "detail", "evidence"):
+        v = caveat.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    try:
+        return json.dumps(caveat, sort_keys=True, default=str)
+    except Exception:
+        return str(caveat)
 
 
 def _extract_evidence_summary_dual(journey: dict, failure: dict) -> str:

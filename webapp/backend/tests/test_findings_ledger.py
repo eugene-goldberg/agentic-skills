@@ -283,6 +283,97 @@ def test_mixed_top_level_and_nested_classification(tmp_path: Path) -> None:
     assert "selector .submit-btn" in by_kind["ui"].evidence_summary
 
 
+def test_pass_with_caveat_journey_persists_finding(tmp_path: Path) -> None:
+    """§I.3 gap fix (2026-06-02): pass_with_caveat journeys carry a
+    structured ``caveat`` object that must reach the ledger.
+
+    Real-world shape from financial-management run-20260602T143035Z-c5868e
+    Journey 03: the legal draft→sent step passed, but the agent observed
+    a cross-BL defect (UI Edit dialog bypasses BL-0005's transition
+    state machine). Pre-fix this finding only existed in report.md prose.
+    """
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    rpt = {
+        "journeys": [{
+            "id": "03",
+            "slug": "invoice_lifecycle_status",
+            "status": "pass_with_caveat",
+            "caveat": {
+                "classification": "product_bug",
+                "severity": "medium",
+                "summary": (
+                    "Edit Invoice dialog calls PUT /billing/invoices/{id}, "
+                    "bypasses BL-0005's guarded transition state machine."
+                ),
+                "hypothesis": (
+                    "backend/app/api/routes/billing/invoices.py "
+                    "update_invoice writes InvoiceUpdate.status directly."
+                ),
+            },
+        }],
+    }
+    persisted = ledger.append_from_report(rpt, run_id="r1", report_path="r.json")
+    assert len(persisted) == 1
+    f = persisted[0]
+    assert f.classification == "product_bug"
+    assert f.journey_id == "03"
+    assert "BL-0005" in f.evidence_summary  # summary wins over hypothesis
+    assert f.verdict is None
+
+
+def test_pass_journey_without_caveat_does_not_persist(tmp_path: Path) -> None:
+    """A clean pass with no caveat object must NOT produce a finding —
+    that would create noise and undermine the verdict-based bounding
+    of classifier accuracy."""
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    rpt = {"journeys": [{
+        "id": "01", "status": "pass",
+        "slug": "solo_create_invoice",
+    }]}
+    assert ledger.append_from_report(rpt, run_id="r", report_path="p") == []
+
+
+def test_pass_with_caveat_but_no_classification_skipped(tmp_path: Path) -> None:
+    """Defensive: caveat object present but no classification ->
+    don't persist. Matches the failure-path behavior."""
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    rpt = {"journeys": [{
+        "id": "07", "status": "pass_with_caveat",
+        "caveat": {"summary": "something interesting", "severity": "low"},
+    }]}
+    assert ledger.append_from_report(rpt, run_id="r", report_path="p") == []
+
+
+def test_pass_with_caveat_unknown_classification_skipped(tmp_path: Path) -> None:
+    """Defensive: caveat carries an off-taxonomy classification ->
+    skip rather than persist a bad row. Mirrors validator-level
+    enforcement for failed journeys."""
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    rpt = {"journeys": [{
+        "id": "09", "status": "pass_with_caveat",
+        "caveat": {
+            "classification": "design_smell",
+            "summary": "could be cleaner",
+        },
+    }]}
+    assert ledger.append_from_report(rpt, run_id="r", report_path="p") == []
+
+
+def test_pass_with_caveat_hypothesis_only(tmp_path: Path) -> None:
+    """summary-absent fallback: use hypothesis as evidence."""
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    rpt = {"journeys": [{
+        "id": "11", "status": "pass_with_caveat",
+        "caveat": {
+            "classification": "infra_bug",
+            "hypothesis": "stack_healthy probe times out under load",
+        },
+    }]}
+    persisted = ledger.append_from_report(rpt, run_id="r", report_path="p")
+    assert len(persisted) == 1
+    assert "stack_healthy probe" in persisted[0].evidence_summary
+
+
 def test_finding_id_stable_across_long_evidence_tail(tmp_path: Path) -> None:
     """Trailing churn beyond the hash-prefix window must not change
     the id — that's the upsert guarantee under noisy stack traces."""
