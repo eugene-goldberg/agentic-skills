@@ -63,6 +63,22 @@ advisory (falsification priors, not bans), **no new R-rule** (I-2
 unaffected). Docs: `ABL-0016_LESSONS_AS_CONTEXT.md`,
 `CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md`, `CUMULATIVE_LEARNING_ROADMAP.md`.
 
+### ABL-0020 doctrine-spec registry — the keystone (this session)
+
+Started as ABL-0017 Batch 0; the verification gate found Stage 2 couldn't
+attribute outcomes to rules because the **I-2 doctrine-spec registry was
+unfulfilled**. Operator chose Option C → built the registry first. Now
+**complete** (A `624886f`, B `016ef5c`, C `db7d8d7`):
+- `app/services/doctrine_spec.py` — single in-code registry of all 13
+  canonical rules (enforcement_point, enforced flag, resolvable `check_ref`,
+  `targeted_failure_class`); `KNOWN_GAPS={R9}`; `manifest()`.
+- I-2 meta-test + a CI consistency guard (registry ↔ CLAUDE.md table).
+- Per-run `doctrine_manifest` snapshotted into `.orchestrator-state` via
+  `write_checkpoint` (the rule-state half of Stage 2's input contract).
+- **I-2 marked FULFILLED** in ARCHITECTURE_INVARIANTS.md (synthetic-harness
+  residual flagged). This discharged the project's oldest architectural debt
+  AND unblocked ABL-0017.
+
 ### ABL-0015 auto-dispatch (on `architect-prereqs`, flag-OFF)
 
 A–D shipped: ledger dispatch schema, `run_acceptance_followup` flag,
@@ -94,20 +110,20 @@ failure.
 
 ## 4. Highest-leverage next architect-doable work
 
-**ABL-0017 — Stage 2: closed-loop doctrine efficacy** (the next stage of
-the cumulative-learning program). It *closes* I-7: today doctrine-meta
-proposes rules open-loop; Stage 2 measures whether an enforced rule
-actually reduced its targeted failure class, and proposes retirement for
-ones that don't help (operator-gated, never auto-retires). It consumes the
-ABL-0016 provenance log + per-BL outcomes.
+**ABL-0017 — Stage 2: closed-loop doctrine efficacy — NOW UNBLOCKED.**
+Its **Batch 0 is done** (`ABL-0017_DOCTRINE_EFFICACY.md`) and ABL-0020
+resolved its blocker. Both halves of Stage 2's input contract now persist
+per run on disk: `bl_outcomes` (run_state) + `doctrine_manifest`
+(ABL-0020). Stage 2 *closes* I-7: measure whether an enforced rule reduced
+its `targeted_failure_class`, propose retirement for ones that don't help
+(operator-gated, never auto-retires).
 
-**Start with its Batch-0 verification gate** (per
-`CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md` §4): confirm the
-outcome-persistence seam (`run_brief` summary / `.orchestrator-state/<run_id>.json`
-/ terminal events), the doctrine-meta input/output contract, and how
-enforced rules are recorded per run. No Stage-2 code before Batch 0 closes
-those 🔎 items — the discipline that converted ABL-0016 from sketch to a
-verified plan.
+It would proceed straight to design + batches (per the program plan §4):
+(A) per-BL outcome-label deriver from persisted state; (B) rule-efficacy
+index joining `doctrine_manifest` × `bl_outcomes` × per-rule
+`targeted_failure_class`; (C) `retire` proposal kind in doctrine-meta
+(one Direction value + SKILLS guidance); (D) calibration. Medium-fidelity
+(per-rule trigger events / A13 closure deferred — see ABL-0017 §options C).
 
 (Alternatively ABL-0019 Stage 4 pattern profile — lower risk; or ABL-0018
 Stage 3 cross-target transfer — higher value, pairs with the §I.5 Django

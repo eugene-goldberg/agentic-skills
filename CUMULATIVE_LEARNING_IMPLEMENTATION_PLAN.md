@@ -45,8 +45,9 @@ mature of the four defining properties (the "crew brain").
 
 | Stage | ABL | Capability gained | Depends on | Fidelity | Est. |
 |---|---|---|---|---|---|
-| 1 | **ABL-0016** Lessons-as-context | all roles read prior confirmed lessons | §I.3 ledger ✅ | ✅ seam-verified | A+B ~1–1.5d + smoke |
-| 2 | **ABL-0017** Closed-loop doctrine efficacy | crew measures which of its rules help | ABL-0003 doctrine-meta ✅; Stage-1 provenance | 🔎 Batch 0 | ~3–4d |
+| 1 | **ABL-0016** Lessons-as-context | all roles read prior confirmed lessons | §I.3 ledger ✅ | ✅ A–C shipped (flag-OFF) | smoke open |
+| — | **ABL-0020** Doctrine-spec registry (keystone) | I-2 fulfilled; per-run rule manifest | none | ✅ COMPLETE | done |
+| 2 | **ABL-0017** Closed-loop doctrine efficacy | crew measures which of its rules help | ABL-0003 doctrine-meta ✅; ABL-0020 ✅; Stage-1 provenance | ✅ Batch 0 done; unblocked by ABL-0020 | ~2–3d |
 | 3 | **ABL-0018** Cross-target transfer | new target inherits global doctrine + priors | Stages 1–2 substrate | 🔎 Batch 0 | ~3–5d |
 | 4 | **ABL-0019** Pattern/convention profile | Pattern Fidelity compounds per target | Stage 1 substrate | 🔎 Batch 0 | ~3–4d |
 
@@ -351,9 +352,9 @@ capability in §0 for that stage is demonstrable from a real run's traces.
 | `_build_priors_block` analog | ✅ verified |
 | Findings ledger verdict model {confirmed/refuted/deferred/None} | ✅ verified (ABL-0015 Batch A) |
 | Target-scope union over feature ledgers | ✅ design follows from verified ledger keying |
-| Stage 2 outcome persistence seam (summary / .orchestrator-state / events) | 🔎 Batch 0 |
-| Stage 2 doctrine-meta input/output contract | 🔎 Batch 0 (ABL-0003 exists ✅) |
-| Stage 2 per-run active-rule record | 🔎 Batch 0 |
+| Stage 2 outcome persistence seam (summary / .orchestrator-state / events) | ✅ verified (ABL-0017 Batch 0: bl_outcomes persisted, run_state.py:69) |
+| Stage 2 doctrine-meta input/output contract | ✅ verified (ABL-0017 Batch 0: Direction field; `retire` = 1-value add) |
+| Stage 2 per-run active-rule record | ✅ RESOLVED by ABL-0020 keystone — doctrine_spec registry + per-run `doctrine_manifest` in A7 state (was the 🔎 blocker; Option C built it) |
 | Stage 3 global store location + bootstrap seam | 🔎 Batch 0 + ✎ decision |
 | Stage 4 eng_patterns structure/consistency | 🔎 Batch 0 (path ✅ known) |
 

@@ -302,6 +302,30 @@ transfer), ABL-0019 (pattern profile) follow.
 
 ---
 
+### ABL-0020 — Doctrine-spec registry (I-2 fulfillment + per-run manifest)
+**Priority:** HIGH · **Effort:** 2 · **Dependencies:** none (discharges I-2) · **State:** Implemented (complete)
+
+**Story:** As the framework, I want a single in-code doctrine-spec data structure naming every R-rule, its enforcement point, and a resolvable check — the standing I-2 mandate — plus a per-run snapshot of which rules were active, so doctrine is machine-readable and ABL-0017 Stage-2 efficacy can attribute outcomes to rules.
+
+**Acceptance:**
+1. `doctrine_spec.py` registry of all canonical rules (enforcement_point, enforced flag, resolvable check_ref, targeted_failure_class). ✅
+2. I-2 meta-test: enforced→resolvable check; unenforced→declared gap; registry covers the canonical set. ✅
+3. Per-run `doctrine_manifest` snapshotted into A7 run state. ✅
+4. Consistency guard: registry ↔ CLAUDE.md prose table drift fails CI. ✅
+
+**Risk level:** Low (pure data + test + a nullable state field; no agent-facing behavior change).
+
+**Status (2026-06-03):** Complete on `cumulative_learning` (A `624886f`,
+B `016ef5c`, C `db7d8d7`). Plan: [`ABL-0020_DOCTRINE_SPEC_REGISTRY.md`](ABL-0020_DOCTRINE_SPEC_REGISTRY.md).
+Discharges the long-standing I-2 architectural mandate (marked FULFILLED in
+ARCHITECTURE_INVARIANTS.md) and is the **keystone** unblocking ABL-0017
+Stage 2 — emerged from ABL-0017's Batch-0 verification gate, which found
+Stage 2 couldn't attribute outcomes to rules without it. 248/248 tests.
+R9 remains the one declared gap (A8); full per-rule synthetic-harness tests
+are follow-up.
+
+---
+
 ### ABL-0013 — Cost + telemetry layer
 **Priority:** HIGH · **Effort:** 3 · **Dependencies:** ABL-0001 · **State:** Blocked
 
