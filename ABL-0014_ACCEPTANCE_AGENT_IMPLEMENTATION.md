@@ -457,6 +457,18 @@ acceptance run to validate the JSON shape).
 
 ### I.4 — ABL-0015 auto-dispatch follow-up engineer
 
+> **STATUS 2026-06-02 — code batches A–D SHIPPED, flag-OFF, pending live
+> calibration smoke (Batch E).** Full design + grounding in
+> [`ABL-0015_AUTO_DISPATCH_DESIGN.md`](ABL-0015_AUTO_DISPATCH_DESIGN.md).
+> Commits on `architect-prereqs`: design `d7b1088`, A `912f21e`,
+> B `29f5ac6`, C `df0e4ff`, D `b45919d`. 208/208 backend tests pass.
+> The dispatcher reads the I.3 ledger, selects `product_bug` findings
+> with `verdict=="confirmed" AND dispatch_state is None` (R15), caps at 1,
+> and spawns a follow-up engineer via the unchanged `_engineer_flow`
+> (`section_override` only). The real Journey 03 finding
+> (`sha256:6e533e84…`) is the Batch-E test case once the operator
+> verdicts it `confirmed`.
+
 **Evidence basis:** Health-version sprint (2026-05-31) found 3
 product_bug findings. They sat in `traces_archive/.../acceptance/
 report.md` for the operator to manually triage. Client_Portal

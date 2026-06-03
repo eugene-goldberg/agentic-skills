@@ -248,17 +248,30 @@ Sprint 1 was the validation that the worker layer (Engineer/QA/Scorer) can run u
 ---
 
 ### ABL-0015 — Auto-dispatch follow-up engineer on `product_bug` acceptance findings
-**Priority:** MEDIUM · **Effort:** 3 · **Dependencies:** ABL-0014 · **State:** Blocked
+**Priority:** MEDIUM · **Effort:** 3 · **Dependencies:** ABL-0014 · **State:** Implemented (flag-OFF, pending live calibration smoke)
 
 **Story:** As the framework, once the Acceptance Agent classifies a journey failure as `product_bug` and the operator has confirmed acceptance is reliable, I want the orchestrator to auto-spawn a follow-up engineer to attempt the fix — so the feedback loop closes without an operator round-trip for unambiguous bugs.
 
 **Acceptance:**
-1. New flag `run_acceptance_followup: bool` (default False until calibrated).
-2. On `product_bug` findings, the orchestrator constructs a focused remediation BL referencing the acceptance report + screenshots and spawns an engineer in a fresh worktree.
-3. Cost cap: max 1 follow-up per sprint to start; revisit after calibration.
-4. Acceptance Agent re-runs (or doesn't) per operator policy.
+1. New flag `run_acceptance_followup: bool` (default False until calibrated). ✅
+2. On `product_bug` findings, the orchestrator constructs a focused remediation BL referencing the acceptance report + screenshots and spawns an engineer in a fresh worktree. ✅
+3. Cost cap: max 1 follow-up per sprint to start; revisit after calibration. ✅ (`FOLLOWUP_COST_CAP=1`)
+4. Acceptance Agent re-runs (or doesn't) per operator policy. ✅ (v1 = no auto re-run, §9 D3)
 
 **Risk level:** High (crosses two new invariant boundaries — acceptance becomes a writer; engineer gets non-PO-decomposed work)
+
+**Status (2026-06-02):** Code batches A–D shipped on `architect-prereqs`
+(design `d7b1088`; A `912f21e`; B `29f5ac6`; C `df0e4ff`; D `b45919d`).
+Design + grounding in [`ABL-0015_AUTO_DISPATCH_DESIGN.md`](ABL-0015_AUTO_DISPATCH_DESIGN.md).
+Operator-approved v1 policy: conservative verdict gate (`verdict ==
+"confirmed"` only), cost cap 1, no auto re-run, gate-fail → manual review.
+New doctrine rule **R15** (dispatch-at-most-once) enforced by the
+selector's `dispatch_state is None` filter. closure_check covers the
+follow-up worktree (`scan_stale_followup_worktrees`). Reuses
+`_engineer_flow` unchanged (selector + invoker, not a new executor).
+208/208 backend tests pass. **Batch E** (live calibration smoke on the
+real Journey 03 `product_bug`) is operator-gated and remains the only
+open step before the flag can flip ON.
 
 ---
 
