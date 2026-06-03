@@ -28,5 +28,6 @@
 - [Acceptance Agent](arch_acceptance_agent.md) — OPERATIONAL; Items 1+2 + §I.3 (A-E + caveat fix) SHIPPED; canonical proof in Financial_Management 12-BL delivery 2026-06-02
 - [Auto-dispatch (ABL-0015)](arch_auto_dispatch.md) — §I.4 code batches A–D shipped flag-OFF; selector+invoker over unchanged _engineer_flow; R15; only operator-gated Batch E live smoke remains
 - [Cumulative learning (ABL-0016→0019)](arch_cumulative_learning.md) — 4-stage program for the mission's "cumulative" property; Stage 1 lessons-as-context A–C shipped flag-OFF on `cumulative_learning`; advisory, target-scoped, no new R-rule; calibration smoke + Stages 2–4 ahead
+- [Doctrine-spec registry (ABL-0020)](arch_doctrine_spec_registry.md) — keystone that fulfills the standing I-2 mandate (doctrine_spec.py + meta-test + CI consistency guard) + per-run doctrine_manifest; complete; unblocked ABL-0017 Stage 2
 - [A48 disk-leak fixes](arch_disk_leak_fixes.md) — 4 shipped fixes (`02ebd7b`); Docker.raw 60 GB Mac VM cap and the four leak classes it closes; force-kill worktree-leak open gap
 - [Pre-flight checklist](../../../../dev/ai-projects/agentic-skills/PREFLIGHT.md) — PF-1..10 verifiable artifacts; run before every sprint launch

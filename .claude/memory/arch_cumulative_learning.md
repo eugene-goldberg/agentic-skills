@@ -25,6 +25,13 @@ Each later stage opens with a **Batch-0 verification gate** before any
 code — the discipline that turned Stage 1 from sketch to a verified plan.
 Each ships behind a default-OFF flag, flipped only after an operator smoke.
 
+**ABL-0017 Batch 0 (done)** found Stage 2 blocked: no way to attribute
+outcomes to rules. Operator chose Option C → built the **ABL-0020
+doctrine-spec registry** keystone (see [[arch-doctrine-spec-registry]]),
+now COMPLETE. That discharged the I-2 mandate AND unblocked Stage 2 — both
+halves of its input contract now persist per run (`bl_outcomes` +
+`doctrine_manifest`). Stage 2 is ready to design/build.
+
 ## ABL-0016 as shipped (branch `cumulative_learning`)
 
 - **A** (`eb20d6f`) `app/services/lessons.py`: `list_lessons(repo_root,
