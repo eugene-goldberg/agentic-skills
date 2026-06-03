@@ -201,3 +201,82 @@ def test_post_verdict_missing_field_422(app_and_repo):
         # missing finding_id
     )
     assert r.status_code == 422
+
+
+# ─── POST /dispatch-followup (ABL-0021) ─────────────────────────────────────
+
+
+def _confirm(client, repo, slug, fid):
+    r = client.post(f"/api/projects/{repo}/verdict",
+                    json={"feature_slug": slug, "finding_id": fid, "verdict": "confirmed"})
+    assert r.status_code == 200
+
+
+def test_dispatch_unknown_finding_404(app_and_repo):
+    client, _repo_dir, repo = app_and_repo
+    r = client.post(f"/api/projects/{repo}/dispatch-followup",
+                    json={"feature_slug": "feat_a", "finding_id": "sha256:" + "0" * 64})
+    assert r.status_code == 404
+
+
+def test_dispatch_not_confirmed_409(app_and_repo):
+    client, repo_dir, repo = app_and_repo
+    fids = _seed_ledger(repo_dir, "feat_a", ["product_bug"])  # pending, not confirmed
+    r = client.post(f"/api/projects/{repo}/dispatch-followup",
+                    json={"feature_slug": "feat_a", "finding_id": fids[0]})
+    assert r.status_code == 409
+    assert "not_confirmed" in r.json()["detail"]
+
+
+def test_dispatch_not_product_bug_409(app_and_repo):
+    client, repo_dir, repo = app_and_repo
+    fids = _seed_ledger(repo_dir, "feat_a", ["test_bug"])
+    _confirm(client, repo, "feat_a", fids[0])
+    r = client.post(f"/api/projects/{repo}/dispatch-followup",
+                    json={"feature_slug": "feat_a", "finding_id": fids[0]})
+    assert r.status_code == 409
+    assert "not_product_bug" in r.json()["detail"]
+
+
+def test_dispatch_already_dispatched_409(app_and_repo):
+    client, repo_dir, repo = app_and_repo
+    fids = _seed_ledger(repo_dir, "feat_a", ["product_bug"])
+    _confirm(client, repo, "feat_a", fids[0])
+    from app.services.findings_ledger import FindingsLedger
+    FindingsLedger(repo_dir, "feat_a").set_dispatch_state(fids[0], "dispatched")
+    r = client.post(f"/api/projects/{repo}/dispatch-followup",
+                    json={"feature_slug": "feat_a", "finding_id": fids[0]})
+    assert r.status_code == 409
+    assert "already dispatched" in r.json()["detail"]
+
+
+def test_dispatch_eligible_streams_followup(app_and_repo, monkeypatch):
+    """Confirmed product_bug → streams the follow-up events. The dispatch
+    engine is faked (no real engineer/docker); we assert the endpoint
+    validated eligibility and streamed the dispatch."""
+    client, repo_dir, repo = app_and_repo
+    fids = _seed_ledger(repo_dir, "feat_a", ["product_bug"])
+    _confirm(client, repo, "feat_a", fids[0])
+
+    async def _fake_dispatch_one(repo_dir, repo_name, run_id, feature_slug,
+                                 finding, idx, rkb, ledger, *, timeout):
+        yield {"type": "_meta", "phase": "orchestrator.acceptance.followup.start",
+               "finding_id": finding.finding_id, "bl_id": f"BL-ACCEPT-{run_id}-{idx}"}
+        yield {"type": "_meta", "phase": "orchestrator.acceptance.followup.done",
+               "outcome": "merged", "merged_sha": "abc1234"}
+
+    from app.routers import projects as projects_router
+    monkeypatch.setattr(projects_router.orchestrator_svc,
+                        "_dispatch_one_followup", _fake_dispatch_one)
+    r = client.post(f"/api/projects/{repo}/dispatch-followup",
+                    json={"feature_slug": "feat_a", "finding_id": fids[0]})
+    assert r.status_code == 200
+    assert "acceptance.followup.start" in r.text
+    assert "acceptance.followup.done" in r.text
+
+
+def test_dispatch_bad_slug_400(app_and_repo):
+    client, _repo_dir, repo = app_and_repo
+    r = client.post(f"/api/projects/{repo}/dispatch-followup",
+                    json={"feature_slug": "../escape", "finding_id": "sha256:abc"})
+    assert r.status_code == 400

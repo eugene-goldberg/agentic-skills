@@ -1716,3 +1716,69 @@ async def set_finding_verdict(repo: str, req: VerdictRequest):
         raise HTTPException(status_code=422, detail=msg)
     from dataclasses import asdict as _asdict
     return {"finding": _asdict(updated)}
+
+
+class DispatchFollowupRequest(BaseModel):
+    feature_slug: str = Field(..., min_length=1, max_length=128)
+    finding_id: str = Field(..., min_length=1)
+    timeout_seconds: int = Field(3600, ge=60, le=7200)
+
+
+@router.post("/{repo}/dispatch-followup")
+async def dispatch_followup(repo: str, req: DispatchFollowupRequest):
+    """ABL-0021: operator-triggered on-demand follow-up engineer dispatch
+    on ONE confirmed product_bug finding — the triage panel's "Dispatch fix"
+    button.
+
+    Reuses the ABL-0015 dispatch machinery unchanged (the follow-up engineer
+    clears the same doctrine + regression gate + auto-merge bar as any BL;
+    R15 dispatch-at-most-once). Eligibility is pre-validated for clean HTTP
+    codes; then the follow-up engineer is SSE-streamed
+    (``acceptance.followup.{start,done}`` + engineer sub-events). The
+    operator must POST /verdict (confirmed) first.
+    """
+    repo_dir = _repo_dir(repo)
+    if not repo_dir.exists():
+        raise HTTPException(status_code=404, detail=f"repo not found: {repo}")
+    _validate_feature_slug(req.feature_slug)
+
+    finding, ledger, reason = orchestrator_svc.select_followup_finding(
+        repo_dir, req.feature_slug, req.finding_id,
+    )
+    if reason == "unknown":
+        raise HTTPException(status_code=404,
+                            detail=f"unknown finding_id: {req.finding_id}")
+    if reason in ("not_product_bug", "not_confirmed"):
+        raise HTTPException(
+            status_code=409,
+            detail=("finding not eligible for dispatch "
+                    f"({reason}) — only operator-confirmed product_bug "
+                    "findings can be dispatched"),
+        )
+    if reason == "already_dispatched":
+        raise HTTPException(
+            status_code=409,
+            detail=(f"finding already dispatched (state={finding.dispatch_state}) "
+                    "— R15 dispatch-at-most-once"),
+        )
+
+    run_id = (
+        f"manual-dispatch-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+        f"-{uuid.uuid4().hex[:6]}"
+    )
+
+    async def gen():
+        try:
+            async for event in orchestrator_svc._dispatch_one_followup(
+                repo_dir, repo, run_id, req.feature_slug, finding, 0,
+                _retrieval_kwargs, ledger, timeout=req.timeout_seconds,
+            ):
+                yield _sse(event)
+        except Exception as exc:  # noqa: BLE001
+            yield _sse({"type": "_error", "error": f"{type(exc).__name__}: {exc}"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

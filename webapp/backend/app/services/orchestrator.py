@@ -1277,6 +1277,60 @@ BL guards this one. Write your `eng_patterns.md` artifact as required.
 """
 
 
+async def _dispatch_one_followup(
+    repo_dir: Path,
+    repo_name: str,
+    run_id: str,
+    feature_slug: str,
+    finding,
+    idx: int,
+    retrieval_kwargs_builder,
+    ledger,
+    *,
+    timeout: int,
+) -> AsyncIterator[dict]:
+    """Dispatch a single follow-up engineer for one confirmed finding.
+
+    The shared per-finding body used by BOTH the inline sprint loop
+    (``_dispatch_followup_engineers``) and the operator's on-demand
+    "Dispatch fix" endpoint (ABL-0021). R15-stamps ``dispatched`` BEFORE the
+    spawn, runs the unchanged ``_engineer_flow`` (section_override only),
+    captures the verified terminal events, stamps the terminal state, and
+    emits ``acceptance.followup.{start,done}``."""
+    bl_id = f"BL-ACCEPT-{run_id}-{idx}"
+    # R15: stamp dispatched BEFORE the spawn — the idempotency anchor.
+    await asyncio.to_thread(
+        ledger.set_dispatch_state, finding.finding_id, "dispatched",
+        bl_id=bl_id, run_id=run_id,
+    )
+    yield _evt("acceptance.followup.start", run_id=run_id,
+               finding_id=finding.finding_id, bl_id=bl_id,
+               classification=finding.classification, verdict=finding.verdict)
+    section = _build_followup_section(
+        finding, hypothesis=_followup_hypothesis(finding),
+    )
+    merged = False
+    merged_sha = None
+    async for ev in _engineer_flow(
+        repo_dir, repo_name, bl_id, timeout, retrieval_kwargs_builder,
+        run_id=run_id, feature_slug=feature_slug, section_override=section,
+        task_id=f"followup-{run_id}-{idx}",
+    ):
+        if ev.get("phase") == "merge_to_target":
+            merged_sha = ev.get("merged_sha")
+        if ev.get("_orchestrator_outcome"):
+            merged = bool(ev.get("merged"))
+        yield ev
+    state = "merged" if merged else "not_merged"
+    await asyncio.to_thread(
+        ledger.set_dispatch_state, finding.finding_id, state,
+        merged_sha=merged_sha,
+    )
+    yield _evt("acceptance.followup.done", run_id=run_id,
+               finding_id=finding.finding_id, bl_id=bl_id,
+               outcome=state, merged_sha=merged_sha)
+
+
 async def _dispatch_followup_engineers(
     repo_dir: Path,
     repo_name: str,
@@ -1298,42 +1352,33 @@ async def _dispatch_followup_engineers(
                    feature_slug=feature_slug, reason="no_confirmed_candidates")
         return
     for idx, finding in enumerate(to_dispatch):
-        bl_id = f"BL-ACCEPT-{run_id}-{idx}"
-        # R15: stamp dispatched BEFORE the spawn — the idempotency anchor.
-        await asyncio.to_thread(
-            ledger.set_dispatch_state, finding.finding_id, "dispatched",
-            bl_id=bl_id, run_id=run_id,
-        )
-        yield _evt("acceptance.followup.start", run_id=run_id,
-                   finding_id=finding.finding_id, bl_id=bl_id,
-                   classification=finding.classification, verdict=finding.verdict)
-        section = _build_followup_section(
-            finding, hypothesis=_followup_hypothesis(finding),
-        )
-        merged = False
-        merged_sha = None
-        async for ev in _engineer_flow(
-            repo_dir, repo_name, bl_id, timeout, retrieval_kwargs_builder,
-            run_id=run_id, feature_slug=feature_slug, section_override=section,
-            task_id=f"followup-{run_id}-{idx}",
+        async for ev in _dispatch_one_followup(
+            repo_dir, repo_name, run_id, feature_slug, finding, idx,
+            retrieval_kwargs_builder, ledger, timeout=timeout,
         ):
-            if ev.get("phase") == "merge_to_target":
-                merged_sha = ev.get("merged_sha")
-            if ev.get("_orchestrator_outcome"):
-                merged = bool(ev.get("merged"))
             yield ev
-        state = "merged" if merged else "not_merged"
-        await asyncio.to_thread(
-            ledger.set_dispatch_state, finding.finding_id, state,
-            merged_sha=merged_sha,
-        )
-        yield _evt("acceptance.followup.done", run_id=run_id,
-                   finding_id=finding.finding_id, bl_id=bl_id,
-                   outcome=state, merged_sha=merged_sha)
     if capped:
         yield _evt("acceptance.followup.skipped", run_id=run_id,
                    feature_slug=feature_slug, reason="cost_cap",
                    cost_cap=FOLLOWUP_COST_CAP, deferred=capped)
+
+
+def select_followup_finding(repo_dir: Path, feature_slug: str, finding_id: str):
+    """ABL-0021: resolve + eligibility-check a single finding for on-demand
+    dispatch. Returns (finding, ledger, reason). ``reason`` is None when
+    eligible, else one of: unknown | not_product_bug | not_confirmed |
+    already_dispatched. Pure read; the router maps reason -> HTTP status."""
+    ledger = findings_ledger_svc.FindingsLedger(repo_dir, feature_slug)
+    finding = next((f for f in ledger.list_all() if f.finding_id == finding_id), None)
+    if finding is None:
+        return None, ledger, "unknown"
+    if finding.classification != "product_bug":
+        return finding, ledger, "not_product_bug"
+    if finding.verdict != "confirmed":
+        return finding, ledger, "not_confirmed"
+    if finding.dispatch_state is not None:
+        return finding, ledger, "already_dispatched"   # R15
+    return finding, ledger, None
 
 
 async def _acceptance_flow(
