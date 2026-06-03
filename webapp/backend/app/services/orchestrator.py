@@ -414,6 +414,7 @@ async def _engineer_flow(
     run_id: str | None = None,
     feature_slug: str | None = None,
     section_override: str | None = None,
+    task_id: str | None = None,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
@@ -425,7 +426,11 @@ async def _engineer_flow(
     merged = False
     no_op = False
     try:
-        wt = await create_worktree(repo_dir, base_ref=cfg.agent_branch)
+        # ABL-0015: a caller-supplied task_id gives the worktree a
+        # scannable, run_id-bearing name so closure_check can detect a
+        # leak (see scan_stale_followup_worktrees). Normal BLs pass None
+        # and get the auto-generated uuid as before.
+        wt = await create_worktree(repo_dir, task_id, base_ref=cfg.agent_branch)
         trace = TraceWriter(repo=repo_name, role="engineer", bl_id=bl_id, task_id=wt.task_id)
         yield _ptag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
                     "branch": wt.branch, "bl_id": bl_id, "role": "engineer",
@@ -1283,6 +1288,7 @@ async def _dispatch_followup_engineers(
         async for ev in _engineer_flow(
             repo_dir, repo_name, bl_id, timeout, retrieval_kwargs_builder,
             run_id=run_id, feature_slug=feature_slug, section_override=section,
+            task_id=f"followup-{run_id}-{idx}",
         ):
             if ev.get("phase") == "merge_to_target":
                 merged_sha = ev.get("merged_sha")

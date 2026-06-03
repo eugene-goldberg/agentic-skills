@@ -244,6 +244,28 @@ def scan_stale_acceptance_worktrees(repo_root: Path, run_id: str) -> list[Violat
     )]
 
 
+def scan_stale_followup_worktrees(repo_root: Path, run_id: str) -> list[Violation]:
+    """ABL-0015: auto-dispatch follow-up engineer worktrees are created via
+    ``_engineer_flow`` with ``task_id=f"followup-{run_id}-{idx}"``, landing
+    at ``<repo>/../.agent-worktrees/followup-<run_id>-<idx>``.
+    ``_engineer_flow``'s finally-block reaps these (same path as every BL);
+    anything left over is an I-1 leak. Globs because a sprint may dispatch
+    more than one once the cost cap is lifted.
+    """
+    wt_root = repo_root.parent / ".agent-worktrees"
+    if not wt_root.exists():
+        return []
+    return [
+        Violation(
+            kind="followup_worktree",
+            resource=str(d),
+            detail={"basename": d.name},
+        )
+        for d in sorted(wt_root.glob(f"followup-{run_id}-*"))
+        if d.is_dir()
+    ]
+
+
 # ─── orchestrator entry point ──────────────────────────────────────────────
 
 
@@ -261,6 +283,7 @@ async def scan_all(repo_root: Path, run_id: str) -> list[Violation]:
     # Sync scans are cheap; run inline.
     wt_v = scan_stale_gate_worktrees(repo_root)
     accept_wt_v = scan_stale_acceptance_worktrees(repo_root, run_id)
+    followup_wt_v = scan_stale_followup_worktrees(repo_root, run_id)
     pgrp_v = scan_orphan_pgroup_children(run_id)
     br_v = scan_orphan_agent_branches(repo_root, run_id)
-    return [*docker_v, *accept_v, *wt_v, *accept_wt_v, *pgrp_v, *br_v]
+    return [*docker_v, *accept_v, *wt_v, *accept_wt_v, *followup_wt_v, *pgrp_v, *br_v]

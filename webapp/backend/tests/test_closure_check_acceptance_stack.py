@@ -115,3 +115,49 @@ def test_scan_all_includes_acceptance_kinds(tmp_path: Path) -> None:
     kinds = {v.kind for v in violations}
     assert "acceptance_docker" in kinds
     assert "acceptance_worktree" in kinds
+
+
+# ─── ABL-0015 follow-up worktree scan ──────────────────────────────────────
+
+
+def test_scan_finds_followup_worktree(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    leaked = repo_root.parent / ".agent-worktrees" / "followup-run-x-0"
+    leaked.mkdir(parents=True)
+
+    violations = cc.scan_stale_followup_worktrees(repo_root, "run-x")
+    assert len(violations) == 1
+    assert violations[0].kind == "followup_worktree"
+    assert violations[0].detail["basename"] == "followup-run-x-0"
+
+
+def test_scan_followup_globs_multiple_and_scopes_by_run_id(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    wt = repo_root.parent / ".agent-worktrees"
+    (wt / "followup-run-x-0").mkdir(parents=True)
+    (wt / "followup-run-x-1").mkdir()
+    (wt / "followup-run-OTHER-0").mkdir()   # different run_id — must be ignored
+    (wt / "accept-run-x").mkdir()           # different prefix — must be ignored
+
+    violations = cc.scan_stale_followup_worktrees(repo_root, "run-x")
+    names = sorted(v.detail["basename"] for v in violations)
+    assert names == ["followup-run-x-0", "followup-run-x-1"]
+
+
+def test_scan_no_followup_worktree(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    assert cc.scan_stale_followup_worktrees(repo_root, "run-x") == []
+
+
+def test_scan_all_includes_followup_kind(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root.parent / ".agent-worktrees" / "followup-run-x-0").mkdir(parents=True)
+
+    with patch.object(asyncio, "create_subprocess_exec",
+                       side_effect=_fake_create_subprocess_factory(b"")):
+        violations = asyncio.run(cc.scan_all(repo_root, "run-x"))
+    assert "followup_worktree" in {v.kind for v in violations}

@@ -208,9 +208,10 @@ def test_dispatch_confirmed_finding_marks_merged(tmp_path: Path, monkeypatch) ->
 
     async def fake_engineer_flow(repo_dir, repo_name, bl_id, timeout,
                                  rkb, *, run_id=None, feature_slug=None,
-                                 section_override=None):
+                                 section_override=None, task_id=None):
         seen["bl_id"] = bl_id
         seen["section_override"] = section_override
+        seen["task_id"] = task_id
         yield {"type": "_meta", "phase": "merge_to_target", "ok": True,
                "merged_sha": "abc1234", "bl_id": bl_id}
         yield {"_orchestrator_outcome": True, "role": "engineer",
@@ -230,6 +231,8 @@ def test_dispatch_confirmed_finding_marks_merged(tmp_path: Path, monkeypatch) ->
     # synthetic BL id + section override threaded into the engineer
     assert seen["bl_id"] == "BL-ACCEPT-run-X-0"
     assert "Remediation task" in seen["section_override"]
+    # ABL-0015 Batch D: scannable run_id-bearing worktree task_id
+    assert seen["task_id"] == "followup-run-X-0"
     # ledger now reflects the terminal state
     f = ledger.list_all()[0]
     assert f.dispatch_state == "merged"
