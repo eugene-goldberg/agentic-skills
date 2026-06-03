@@ -38,6 +38,7 @@ from app.services import closure_check as closure_check_svc
 from app.services import acceptance_validator as acceptance_validator_svc
 from app.services import volume_reaper as volume_reaper_svc
 from app.services import findings_ledger as findings_ledger_svc
+from app.services import lessons as lessons_svc
 from app.services.brownfield import classify_target, feature_artifact_dir
 from app.services.claude_agent import stream_agent_task
 from app.services.git_worktree import (
@@ -290,6 +291,11 @@ async def _po_flow(
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
     prompt = prompts_svc.build_po(family, brief, project_name, repo_dir, feature_slug=feature_slug,
                                   inject_lessons=inject_lessons)
+    if inject_lessons and run_id:
+        lessons_svc.record_injection(
+            run_id, "po",
+            lessons_svc.list_lessons(repo_dir, feature_slug, cap=lessons_svc.DEFAULT_LESSON_CAP),
+        )
     wt: Worktree | None = None
     trace: TraceWriter | None = None
     try:
@@ -424,6 +430,12 @@ async def _engineer_flow(
     section = _resolve_engineer_section(repo_dir, bl_id, feature_slug, section_override)
     prompt = prompts_svc.build_engineer(family, bl_id, section, repo_dir, feature_slug=feature_slug,
                                         inject_lessons=inject_lessons)
+    if inject_lessons and run_id:
+        lessons_svc.record_injection(
+            run_id, "engineer",
+            lessons_svc.list_lessons(repo_dir, feature_slug, cap=lessons_svc.DEFAULT_LESSON_CAP),
+            bl_id=bl_id,
+        )
 
     wt: Worktree | None = None
     trace: TraceWriter | None = None
@@ -581,6 +593,12 @@ async def _qa_or_scorer_flow(
     else:
         prompt = prompts_svc.build_score(family, bl_id, section, repo_dir, feature_slug=feature_slug,
                                          inject_lessons=inject_lessons)
+    if inject_lessons and run_id:
+        lessons_svc.record_injection(
+            run_id, role,
+            lessons_svc.list_lessons(repo_dir, feature_slug, cap=lessons_svc.DEFAULT_LESSON_CAP),
+            bl_id=bl_id,
+        )
 
     wt: Worktree | None = None
     trace: TraceWriter | None = None

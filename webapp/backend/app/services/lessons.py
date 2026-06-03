@@ -21,11 +21,17 @@ brownfield role prompts. Zero call sites in this batch.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
 from app.services.findings_ledger import Finding
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # Verdicts that make a finding a durable lesson worth remembering. ``refuted``
 # (operator said false positive) and ``None`` (untriaged) are excluded — only
@@ -172,3 +178,58 @@ def render_lessons_block(lessons: list[Lesson], *, bl_id: Optional[str] = None) 
         )
     out.append("")
     return "\n".join(out)
+
+
+# ─── ABL-0016 Batch C: injection provenance ────────────────────────────────
+# Records WHICH lessons were injected into WHICH role's prompt, per run. This
+# is the hook Stage 2 (ABL-0017 closed-loop efficacy) consumes to attribute
+# outcomes: "BL-0007's engineer was advised of lesson X — did it avoid the
+# class X warns about?". Provenance is framework telemetry, not a target
+# artifact, so it lives under the backend logs dir (never in the target repo).
+
+
+def _default_injection_log_dir() -> Path:
+    # webapp/backend/logs/lessons/  (parents[2] of app/services/lessons.py)
+    return Path(__file__).resolve().parents[2] / "logs" / "lessons"
+
+
+def injection_log_path(run_id: str, *, log_dir: Optional[Path] = None) -> Path:
+    base = Path(log_dir) if log_dir is not None else _default_injection_log_dir()
+    return base / f"{run_id}.jsonl"
+
+
+def record_injection(
+    run_id: str,
+    role: str,
+    lessons: list[Lesson],
+    *,
+    bl_id: Optional[str] = None,
+    log_dir: Optional[Path] = None,
+) -> Optional[Path]:
+    """Append one provenance record for a lessons injection.
+
+    No-op (returns ``None``) when ``lessons`` is empty — so the log only ever
+    holds *actual* injections, and a flag-ON sprint on a target with no
+    lessons writes nothing. Never raises: provenance is advisory telemetry
+    and must not perturb a sprint.
+    """
+    if not lessons:
+        return None
+    path = injection_log_path(run_id, log_dir=log_dir)
+    record = {
+        "ts": _now_iso(),
+        "run_id": run_id,
+        "role": role,
+        "bl_id": bl_id,
+        "count": len(lessons),
+        "lesson_ids": [l.lesson_id for l in lessons],
+        "classifications": [l.classification for l in lessons],
+        "feature_slugs": sorted({l.feature_slug for l in lessons}),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, separators=(",", ":")) + "\n")
+    except Exception:
+        return None
+    return path

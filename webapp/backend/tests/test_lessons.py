@@ -174,3 +174,46 @@ def test_render_starts_with_separator(tmp_path: Path) -> None:
     block = lsn.render_lessons_block(lsn.list_lessons(tmp_path))
     # leads with a markdown separator so it's visually distinct in the prompt
     assert block.split("\n", 2)[1] == "---"
+
+
+# ─── ABL-0016 Batch C — injection provenance ────────────────────────────────
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    import json
+    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def test_record_injection_writes_record(tmp_path: Path) -> None:
+    lessons = [lsn.Lesson.from_finding(_mk_finding(fid="a1", feature_slug="feat-a"))]
+    path = lsn.record_injection("run-x", "engineer", lessons, bl_id="BL-0007", log_dir=tmp_path)
+    assert path is not None
+    records = _read_jsonl(path)
+    assert len(records) == 1
+    r = records[0]
+    assert r["run_id"] == "run-x"
+    assert r["role"] == "engineer"
+    assert r["bl_id"] == "BL-0007"
+    assert r["lesson_ids"] == ["a1"]
+    assert r["classifications"] == ["product_bug"]
+    assert r["feature_slugs"] == ["feat-a"]
+    assert r["count"] == 1
+
+
+def test_record_injection_empty_is_noop(tmp_path: Path) -> None:
+    path = lsn.record_injection("run-x", "po", [], log_dir=tmp_path)
+    assert path is None
+    assert not lsn.injection_log_path("run-x", log_dir=tmp_path).exists()
+
+
+def test_record_injection_appends_per_run(tmp_path: Path) -> None:
+    l1 = [lsn.Lesson.from_finding(_mk_finding(fid="a1", feature_slug="feat-a"))]
+    l2 = [lsn.Lesson.from_finding(_mk_finding(fid="a1", feature_slug="feat-a"))]
+    lsn.record_injection("run-x", "engineer", l1, bl_id="BL-0007", log_dir=tmp_path)
+    lsn.record_injection("run-x", "qa", l2, bl_id="BL-0007", log_dir=tmp_path)
+    records = _read_jsonl(lsn.injection_log_path("run-x", log_dir=tmp_path))
+    assert [r["role"] for r in records] == ["engineer", "qa"]
+
+
+def test_injection_log_path_keyed_by_run_id(tmp_path: Path) -> None:
+    assert lsn.injection_log_path("run-abc", log_dir=tmp_path).name == "run-abc.jsonl"
