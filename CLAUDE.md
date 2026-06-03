@@ -185,6 +185,7 @@ Read these in this order on any non-trivial session:
 | 12 | [`RECOVERY.md`](RECOVERY.md) | Operator playbook for mid-sprint failures (crash-restart, score-only backfill, conflict resolution, Milvus restart). |
 | 13 | [`RUNBOOK_clean_brownfield_reset.md`](RUNBOOK_clean_brownfield_reset.md) | Procedure to launch a new brownfield feature on a target that already hosted a prior sprint, with no cross-contamination (branch fork, harness-commit cherry-pick, `_brownfield/` strip, graphify+Milvus purge, orchestrator-state sweep, docker `-v` restart, feature-key collision check). |
 | 14 | [`CONTINUATION_PROMPT.md`](CONTINUATION_PROMPT.md) | The handoff document for the next session. Update when context changes. |
+| 15 | [`PREFLIGHT.md`](PREFLIGHT.md) | PF-1..10 pre-sprint verification checklist (Milvus stack, Ollama probe, indexer end-to-end, target tree, leftover worktrees, Docker.raw budget). Run before every `/run-brief` or sprint resume. Added 2026-06-02. |
 
 The `.claude/memory/` directory carries cross-session memory files (see
 `MEMORY.md` index). Architectural memory entries (`arch_*.md`) summarize
@@ -425,6 +426,19 @@ fast session bootstrap.
   honor I-1 (resource lifecycle). Claude tree is covered via B1
   pgroup-kill; sibling subprocesses (gate, indexing) are gaps in the
   ledger.
+- **Docker.raw VM cap (2026-06-02 lesson):** Docker Desktop on macOS
+  allocates a fixed-size VM disk at
+  `~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw`
+  (default ~60 GB). A 12-BL brownfield sprint can fill this before
+  `sprint_complete` if compose stacks leak. A48's four-fix shipment
+  in commit `02ebd7b` (lowercase acceptance compose name, worktree
+  reaper in `remove_worktree`, FastAPI SIGTERM shutdown handler, plus
+  the earlier pre-flight + volume reaper + DiskFull classifier)
+  closes the known leak classes. See `.claude/memory/arch_disk_leak_fixes.md`
+  for the leak inventory and `PREFLIGHT.md` for per-sprint
+  verification. Use Ctrl+C (SIGTERM) not `kill -9` to stop uvicorn —
+  the SIGTERM handler reaps Docker stacks; git worktrees only reap
+  from `finally` blocks (sibling open gap A48b).
 - Closure postconditions (I-3) — at run termination, the orchestrator
   asserts empty worktree set, empty agent-branch set, empty docker
   container set tagged with the run_id. **Implemented**
