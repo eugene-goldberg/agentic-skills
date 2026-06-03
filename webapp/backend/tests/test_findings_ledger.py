@@ -388,3 +388,128 @@ def test_finding_id_stable_across_long_evidence_tail(tmp_path: Path) -> None:
     # Hash prefix is 200 chars; "base" already exceeds it, so the
     # finding_id should be identical and rows collapse to 1.
     assert len(ledger.list_all()) == 1
+
+
+# --------------------------------------------------------------------------
+# ABL-0015 Batch A — auto-dispatch lifecycle state
+# --------------------------------------------------------------------------
+
+
+def _seed_one(tmp_path: Path) -> tuple[FindingsLedger, str]:
+    """Append a single finding and return (ledger, finding_id)."""
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    persisted = ledger.append_from_report(
+        _report(), run_id="r1", report_path="p1",
+    )
+    assert len(persisted) == 1
+    return ledger, persisted[0].finding_id
+
+
+def test_dispatch_state_defaults_none(tmp_path: Path) -> None:
+    """A freshly-appended finding has no dispatch state."""
+    ledger, fid = _seed_one(tmp_path)
+    f = ledger.list_all()[0]
+    assert f.dispatch_state is None
+    assert f.dispatch_bl_id is None
+    assert f.dispatch_run_id is None
+    assert f.dispatch_merged_sha is None
+    assert f.dispatch_ts is None
+
+
+def test_set_dispatch_state_marks_and_stamps_ts(tmp_path: Path) -> None:
+    """Transition into 'dispatched' records bl_id/run_id and stamps ts."""
+    ledger, fid = _seed_one(tmp_path)
+    updated = ledger.set_dispatch_state(
+        fid, "dispatched", bl_id="BL-ACCEPT-r1-0", run_id="r1",
+    )
+    assert updated.dispatch_state == "dispatched"
+    assert updated.dispatch_bl_id == "BL-ACCEPT-r1-0"
+    assert updated.dispatch_run_id == "r1"
+    assert updated.dispatch_ts is not None
+    # persisted, not just in-memory
+    reread = ledger.list_all()[0]
+    assert reread.dispatch_state == "dispatched"
+    assert reread.dispatch_ts == updated.dispatch_ts
+
+
+def test_terminal_update_preserves_ts_and_bl_id(tmp_path: Path) -> None:
+    """A later 'merged' update keeps the dispatch ts/bl_id and adds the
+    merge SHA, without requiring them to be re-supplied."""
+    ledger, fid = _seed_one(tmp_path)
+    ledger.set_dispatch_state(
+        fid, "dispatched", bl_id="BL-ACCEPT-r1-0", run_id="r1",
+    )
+    dispatched_ts = ledger.list_all()[0].dispatch_ts
+    merged = ledger.set_dispatch_state(fid, "merged", merged_sha="abc1234")
+    assert merged.dispatch_state == "merged"
+    assert merged.dispatch_merged_sha == "abc1234"
+    # ts NOT re-stamped; bl_id/run_id preserved despite being omitted
+    assert merged.dispatch_ts == dispatched_ts
+    assert merged.dispatch_bl_id == "BL-ACCEPT-r1-0"
+    assert merged.dispatch_run_id == "r1"
+
+
+def test_set_dispatch_state_invalid_enum_raises(tmp_path: Path) -> None:
+    ledger, fid = _seed_one(tmp_path)
+    with pytest.raises(ValueError):
+        ledger.set_dispatch_state(fid, "frobnicated")
+
+
+def test_set_dispatch_state_unknown_id_raises(tmp_path: Path) -> None:
+    ledger, _ = _seed_one(tmp_path)
+    with pytest.raises(ValueError):
+        ledger.set_dispatch_state("sha256:doesnotexist", "dispatched")
+
+
+def test_not_merged_terminal_state(tmp_path: Path) -> None:
+    """v1 records a failed/unmerged follow-up as 'not_merged'."""
+    ledger, fid = _seed_one(tmp_path)
+    ledger.set_dispatch_state(fid, "dispatched", bl_id="BL-X", run_id="r1")
+    out = ledger.set_dispatch_state(fid, "not_merged")
+    assert out.dispatch_state == "not_merged"
+    assert out.dispatch_merged_sha is None
+
+
+def test_dispatch_fields_survive_jsonl_roundtrip(tmp_path: Path) -> None:
+    """to_jsonl/from_jsonl preserve the new fields."""
+    ledger, fid = _seed_one(tmp_path)
+    ledger.set_dispatch_state(
+        fid, "merged", bl_id="BL-Y", run_id="r9", merged_sha="deadbee",
+    )
+    line = ledger.list_all()[0].to_jsonl()
+    back = Finding.from_jsonl(line)
+    assert back.dispatch_state == "merged"
+    assert back.dispatch_bl_id == "BL-Y"
+    assert back.dispatch_run_id == "r9"
+    assert back.dispatch_merged_sha == "deadbee"
+
+
+def test_legacy_ledger_line_without_dispatch_fields_loads(tmp_path: Path) -> None:
+    """Backward compat: a ledger line written before ABL-0015 (no
+    dispatch_* keys) must load via from_jsonl with the fields defaulting
+    to None — proving old ledgers are not corrupted by the schema bump."""
+    legacy = {
+        "finding_id": "sha256:legacy",
+        "run_id": "r0",
+        "feature_slug": "feat_a",
+        "journey_id": "01",
+        "journey_kind": "api",
+        "classification": "product_bug",
+        "evidence_summary": "old finding",
+        "report_path": "p0",
+        "first_seen_ts": "2026-06-01T00:00:00Z",
+        "last_seen_ts": "2026-06-01T00:00:00Z",
+        "seen_count": 1,
+        "verdict": "confirmed",
+        "verdict_ts": "2026-06-01T01:00:00Z",
+        "verdict_note": None,
+    }
+    f = Finding.from_jsonl(json.dumps(legacy))
+    assert f.dispatch_state is None
+    assert f.dispatch_merged_sha is None
+    # and a legacy line on disk loads + is dispatchable
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    ledger._ensure_parent()
+    ledger.path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+    updated = ledger.set_dispatch_state("sha256:legacy", "dispatched")
+    assert updated.dispatch_state == "dispatched"

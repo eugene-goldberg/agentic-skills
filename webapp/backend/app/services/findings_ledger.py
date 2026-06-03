@@ -26,11 +26,14 @@ the tuple ``(repo, feature_slug, journey_id, classification,
 evidence_summary[:200])`` and is therefore stable across runs.
 
 Verdicts (``confirmed`` / ``refuted`` / ``deferred``) are written by
-``set_verdict``, called from the AppV2 triage UI (Batch D, not yet
-shipped).
+``set_verdict``, called from the AppV2 triage UI.
 
-This batch has zero call sites — the module is dormant until Batch B
-wires it into the acceptance flow. Schema changes are free until then.
+ABL-0015 Batch A adds an auto-dispatch lifecycle: five nullable
+``dispatch_*`` fields and ``set_dispatch_state``. ``dispatch_state`` is
+the idempotency key (R15: a finding is dispatched at most once) that the
+auto-dispatch selector reads to avoid re-spawning a follow-up engineer on
+a finding already in flight or merged. See
+``ABL-0015_AUTO_DISPATCH_DESIGN.md`` §4.
 """
 from __future__ import annotations
 
@@ -46,6 +49,17 @@ VALID_CLASSIFICATIONS = frozenset({
     "product_bug", "test_bug", "data_bug", "infra_bug", "uncertain",
 })
 VALID_VERDICTS = frozenset({"confirmed", "refuted", "deferred"})
+
+# ABL-0015 Batch A: dispatch-state lifecycle for the auto-dispatch
+# follow-up engineer. ``None`` means never dispatched. ``dispatched`` is
+# the in-flight marker set BEFORE _engineer_flow spawns (the idempotency
+# key — see R15). Terminal v1 states are ``merged`` / ``not_merged``; the
+# finer ``gate_failed`` / ``doctrine_failed`` split and ``skipped_cap``
+# (cost-cap hit before spawn) are reserved for post-calibration use.
+VALID_DISPATCH_STATES = frozenset({
+    "dispatched", "merged", "not_merged",
+    "gate_failed", "doctrine_failed", "skipped_cap",
+})
 
 # Truncation cap for evidence_summary contribution to finding_id.
 # Beyond this the hash hits diminishing returns and a long stack trace
@@ -116,6 +130,14 @@ class Finding:
     verdict: Optional[str] = None
     verdict_ts: Optional[str] = None
     verdict_note: Optional[str] = None
+    # ABL-0015 Batch A: auto-dispatch remediation state. All nullable +
+    # defaulted so existing ledgers (written before this batch) load
+    # unchanged via ``from_jsonl`` → ``cls(**d)``.
+    dispatch_state: Optional[str] = None       # see VALID_DISPATCH_STATES
+    dispatch_bl_id: Optional[str] = None        # synthetic BL id (I-4 trace)
+    dispatch_run_id: Optional[str] = None       # sprint run that dispatched
+    dispatch_merged_sha: Optional[str] = None   # merge SHA if the fix landed
+    dispatch_ts: Optional[str] = None           # ISO-8601 UTC, dispatch start
 
     def to_jsonl(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))
@@ -251,6 +273,57 @@ class FindingsLedger:
                 target.verdict = verdict
                 target.verdict_ts = _now_iso()
                 target.verdict_note = note
+                self._write_all_unlocked(current)
+                return target
+            finally:
+                fcntl.flock(lockfh.fileno(), fcntl.LOCK_UN)
+
+    def set_dispatch_state(
+        self,
+        finding_id: str,
+        state: str,
+        *,
+        bl_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        merged_sha: Optional[str] = None,
+    ) -> Finding:
+        """ABL-0015: record a finding's auto-dispatch lifecycle state.
+
+        Mirrors ``set_verdict``'s exclusive-locked read-modify-write.
+        ``dispatch_ts`` is stamped only on the transition INTO
+        ``dispatched`` (the dispatch start); later terminal-state updates
+        (``merged``/``not_merged``/…) preserve it. ``bl_id``/``run_id``/
+        ``merged_sha`` are written only when provided (non-None), so a
+        terminal update need not re-supply the bl_id set at dispatch.
+
+        Raises ``ValueError`` on an invalid state or unknown finding_id.
+        """
+        if state not in VALID_DISPATCH_STATES:
+            raise ValueError(
+                f"invalid dispatch state {state!r}; expected one of "
+                f"{sorted(VALID_DISPATCH_STATES)}"
+            )
+        self._ensure_parent()
+        with self.path.open("a+", encoding="utf-8") as lockfh:
+            fcntl.flock(lockfh.fileno(), fcntl.LOCK_EX)
+            try:
+                current = self._read_all_unlocked()
+                target: Optional[Finding] = None
+                for f in current:
+                    if f.finding_id == finding_id:
+                        target = f
+                        break
+                if target is None:
+                    raise ValueError(f"unknown finding_id {finding_id!r}")
+                target.dispatch_state = state
+                if state == "dispatched":
+                    target.dispatch_ts = _now_iso()
+                if bl_id is not None:
+                    target.dispatch_bl_id = bl_id
+                if run_id is not None:
+                    target.dispatch_run_id = run_id
+                if merged_sha is not None:
+                    target.dispatch_merged_sha = merged_sha
                 self._write_all_unlocked(current)
                 return target
             finally:
