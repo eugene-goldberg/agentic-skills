@@ -1,8 +1,10 @@
 ---
 name: arch-acceptance-agent
 description: ABL-0014 Acceptance Agent — OPERATIONAL since 2026-05-31; Items 1+2 (API-acceptance + UI-coverage check) landed 2026-06-01 across Batches A/B/C/D. UI journeys exercise what users can reach; api_journeys exercise every merged backend BL via authenticated portal client; sprint_complete carries coverage_subtype (full|partial) and ratio. Closes A46 (per-BL isolation gap; Client_Portal sprint proof point) and Item 1/2 (backend-without-UI assurance + operator visibility).
-metadata:
+metadata: 
+  node_type: memory
   type: project
+  originSessionId: 68d7b58a-c1db-43e1-bf9a-cac442cd4c1d
 ---
 
 ## Status
@@ -17,7 +19,9 @@ metadata:
 - **Item 1 Batch B** (orchestrator computes backend_bls via `_compute_backend_bls`, threads through `_build_acceptance_task` + `validate_acceptance`, `RunAcceptanceRequest.backend_bls_override`, 9 new tests): SHIPPED at `3cc52ca`.
 - **Item 2 Batch C** (UI-coverage check at sprint_complete; `_compute_ui_coverage`; `RunBriefRequest.min_ui_coverage_ratio: float = 0.0`; new `orchestrator.coverage_check` event + `coverage_subtype` on sprint_complete; 7 new tests): SHIPPED at `25a8d33`.
 - **Item 2 Batch D** (frontend AppV2 coverage tile + min_ui_coverage_ratio input + backend_bls surfacing on acceptance tile + HARNESS.md §5.6.2 split into §5.6.2.1 API Acceptance + §5.6.2.2 UI-coverage + this memory): SHIPPED in current commit.
-- **Test posture**: 94/94 backend pass after Batch D (was 64 pre-Item-1).
+- **Test posture**: 176/176 backend pass after the 2026-06-02 work (was 94 after Batch D).
+- **§I.3 (production-ready ledger) all 5 batches SHIPPED + extractor gap closed** 2026-06-01..02 (`e9e7847`, `92295f1`, `3994a12`, `ba4c4ba`, `dab73cb`, `17919a8`). The extractor now persists `pass_with_caveat` journeys via the `caveat` object — a real `product_bug` from financial-management Journey 03 sits in `_brownfield/features/financial-management/acceptance/findings_log.jsonl` as the first verdict-eligible row.
+- **Financial_Management 12/12 BL delivery** 2026-06-02. End-to-end autonomous brownfield feature delivery (REQ-0701..0705 Billing/Invoicing). Acceptance verdict PASS-with-caveat — 4/4 UI + 10/10 API journeys green, with the Journey 03 cross-BL bug (UI Edit PUT bypasses BL-0005 state machine) caught. **Canonical proof point that the acceptance agent works as designed.** Archive: `webapp/backend/traces_archive/run-20260602T143035Z-c5868e/acceptance/`
 
 ## Why the role exists
 Operator critique 2026-05-30: regression-clean gates ≠ functionality tested end-to-end as a real user would. Per-BL QA is structurally limited because it tests one BL in isolation and cannot exercise cross-BL user journeys. Real teams hand off to a UAT pass after dev-done; the framework needs an analog.
@@ -61,12 +65,17 @@ Operator critique 2026-05-30: regression-clean gates ≠ functionality tested en
 BL-0007 REQ-0502: superuser self-approval test exposed a real cross-component bug (ReviewTimesheet keeps dialog open on error → Radix Dialog sets aria-hidden on sibling content → queue rows vanish from a11y tree). QA's 3 R10 retries couldn't fix it because QA cannot request an engineer-side UX change. Test is now `.skip`'d. Acceptance Agent would have classified this as `product_bug` with operator visibility at sprint close instead of silent skip.
 
 ## Open follow-ups
-- **Calibration smokes for Item 1 (API-acceptance path)**: Batch B proof-point in flight against Client_Portal sprint. Two more clean runs required before Item 1 can be declared "operational" with same confidence as UI-only ABL-0014.
-- **ABL-0015 (still deferred)**: auto-dispatch follow-up engineer on `product_bug` findings — closes the find→fix loop.
-- **A48 pre-flight disk-free check** — filed but not yet implemented; acceptance runs are heavy on docker volume churn.
-- **Acceptance trace observability gaps** (filed informally): no `retrieval.jsonl`, no `phase_events.jsonl`, tool invocations don't show in `stream.jsonl`. Currently a black box for diagnostics.
-- **Findings feedback ledger**: no mechanism today to bound the agent's false-positive rate over multi-sprint windows.
-- Retrieval MCP wiring (currently `allowed_tools="Bash,Read,Write,Edit"`; agent uses pre-existing test helpers via Read).
+**RESOLVED by 2026-06-02:**
+- ✅ Item 1 calibration smokes: 3/3 clean.
+- ✅ §I.3 findings ledger Batches A-E + extractor gap closed.
+- ✅ A48 disk leaks: 4-fix shipment (pre-flight, volume reaper, DiskFull classifier, worktree-spawned-compose reap + SIGTERM handler + lowercase acceptance name). See [[arch-disk-leak-fixes]].
+
+**STILL OPEN:**
+- §I.4 ABL-0015 auto-dispatch — unblocked, Journey 03 finding is first dispatch test case.
+- §I.2 acceptance trace observability gaps (retrieval.jsonl, phase_events.jsonl, tool_use in stream.jsonl).
+- §I.5 Django multi-target smoke.
+- Force-kill worktree leak: Fix #3 reaps Docker but NOT git worktrees on uvicorn SIGTERM. Use Ctrl+C, not kill -9.
+- Retrieval MCP wiring (currently `allowed_tools="Bash,Read,Write,Edit"`).
 
 ## Item 1+2 design rationale (Batch D consolidated)
 
