@@ -48,6 +48,16 @@ last sprint. Fixing that is the highest-leverage move.
 
 ### Stage 1 — Lessons-as-retrieval (highest leverage, lowest new-architecture risk)
 
+> **Turned into a plan: [`ABL-0016_LESSONS_AS_CONTEXT.md`](ABL-0016_LESSONS_AS_CONTEXT.md)**
+> (drafted on branch `cumulative_learning` after the seam verification pass).
+> Two refinements the verification surfaced: (1) v1 ships **Option A**
+> (prompt-injection lessons block, the proven §I.3 analog) and defers
+> **Option B** (indexing lessons into Milvus for files-in-scope semantic
+> relevance) to Stage 1.5; (2) v1 is **target-scoped** (union across all
+> feature ledgers in the target), not feature-scoped — because the findings
+> ledger is per-feature and written at sprint end, so the real value is
+> cross-feature memory on the same target.
+
 Generalize the findings ledger into a per-target **Lessons store**:
 confirmed acceptance findings + recurring gate failures + accepted doctrine
 rules + blast-radius hotspots. Then wire it into the **retrieval layer** so
