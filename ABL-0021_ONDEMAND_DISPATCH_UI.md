@@ -1,6 +1,6 @@
 # ABL-0021 — Operator-facing on-demand follow-up dispatch ("Dispatch fix")
 
-> **Status: Batch A (backend) shipped; Batch B (frontend) next.**
+> **Status: COMPLETE — Batch A (backend) + Batch B (frontend) shipped.**
 > Author: architect. Date: 2026-06-03. Branch: `followup-dispatch-ui`.
 > The operator-control surface ABL-0015's dispatch engine was missing.
 
@@ -58,8 +58,17 @@ point and an HTTP/SSE surface.
   faked engine + bad-slug). Existing inline dispatch tests still green
   (refactor preserved behavior). 254/254 backend pass.
 
-### Batch B — frontend (NEXT)
+### Batch B — frontend (SHIPPED)
 
+`webapp/frontend/src/AppV2.jsx` FindingsTriagePanel — implemented: each
+finding now shows a `fix: <dispatch_state>` badge; confirmed product_bugs
+with no dispatch_state show a **"🛠 Dispatch fix"** button that POSTs to
+`/dispatch-followup` and streams progress via `streamPost`, then refetches;
+terminal outcome (merged + sha / awaiting-review / error) rendered inline.
+`vite build` clean (33 modules). PROJECT_STATE.md updated. No frontend test
+infra (per CLAUDE.md) — manual smoke is the verification path.
+
+Original spec:
 `webapp/frontend/src/AppV2.jsx` FindingsTriagePanel:
 - Surface each finding's `dispatch_state` (the ledger already carries
   `dispatch_state`/`dispatch_bl_id`/`dispatch_merged_sha` from ABL-0015

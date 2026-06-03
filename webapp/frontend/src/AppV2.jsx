@@ -659,6 +659,9 @@ function FindingsTriagePanel({ repo, featureSlug }) {
   const [inflight, setInflight] = useState(() => new Set());
   const [noteByFid, setNoteByFid] = useState({});
   const [expanded, setExpanded] = useState(() => new Set());
+  // ABL-0021: per-finding on-demand "Dispatch fix" state.
+  const [dispatching, setDispatching] = useState(() => new Set());
+  const [dispatchLog, setDispatchLog] = useState({}); // fid -> {phase, outcome, merged_sha, error}
 
   async function refetch() {
     setLoading(true); setError(null);
@@ -714,6 +717,36 @@ function FindingsTriagePanel({ repo, featureSlug }) {
     }
   }
 
+  // ABL-0021: spawn a follow-up engineer on-demand for a confirmed
+  // product_bug. Reuses the ABL-0015 dispatch engine via POST
+  // /dispatch-followup; streams acceptance.followup.* + engineer sub-events.
+  async function dispatchFix(finding_id) {
+    setDispatching((prev) => { const n = new Set(prev); n.add(finding_id); return n; });
+    setDispatchLog((p) => ({ ...p, [finding_id]: { phase: "starting…" } }));
+    setError(null);
+    try {
+      const url = `${API}/api/projects/${encodeURIComponent(repo)}/dispatch-followup`;
+      for await (const ev of streamPost(url, { feature_slug: featureSlug, finding_id })) {
+        if (ev.type === "_error") {
+          setDispatchLog((p) => ({ ...p, [finding_id]: { ...(p[finding_id] || {}), error: ev.error } }));
+          continue;
+        }
+        const phase = (ev.phase || ev.type || "").replace(/^orchestrator\./, "");
+        const upd = { phase };
+        if (phase === "acceptance.followup.done") {
+          upd.outcome = ev.outcome;
+          upd.merged_sha = ev.merged_sha;
+        }
+        setDispatchLog((p) => ({ ...p, [finding_id]: { ...(p[finding_id] || {}), ...upd } }));
+      }
+      await refetch(); // reflect the new dispatch_state in the ledger
+    } catch (e) {
+      setDispatchLog((p) => ({ ...p, [finding_id]: { ...(p[finding_id] || {}), error: e.message || String(e) } }));
+    } finally {
+      setDispatching((prev) => { const n = new Set(prev); n.delete(finding_id); return n; });
+    }
+  }
+
   function toggleExpand(fid) {
     setExpanded((prev) => {
       const n = new Set(prev);
@@ -761,6 +794,11 @@ function FindingsTriagePanel({ repo, featureSlug }) {
       {findings.map((f) => {
         const isInflight = inflight.has(f.finding_id);
         const isExpanded = expanded.has(f.finding_id);
+        const isDispatching = dispatching.has(f.finding_id);
+        const dlog = dispatchLog[f.finding_id];
+        const canDispatch = f.verdict === "confirmed"
+                            && f.classification === "product_bug"
+                            && !f.dispatch_state;
         const bg = CLASSIFICATION_BG[f.classification] || "#2a2a2a";
         const evidenceShort = (f.evidence_summary || "").slice(0, 200);
         const evidenceTrunc = (f.evidence_summary || "").length > 200;
@@ -790,6 +828,16 @@ function FindingsTriagePanel({ repo, featureSlug }) {
                   padding: "2px 8px", borderRadius: 3, fontSize: 11,
                 }}>
                   {f.verdict} · {f.verdict_ts}
+                </span>
+              )}
+              {f.dispatch_state && (
+                <span style={{
+                  background: f.dispatch_state === "merged" ? "#1f3b1f"
+                            : f.dispatch_state === "dispatched" ? "#2a2a3b"
+                            : "#3b2f1f",
+                  padding: "2px 8px", borderRadius: 3, fontSize: 11,
+                }} title="ABL-0015/0021 follow-up dispatch state">
+                  fix: {f.dispatch_state}
                 </span>
               )}
               {f.seen_count > 1 && (
@@ -855,6 +903,45 @@ function FindingsTriagePanel({ repo, featureSlug }) {
                   {isInflight && <span style={{ opacity: 0.7, fontSize: 11 }}>…submitting</span>}
                 </div>
               </>
+            )}
+
+            {/* ABL-0021: on-demand "Dispatch fix" for a confirmed product_bug.
+                Two-step per-finding: Confirm (above) then Dispatch fix here. */}
+            {canDispatch && (
+              <div className="v2-row" style={{ gap: 6, marginTop: 6, alignItems: "center" }}>
+                <button
+                  onClick={() => dispatchFix(f.finding_id)}
+                  disabled={isDispatching}
+                  className="v2-primary"
+                  style={{ fontSize: 11, padding: "4px 10px" }}
+                  title="Spawn a follow-up engineer to fix this confirmed bug. It clears the same regression gate + auto-merge bar as any BL (ABL-0015 engine)."
+                >{isDispatching ? "Dispatching…" : "🛠 Dispatch fix"}</button>
+                {dlog && dlog.phase && !dlog.outcome && !dlog.error && (
+                  <span style={{ opacity: 0.7, fontSize: 11 }}>{dlog.phase}</span>
+                )}
+              </div>
+            )}
+
+            {dlog && dlog.outcome && (
+              <div style={{
+                fontSize: 11, marginTop: 6, padding: "4px 8px", borderRadius: 3,
+                background: dlog.outcome === "merged" ? "#1f3b1f" : "#3b2f1f",
+              }}>
+                {dlog.outcome === "merged"
+                  ? `✅ fix merged${dlog.merged_sha ? ` · ${String(dlog.merged_sha).slice(0, 8)}` : ""}`
+                  : "⚠ follow-up did not merge — left for review"}
+              </div>
+            )}
+            {dlog && dlog.error && (
+              <div style={{ fontSize: 11, marginTop: 6, padding: "4px 8px", borderRadius: 3, background: "#3b1f1f" }}>
+                ❌ dispatch failed: {dlog.error}
+              </div>
+            )}
+            {f.dispatch_merged_sha && (
+              <div style={{ fontSize: 11, marginTop: 4, opacity: 0.8 }}>
+                merged sha: <code>{String(f.dispatch_merged_sha).slice(0, 12)}</code>
+                {f.dispatch_bl_id ? ` · ${f.dispatch_bl_id}` : ""}
+              </div>
             )}
 
             <div style={{ marginTop: 6, opacity: 0.5, fontSize: 10, fontFamily: "monospace" }}>

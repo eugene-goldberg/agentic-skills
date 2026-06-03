@@ -355,3 +355,28 @@ The chat env files (`.env.kimi`, `.env.gpt54`) are no longer used by the webapp 
 ### Current target
 
 `full-stack-fastapi-template` (cloned to `~/dev/ai-projects/brownfield-targets/full-stack-fastapi-template`, symlinked into `webapp/backend/repos/`). BL-0001 cycle complete; see `BROWNFIELD_PROGRESS.md` at the repo root for current scorecard, commit shas, and next BLs.
+
+### Findings triage + on-demand fix dispatch (ABL-0014 §I.3 / ABL-0015 / ABL-0021)
+
+After a sprint's acceptance pass, cross-BL findings land in a per-feature
+ledger (`_brownfield/features/<slug>/acceptance/findings_log.jsonl`). The
+operator reviews and acts on them from the **FindingsTriagePanel** in
+`frontend/src/AppV2.jsx` (opens in the detail rail when an acceptance tile
+has findings). Endpoints:
+
+- `GET  /api/projects/{repo}/findings?feature_slug=…&status=pending|all` —
+  list findings.
+- `POST /api/projects/{repo}/verdict` `{feature_slug, finding_id, verdict,
+  note}` — record `confirmed | refuted | deferred`.
+- `POST /api/projects/{repo}/dispatch-followup` `{feature_slug, finding_id,
+  timeout_seconds}` — **ABL-0021** on-demand: spawn a follow-up engineer to
+  fix a **confirmed product_bug** (SSE-streamed `acceptance.followup.*` +
+  engineer sub-events). Pre-validates eligibility (404 unknown / 409
+  not-eligible / 409 already-dispatched, R15). Reuses the ABL-0015 dispatch
+  engine — the fix clears the same regression-gate + auto-merge bar as any BL.
+
+**Operator flow (two-step, per-finding):** sprint lands → panel shows
+exposed findings → **Confirm** (verdict) → a **"Dispatch fix"** button
+appears on confirmed product_bugs → click dispatches that finding and
+streams progress; the card then shows `fix: dispatched|merged` + merged sha.
+Default-safe: dispatch requires an explicit confirmed verdict + button press.
