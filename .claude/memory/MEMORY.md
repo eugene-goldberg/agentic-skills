@@ -20,7 +20,7 @@
 - [Arch I-7: self-hardening](arch_self_hardening.md) — doctrine-meta-agent proposes; operator approves; never auto-merges
 - [Claude's architect role](arch_claude_role.md) — operator directive 2026-05-23: Claude is the architect with delivery accountability; codified in CLAUDE.md
 - [Mission framing](arch_mission_framing.md) — operator correction 2026-05-23: mission is the autonomous synthetic crew itself, not operator-time metrics; metrics are symptoms
-- [Active work branch](arch_active_branch.md) — `cumulative_learning` (ABL-0016 lessons-as-context A–C shipped flag-OFF; built on architect-prereqs' ABL-0015; two operator smokes open; next = ABL-0017 Stage 2)
+- [Active work branch](arch_active_branch.md) — `followup-dispatch-ui` (ABL-0021 on-demand Dispatch-fix UI complete; built on cumulative_learning's ABL-0016/0020 + architect-prereqs' ABL-0015). NEXT SESSION GOAL: run a live sprint via the web UI, observe/react to findings, review/approve immediate fixes
 - [Intelligent Kanban sprint](arch_intelligent_kanban_sprint.md) — first non-Documents brownfield sprint; `run-20260528T144444Z-e4ba3d` on target branch `intelligent_kanban`; 3/7 BLs merged at 4h28m snapshot
 - [Project evaluation 2026-05-28](arch_evaluation_2026-05-28.md) — ~40% of thesis (the right 40%); worker-loop works, crew brain unbuilt; Batch E (I-2 tightening) + G (hygiene) proposed in ARCHITECT_PLAN §9, awaiting operator auth
 - [Gate throughput bottleneck](arch_gate_throughput.md) — playwright 79-test gate at 1 worker, PRE+POST per BL = 80-160 min/BL; A28-A31 in ledger for workers/sharding/TIA/tiered gates
@@ -29,5 +29,6 @@
 - [Auto-dispatch (ABL-0015)](arch_auto_dispatch.md) — §I.4 code batches A–D shipped flag-OFF; selector+invoker over unchanged _engineer_flow; R15; only operator-gated Batch E live smoke remains
 - [Cumulative learning (ABL-0016→0019)](arch_cumulative_learning.md) — 4-stage program for the mission's "cumulative" property; Stage 1 lessons-as-context A–C shipped flag-OFF on `cumulative_learning`; advisory, target-scoped, no new R-rule; calibration smoke + Stages 2–4 ahead
 - [Doctrine-spec registry (ABL-0020)](arch_doctrine_spec_registry.md) — keystone that fulfills the standing I-2 mandate (doctrine_spec.py + meta-test + CI consistency guard) + per-run doctrine_manifest; complete; unblocked ABL-0017 Stage 2
+- [On-demand dispatch UI (ABL-0021)](arch_ondemand_dispatch_ui.md) — operator "Dispatch fix" button + POST /dispatch-followup; closes triage-UI ↔ ABL-0015-engine seam; complete on `followup-dispatch-ui`; live click-through is next session's focus
 - [A48 disk-leak fixes](arch_disk_leak_fixes.md) — 4 shipped fixes (`02ebd7b`); Docker.raw 60 GB Mac VM cap and the four leak classes it closes; force-kill worktree-leak open gap
 - [Pre-flight checklist](../../../../dev/ai-projects/agentic-skills/PREFLIGHT.md) — PF-1..10 verifiable artifacts; run before every sprint launch

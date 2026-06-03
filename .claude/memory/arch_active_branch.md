@@ -1,38 +1,42 @@
 ---
 name: arch-active-branch
-description: cumulative_learning (2026-06-03 handoff). ABL-0016 lessons-as-context (A–C, flag-OFF) + ABL-0020 doctrine-spec registry (COMPLETE, fulfills I-2). ABL-0017 Stage-2 efficacy unblocked & Batch-0 done. Built on architect-prereqs' ABL-0015 (flag-OFF). Two operator smokes open.
+description: followup-dispatch-ui (2026-06-03 handoff). ABL-0021 on-demand "Dispatch fix" UI COMPLETE, built atop cumulative_learning (ABL-0016/0020) + architect-prereqs (ABL-0015). NEXT SESSION GOAL = operator runs a live sprint via the web UI, observes/reacts to findings, reviews/approves immediate fixes.
 metadata:
   type: project
 ---
 
 ## State at 2026-06-03
 
-- **Current branch:** `cumulative_learning` synced with origin, tip `db7d8d7`
-- **ABL-0020 doctrine-spec registry — COMPLETE** (keystone, fulfills I-2):
-  `624886f` A (registry+meta-test), `016ef5c` B (per-run manifest),
-  `db7d8d7` C (consistency guard + I-2 marked fulfilled). See
+- **Current branch:** `followup-dispatch-ui` synced with origin, tip `3db7705`.
+  Branched off `cumulative_learning`, so it carries ABL-0016 + ABL-0020 too.
+- **ABL-0021 on-demand Dispatch-fix UI — COMPLETE:** `8bfbec7` A (backend
+  `POST /dispatch-followup` + `_dispatch_one_followup` refactor), `3db7705`
+  B (FindingsTriagePanel button + dispatch_state badge). See
+  [[arch-ondemand-dispatch-ui]].
+- **ABL-0020 doctrine-spec registry — COMPLETE** (fulfills I-2): see
   [[arch-doctrine-spec-registry]].
-- **ABL-0016 lessons-as-context (Stage 1, flag-OFF):** `512a1c5` C,
-  `294f725` B, `eb20d6f` A (+ plan/roadmap commits). See
+- **ABL-0016 lessons-as-context (Stage 1, flag-OFF):** see
   [[arch-cumulative-learning]].
-- **ABL-0017 Stage 2:** Batch 0 done (`fab3a0e`), unblocked by ABL-0020.
-- **`architect-prereqs` (separate branch):** ABL-0015 auto-dispatch A–D
-  flag-OFF — see [[arch-auto-dispatch]].
+- **ABL-0017 Stage 2 efficacy:** Batch 0 done, unblocked by ABL-0020.
+- **ABL-0015 auto-dispatch (architect-prereqs, flag-OFF):** see
+  [[arch-auto-dispatch]].
 
-## Test posture: 248/248 backend pass (scoped `cd webapp/backend && pytest tests/`)
+## Test posture: 254/254 backend pass (scoped `cd webapp/backend && pytest tests/`); `vite build` clean
 
-## Two open operator-gated calibration smokes (architect cannot run)
+## ⭐ NEXT SESSION GOAL (operator-stated)
+**Run a NEW sprint via the web app UI, observe/react to any findings, and
+review/approve immediate engineering fixes (the ABL-0021 "Dispatch fix"
+flow).** This is a live operator-driven session — architect supports:
+pre-flight (PREFLIGHT.md), launch via the UI, watch the SSE stream, then
+exercise the findings triage panel → Confirm → Dispatch fix. To enable
+auto-dispatch behavior also consider flag `run_acceptance_followup` /
+`inject_lessons`, but the headline is the on-demand Dispatch-fix path which
+needs no flag.
 
-1. ABL-0016 lessons: sprint with `inject_lessons=true` on a target with
-   prior confirmed findings → block renders + provenance written.
-2. ABL-0015 Batch E: verdict Journey 03 confirmed → sprint with
-   `run_acceptance_followup=true` → one clean dispatch.
-
-## Next architect-doable: ABL-0017 Stage 2 efficacy (now unblocked)
-Both input halves persist per run (`bl_outcomes` + `doctrine_manifest`).
-Proceed to design/batches per CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md §4:
-outcome-label deriver → rule-efficacy index → `retire` proposal kind →
-calibration. Medium-fidelity (A13 per-rule triggers deferred).
+## Deferred architect-doable (after the live session)
+ABL-0017 Stage 2 efficacy (unblocked): outcome-label deriver → rule-efficacy
+index → `retire` proposal kind → calibration. Plus the two flag-flip
+calibration smokes (ABL-0016 lessons, ABL-0015 Batch E).
 
 ## Active target: full-stack-fastapi-template
 
