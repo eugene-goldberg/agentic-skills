@@ -381,6 +381,29 @@ async def _po_flow(
                 pass
 
 
+def _resolve_engineer_section(
+    repo_dir: Path,
+    bl_id: str,
+    feature_slug: str | None,
+    section_override: str | None,
+) -> str:
+    """Resolve the bl_section fed to ``build_engineer``.
+
+    ABL-0015: when ``section_override`` is provided (auto-dispatch
+    follow-up), use it verbatim and skip the BACKLOG lookup entirely — a
+    synthetic ``BL-ACCEPT-…`` has no BACKLOG entry, so
+    ``extract_section`` would fail. Overriding only the *section* (not the
+    whole prompt) keeps every doctrine scaffold from
+    ``build_engineer_prompt_brownfield`` intact (eng_patterns.md artifact
+    path, retrieval-grounding, R5b citations), so the follow-up engineer
+    clears ``validate_engineer`` on the same terms as any BL.
+    """
+    if section_override is not None:
+        return section_override
+    bf = backlog_svc.find_backlog(repo_dir, feature_slug=feature_slug)
+    return backlog_svc.extract_section(bf.read_text(encoding="utf-8"), bl_id)
+
+
 async def _engineer_flow(
     repo_dir: Path,
     repo_name: str,
@@ -390,11 +413,11 @@ async def _engineer_flow(
     *,
     run_id: str | None = None,
     feature_slug: str | None = None,
+    section_override: str | None = None,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
-    bf = backlog_svc.find_backlog(repo_dir, feature_slug=feature_slug)
-    section = backlog_svc.extract_section(bf.read_text(encoding="utf-8"), bl_id)
+    section = _resolve_engineer_section(repo_dir, bl_id, feature_slug, section_override)
     prompt = prompts_svc.build_engineer(family, bl_id, section, repo_dir, feature_slug=feature_slug)
 
     wt: Worktree | None = None
@@ -1140,6 +1163,146 @@ def _archive_acceptance_dir(acceptance_dir: Path, run_id: str) -> Path | None:
         return None
 
 
+# ─── ABL-0015 auto-dispatch follow-up engineer ─────────────────────────────
+# §9 Decision 2: v1 dispatches at most one follow-up per sprint. Bump (or
+# make operator-configurable) only after calibration. The framework's
+# highest-risk action stays small until proven.
+FOLLOWUP_COST_CAP = 1
+
+
+def _select_followup_candidates(findings, *, cost_cap=FOLLOWUP_COST_CAP):
+    """Pure selector for auto-dispatch. Returns (to_dispatch, capped).
+
+    §9 Decision 1 (conservative gate): only operator-CONFIRMED
+    ``product_bug`` findings are eligible. R15 idempotency: a finding with
+    any non-null ``dispatch_state`` is excluded, so a re-run never
+    re-spawns on a finding already dispatched/merged.
+    """
+    eligible = [
+        f for f in findings
+        if f.classification == "product_bug"
+        and f.dispatch_state is None
+        and f.verdict == "confirmed"
+    ]
+    to_dispatch = eligible[:cost_cap]
+    capped = len(eligible) - len(to_dispatch)
+    return to_dispatch, capped
+
+
+def _followup_hypothesis(finding) -> str:
+    """Best-effort: pull the classifier's file-location hypothesis for this
+    finding's journey from its source report.json. The hypothesis is not
+    persisted on the ledger (only the summary is, for stable hashing), so
+    we re-read it here to hand the engineer a starting site. Returns "" on
+    any error — the engineer grounds its own retrieval regardless."""
+    try:
+        report = json.loads(Path(finding.report_path).read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    for key in ("ui_journeys", "api_journeys", "journeys"):
+        for j in report.get(key, []) or []:
+            if not isinstance(j, dict):
+                continue
+            if str(j.get("id") or j.get("journey_id") or "") != finding.journey_id:
+                continue
+            caveat = j.get("caveat") if isinstance(j.get("caveat"), dict) else {}
+            failure = j.get("failure") if isinstance(j.get("failure"), dict) else {}
+            for src in (j, caveat, failure):
+                h = src.get("hypothesis")
+                if isinstance(h, str) and h.strip():
+                    return h.strip()
+    return ""
+
+
+def _build_followup_section(finding, *, hypothesis: str = "") -> str:
+    """Build the bl_section for a follow-up engineer (fed to build_engineer
+    in place of a BACKLOG entry). Compensates for the absent PO per-BL
+    context by making the finding the authoritative scope."""
+    hyp_block = (
+        f"\n### Classifier hypothesis (likely site — verify before trusting)\n{hypothesis}\n"
+        if hypothesis else
+        "\n### Classifier hypothesis\n(none recorded — ground the site yourself via retrieval)\n"
+    )
+    return f"""## Remediation task — auto-dispatched from acceptance ({finding.finding_id})
+
+This is a FOLLOW-UP fix for a cross-BL integration defect the acceptance
+agent found on journey {finding.journey_id} ({finding.journey_kind}). It
+was NOT decomposed by the PO, so the usual
+`_brownfield/<bl_id>/codebase_context.md` will be ABSENT — treat the
+defect summary and hypothesis below as your authoritative scope, and
+ground them with your own retrieval before editing.
+
+### Defect summary
+{finding.evidence_summary}
+{hyp_block}
+### Source of record
+Acceptance report: {finding.report_path}
+
+### Your job
+Fix the defect above following the binding doctrine below. Keep the change
+additive and regression-safe — the same regression gate that guards every
+BL guards this one. Write your `eng_patterns.md` artifact as required.
+"""
+
+
+async def _dispatch_followup_engineers(
+    repo_dir: Path,
+    repo_name: str,
+    run_id: str,
+    feature_slug: str,
+    retrieval_kwargs_builder,
+    *,
+    timeout: int,
+) -> AsyncIterator[dict]:
+    """ABL-0015 Batch C: select confirmed product_bug findings and spawn a
+    follow-up engineer per candidate (capped). Reuses ``_engineer_flow``
+    unchanged except for the section override — all gate/merge/teardown is
+    the same machinery that guards every BL. Emits
+    ``acceptance.followup.{skipped,start,done}``."""
+    ledger = findings_ledger_svc.FindingsLedger(repo_dir, feature_slug)
+    to_dispatch, capped = _select_followup_candidates(ledger.list_all())
+    if not to_dispatch:
+        yield _evt("acceptance.followup.skipped", run_id=run_id,
+                   feature_slug=feature_slug, reason="no_confirmed_candidates")
+        return
+    for idx, finding in enumerate(to_dispatch):
+        bl_id = f"BL-ACCEPT-{run_id}-{idx}"
+        # R15: stamp dispatched BEFORE the spawn — the idempotency anchor.
+        await asyncio.to_thread(
+            ledger.set_dispatch_state, finding.finding_id, "dispatched",
+            bl_id=bl_id, run_id=run_id,
+        )
+        yield _evt("acceptance.followup.start", run_id=run_id,
+                   finding_id=finding.finding_id, bl_id=bl_id,
+                   classification=finding.classification, verdict=finding.verdict)
+        section = _build_followup_section(
+            finding, hypothesis=_followup_hypothesis(finding),
+        )
+        merged = False
+        merged_sha = None
+        async for ev in _engineer_flow(
+            repo_dir, repo_name, bl_id, timeout, retrieval_kwargs_builder,
+            run_id=run_id, feature_slug=feature_slug, section_override=section,
+        ):
+            if ev.get("phase") == "merge_to_target":
+                merged_sha = ev.get("merged_sha")
+            if ev.get("_orchestrator_outcome"):
+                merged = bool(ev.get("merged"))
+            yield ev
+        state = "merged" if merged else "not_merged"
+        await asyncio.to_thread(
+            ledger.set_dispatch_state, finding.finding_id, state,
+            merged_sha=merged_sha,
+        )
+        yield _evt("acceptance.followup.done", run_id=run_id,
+                   finding_id=finding.finding_id, bl_id=bl_id,
+                   outcome=state, merged_sha=merged_sha)
+    if capped:
+        yield _evt("acceptance.followup.skipped", run_id=run_id,
+                   feature_slug=feature_slug, reason="cost_cap",
+                   cost_cap=FOLLOWUP_COST_CAP, deferred=capped)
+
+
 async def _acceptance_flow(
     repo_dir: Path,
     repo_name: str,
@@ -1412,6 +1575,23 @@ async def _acceptance_flow(
             )
         except Exception:
             pass
+
+    # ABL-0015 Batch C: auto-dispatch a follow-up engineer on confirmed
+    # product_bug findings. Runs AFTER the finally (acceptance worktree +
+    # volumes already reaped) and BEFORE acceptance.done — so the follow-up
+    # worktree is created AND reaped (by _engineer_flow's own finally)
+    # before run_brief's closure_check.scan_all fires. Gated OFF by default
+    # and requires the retrieval builder (Batch B). Advisory: a dispatch
+    # failure must not abort the sprint.
+    if run_acceptance_followup and retrieval_kwargs_builder is not None and feature_slug:
+        try:
+            async for evt in _dispatch_followup_engineers(
+                repo_dir, repo_name, run_id, feature_slug,
+                retrieval_kwargs_builder, timeout=timeout,
+            ):
+                yield evt
+        except Exception as exc:  # noqa: BLE001 — advisory: never abort sprint
+            yield _evt("acceptance.followup.error", run_id=run_id, error=str(exc))
 
     yield _evt(
         "acceptance.done",

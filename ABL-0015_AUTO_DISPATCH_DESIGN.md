@@ -95,10 +95,25 @@ All the dangerous parts (subprocess, gate, merge, teardown) are unchanged.
 **One minimal parameterization is required** (verified, not zero-change):
 `_engineer_flow` builds its prompt from
 `backlog_svc.extract_section(…, bl_id)` (`orchestrator.py:396–398`), and a
-synthetic `BL-ACCEPT-…` has no BACKLOG entry. The fix is a single new
-optional param `prompt_override: str | None = None`; when set,
-`_engineer_flow` skips the backlog lookup and uses the override. The
-dangerous parts stay untouched — this preserves the single-executor
+synthetic `BL-ACCEPT-…` has no BACKLOG entry.
+
+> **DEVIATION (recorded at Batch C, 2026-06-02):** the design originally
+> proposed a `prompt_override` that replaces the whole engineer prompt.
+> Reading `build_engineer` → `build_engineer_prompt_brownfield`
+> (`prompts_brownfield.py:273`) showed that all doctrine scaffolding —
+> the `eng_patterns.md` artifact path, retrieval-grounding, R5b citation
+> requirements — lives *inside* that builder and is keyed on `bl_id`. A
+> raw prompt override would bypass it and the follow-up engineer would
+> fail `validate_engineer`. The correct override is at the **`bl_section`**
+> level: a new `section_override: str | None = None` param that swaps only
+> the task text fed to `build_engineer`, leaving every scaffold intact. As
+> shipped: `_resolve_engineer_section(repo_dir, bl_id, feature_slug,
+> section_override)` returns the override verbatim (skipping the backlog
+> lookup) when set. Because the artifact-path mechanics are identical to a
+> normal BL, whatever lets a normal BL pass `validate_engineer` lets the
+> synthetic one pass too.
+
+The dangerous parts stay untouched — this preserves the single-executor
 property. The doctrine validator needs **no** change: `validate_engineer`
 (`doctrine_validator.py:189`) is generic on `bl_id` — it requires only
 the engineer's own `<art>/<bl_id>/eng_patterns.md` + R5b citations
@@ -188,7 +203,8 @@ merged_sha = None; merged = False
 async for ev in _engineer_flow(repo_dir, repo_name, bl_id,
                                followup_timeout, retrieval_kwargs_builder,
                                run_id=run_id, feature_slug=feature_slug,
-                               prompt_override=build_followup_prompt(f)):
+                               section_override=_build_followup_section(
+                                   f, hypothesis=_followup_hypothesis(f))):
     # capture terminal outcome from the verified event shapes:
     if ev.get("phase") == "merge_to_target":          # orchestrator.py:509
         merged_sha = ev.get("merged_sha")
