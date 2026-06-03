@@ -357,6 +357,13 @@ Endpoints:
 | R15 | acceptance `product_bug` dispatched at most once | auto-dispatch selector (`_select_followup_candidates`) | ABL-0015; `dispatch_state is None` filter on the findings ledger; conservative `verdict=="confirmed"` gate + cost cap 1; flag-OFF until calibrated |
 | Tier 1.5 | pre-modification kill | streaming | <3 grounded calls before Write/Edit → kill |
 
+> This table is mirrored in code by the **doctrine-spec registry**
+> (`webapp/backend/app/services/doctrine_spec.py`, ABL-0020 — the I-2
+> fulfillment). A CI test (`test_doctrine_spec.py`) fails if this prose
+> table and the registry drift, so the registry is the authoritative,
+> machine-readable source of truth. Adding a rule here without adding it to
+> the registry (with an enforcement point + resolvable check) fails CI.
+
 Each rule has an enforcement-point assignment under
 [`ARCHITECTURE_INVARIANTS.md`](ARCHITECTURE_INVARIANTS.md) §I-2. Gaps in
 that table are the A8-class shortcomings.

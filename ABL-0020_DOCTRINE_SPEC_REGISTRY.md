@@ -90,7 +90,7 @@ against `bl_outcomes` (already persisted) + `phase_events`.
 |---|---|---|
 | **A — registry + meta-test** | `doctrine_spec.py` (`DoctrineRule` + `DOCTRINE_SPEC` seeded from the 13 canonical rules) + `test_doctrine_spec.py` (the I-2 meta-test). Dormant — pure data + test, zero behavior change. | meta-test green; registry covers canonical set |
 | **B — per-run manifest** | ✅ SHIPPED — `write_checkpoint` gains a nullable `doctrine_manifest`; `run_brief` builds it once (`doctrine_spec.manifest()` + `traces.harness_sha()`) and writes it on every A7 checkpoint; survives terminate into `done/`. | manifest written + shape asserted; backward-compat null; survives terminate; real `doctrine_spec.manifest()` persists |
-| **C — reconcile + mark I-2 fulfilled** | a consistency check (registry vs the CLAUDE.md prose table) so the registry is the source of truth; update ARCHITECTURE_INVARIANTS to mark the I-2 doctrine-spec mandate fulfilled; note the registry in CLAUDE.md. | consistency test; docs updated |
+| **C — reconcile + mark I-2 fulfilled** | ✅ SHIPPED — `test_registry_matches_claude_prose_table` fails CI if registry ↔ CLAUDE.md table drift (registry = source of truth); `ARCHITECTURE_INVARIANTS.md` I-2 mandate marked FULFILLED (with the synthetic-harness residual flagged); CLAUDE.md R-rules table annotated with the registry pointer. | consistency test green; docs updated |
 
 Batches A+B ≈ 1–1.5d. No calibration smoke needed (no agent-facing
 behavior change); this is internal scaffolding.

@@ -102,3 +102,44 @@ def test_manifest_shape() -> None:
     assert ds.CANONICAL_RULE_IDS <= ids
     r9 = next(e for e in m["rules"] if e["id"] == "R9")
     assert r9["enforced"] is False
+
+
+# ── ABL-0020 Batch C: registry ↔ prose consistency (the source-of-truth guard) ──
+
+
+def _parse_claude_rule_ids() -> set[str]:
+    """Extract the rule ids from CLAUDE.md's R-rules table. Normalizes
+    'Tier 1.5' -> 'Tier1.5' to match the registry id convention."""
+    claude = ROOT.parents[1] / "CLAUDE.md"   # webapp/backend -> agentic-skills root
+    lines = claude.read_text(encoding="utf-8").splitlines()
+    ids: set[str] = set()
+    in_table = False
+    for line in lines:
+        if line.strip().startswith("| Rule | Floor | Enforcement point"):
+            in_table = True
+            continue
+        if in_table:
+            s = line.strip()
+            if not s.startswith("|"):
+                break  # table ended
+            if s.startswith("|---") or s.startswith("| ---"):
+                continue
+            cell = s.split("|")[1].strip()
+            if cell and cell.lower() != "rule":
+                ids.add(cell.replace(" ", ""))   # "Tier 1.5" -> "Tier1.5"
+    return ids
+
+
+def test_registry_matches_claude_prose_table() -> None:
+    """The registry is the source of truth — but it must not silently drift
+    from the CLAUDE.md R-rules table the operator reads. A rule in one but
+    not the other fails here (governance guard)."""
+    prose = _parse_claude_rule_ids()
+    registry = {r.id for r in ds.DOCTRINE_SPEC}
+    assert prose, "could not parse CLAUDE.md R-rules table (format changed?)"
+    in_prose_not_registry = prose - registry
+    in_registry_not_prose = registry - prose
+    assert not in_prose_not_registry, \
+        f"rules in CLAUDE.md but not the registry: {sorted(in_prose_not_registry)}"
+    assert not in_registry_not_prose, \
+        f"rules in the registry but not CLAUDE.md: {sorted(in_registry_not_prose)}"

@@ -126,15 +126,29 @@ Failures here become structured `closure_violation` events, not silent leaks.
 
 ### Architectural mandate
 
+> **STATUS 2026-06-03 — FULFILLED (ABL-0020).** The doctrine-spec data
+> structure now exists in code: `webapp/backend/app/services/doctrine_spec.py`
+> (`DOCTRINE_SPEC`), with the I-2 meta-test in
+> `tests/test_doctrine_spec.py`. R9 remains the one explicit, tracked gap
+> (`KNOWN_GAPS`, A8). A per-run manifest (`doctrine_spec.manifest()`) is
+> snapshotted into the A7 run state for ABL-0017 Stage-2 efficacy. The
+> remaining residual is the per-rule *synthetic harness* tests (the third
+> bullet) — most rules carry a resolvable `check_ref` and the registry
+> tracks `has_test`; full synthetic-harness coverage is follow-up work.
+
 - **A single doctrine spec data structure** (in code, not prose) names each
-  rule, its enforcement point, and a callable check.
+  rule, its enforcement point, and a callable check. ✅ `doctrine_spec.py`
 - **A meta-test** asserts: every doctrine entry has at least one enforcement
   point AND a callable check. Adding a new R-rule without enforcement fails
-  CI. Documenting a rule that no code enforces is a build failure.
+  CI. Documenting a rule that no code enforces is a build failure. ✅
+  `test_doctrine_spec.py` (enforced rule → resolvable `check_ref`; unenforced
+  → must be a declared `KNOWN_GAP`; registry must match the CLAUDE.md prose
+  table or CI fails).
 - **Tests for each rule** as inputs in a synthetic role harness:
   R5 → spawn agent making 2 grounded calls → expect kill.
   R9 → spawn agent with 0 graph_* calls → expect validator fail.
-  etc.
+  etc. ⚠ partial — `has_test` flag tracks per-rule coverage; full synthetic
+  harness is follow-up.
 
 ### Back-mapped shortcoming
 
