@@ -32,3 +32,4 @@
 - [On-demand dispatch UI (ABL-0021)](arch_ondemand_dispatch_ui.md) — operator "Dispatch fix" button + POST /dispatch-followup; closes triage-UI ↔ ABL-0015-engine seam; complete on `followup-dispatch-ui`; live click-through is next session's focus
 - [A48 disk-leak fixes](arch_disk_leak_fixes.md) — 4 shipped fixes (`02ebd7b`); Docker.raw 60 GB Mac VM cap and the four leak classes it closes; force-kill worktree-leak open gap
 - [Pre-flight checklist](../../../../dev/ai-projects/agentic-skills/PREFLIGHT.md) — PF-1..10 verifiable artifacts; run before every sprint launch
+- [Live run: invoice soft-delete](arch_live_run_invoice_soft_delete.md) — first live ABL-0021 Dispatch-fix exercise (2026-06-04); 6/6 BLs, acceptance found real cross-BL product_bug, loop validated; surfaced A49 gate non-determinism (flaky false-red blocked a correct fix); merged via skip_gate

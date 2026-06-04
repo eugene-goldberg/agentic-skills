@@ -1,8 +1,10 @@
 ---
 name: arch-active-branch
-description: followup-dispatch-ui (2026-06-03 handoff). ABL-0021 on-demand "Dispatch fix" UI COMPLETE, built atop cumulative_learning (ABL-0016/0020) + architect-prereqs (ABL-0015). NEXT SESSION GOAL = operator runs a live sprint via the web UI, observes/reacts to findings, reviews/approves immediate fixes.
-metadata:
+description: "followup-dispatch-ui (2026-06-03 handoff). ABL-0021 on-demand \"Dispatch fix\" UI COMPLETE, built atop cumulative_learning (ABL-0016/0020) + architect-prereqs (ABL-0015). NEXT SESSION GOAL = operator runs a live sprint via the web UI, observes/reacts to findings, reviews/approves immediate fixes."
+metadata: 
+  node_type: memory
   type: project
+  originSessionId: 7979a248-b0b3-495b-9685-dc8fd4f1d643
 ---
 
 ## State at 2026-06-03
@@ -23,15 +25,15 @@ metadata:
 
 ## Test posture: 254/254 backend pass (scoped `cd webapp/backend && pytest tests/`); `vite build` clean
 
-## ⭐ NEXT SESSION GOAL (operator-stated)
-**Run a NEW sprint via the web app UI, observe/react to any findings, and
-review/approve immediate engineering fixes (the ABL-0021 "Dispatch fix"
-flow).** This is a live operator-driven session — architect supports:
-pre-flight (PREFLIGHT.md), launch via the UI, watch the SSE stream, then
-exercise the findings triage panel → Confirm → Dispatch fix. To enable
-auto-dispatch behavior also consider flag `run_acceptance_followup` /
-`inject_lessons`, but the headline is the on-demand Dispatch-fix path which
-needs no flag.
+## ⭐ LIVE-RUN GOAL — DONE 2026-06-04
+The ABL-0021 Dispatch-fix flow was exercised end-to-end in a real sprint
+(invoice soft-delete on full-stack-fastapi-template; see
+[[arch-live-run-invoice-soft-delete]]). 6/6 BLs merged, acceptance found a real
+cross-BL product_bug, confirm → Dispatch fix → gate → not_merged (correct
+conservative behavior on a flaky non-green gate). Fix verified green standalone
+and merged via skip_gate. **New top follow-up: A49 gate non-determinism** —
+flaky false-red blocked a correct fix; fix playwright-retry honoring + transient
+network classification so the gate verdict is a pure function of the diff.
 
 ## Deferred architect-doable (after the live session)
 ABL-0017 Stage 2 efficacy (unblocked): outcome-label deriver → rule-efficacy

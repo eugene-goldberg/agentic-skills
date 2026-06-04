@@ -1,8 +1,10 @@
 ---
 name: arch-ondemand-dispatch-ui
-description: ABL-0021 operator-facing on-demand "Dispatch fix" — POST /dispatch-followup + FindingsTriagePanel button. Closes the seam between the §I.3 triage UI and the ABL-0015 dispatch engine. Complete on branch followup-dispatch-ui; only live operator click-through remains.
-metadata:
+description: "ABL-0021 operator-facing on-demand \"Dispatch fix\" — POST /dispatch-followup + FindingsTriagePanel button. Closes the seam between the §I.3 triage UI and the ABL-0015 dispatch engine. Complete on branch followup-dispatch-ui; only live operator click-through remains."
+metadata: 
+  node_type: memory
   type: project
+  originSessionId: 7979a248-b0b3-495b-9685-dc8fd4f1d643
 ---
 
 ABL-0021 adds the operator-control surface ABL-0015's dispatch engine was
@@ -46,9 +48,13 @@ finally teardown is the guarantee, same as every engineer worktree).
 Builds on [[arch-auto-dispatch]] (ABL-0015 engine) + the §I.3 triage panel
 (see [[arch-acceptance-agent]]).
 
-## Open
+## Open / status
 
-Live operator click-through is the only remaining verification (no frontend
-test infra by design; the backend endpoint is unit-tested). This is the
-facility the operator will exercise next session: run a sprint via the web
-UI → observe findings → review/approve → Dispatch fix.
+**VALIDATED LIVE 2026-06-04** — first end-to-end exercise in the invoice
+soft-delete run (see [[arch-live-run-invoice-soft-delete]]): confirm verdict →
+`POST /dispatch-followup` → follow-up engineer → same gate → `not_merged`
+(gate non-green) → finding `dispatch_state` updated, R15 spent. The loop works
+exactly as designed, including the conservative refuse-to-merge on a non-green
+gate. The non-green was spurious (A49 gate flakiness); the fix was verified
+green standalone and merged via `skip_gate`. No frontend-test infra by design;
+backend endpoint remains unit-tested.
