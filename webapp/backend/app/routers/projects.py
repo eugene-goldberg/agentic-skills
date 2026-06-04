@@ -1451,6 +1451,127 @@ def _sync_followup_ledger(repo_dir, branch: str, merge: dict):
     )
 
 
+# ----------------------- end-sprint (operator kill + cleanup) ---------
+
+class EndSprintRequest(BaseModel):
+    """Operator 'End current Sprint': stop the run + full backend cleanup.
+
+    The running sprint is killed CLIENT-side (the UI aborts the SSE, which the
+    orchestrator treats as a consumer disconnect → the run ends and its own
+    finally-blocks reap the in-flight worktree). This endpoint does the
+    server-side sweep that a hard stop can leave behind: reap any agent/gate
+    worktrees, tear down leftover docker compose stacks + their volumes,
+    archive live orchestrator run-state, optionally purge the run-scoped
+    docker images that are no longer needed, and clear the per-repo run lock
+    so a fresh /run-brief isn't blocked.
+    """
+    purge_images: bool = True
+
+
+@router.post("/{repo}/end-sprint")
+async def end_sprint(repo: str, req: EndSprintRequest):
+    """Kill-aftermath cleanup for a repo (idempotent; safe when nothing runs)."""
+    repo_dir = _repo_dir(repo)
+    summary = await asyncio.to_thread(_end_sprint_cleanup, repo_dir, req.purge_images)
+    # Clear in-process run bookkeeping so a stale B2 lock/meta from a hard
+    # client disconnect doesn't 409 the next /run-brief.
+    _RUN_META.pop(repo, None)
+    lock = _RUN_LOCKS.get(repo)
+    if lock is not None and lock.locked():
+        try:
+            lock.release()
+        except RuntimeError:
+            pass
+    summary["lock_cleared"] = True
+    return summary
+
+
+def _end_sprint_cleanup(repo_dir: Path, purge_images: bool) -> dict:
+    """Synchronous end-sprint sweep (runs in a worker thread). Best-effort:
+    each stage is independently guarded so one failure doesn't abort the rest."""
+    import subprocess
+
+    summary: dict = {
+        "worktrees_removed": [], "stacks_reaped": [], "images_removed": 0,
+        "state_archived": [], "errors": [],
+    }
+
+    def _git(*args, timeout=60):
+        return subprocess.run(["git", *args], cwd=str(repo_dir),
+                              capture_output=True, text=True, timeout=timeout)
+
+    def _docker(*args, timeout=120):
+        return subprocess.run(["docker", *args], capture_output=True,
+                              text=True, timeout=timeout)
+
+    # 1) Reap agent/gate worktrees left under the target repo.
+    try:
+        wl = _git("worktree", "list", "--porcelain")
+        for ln in wl.stdout.splitlines():
+            if not ln.startswith("worktree "):
+                continue
+            path = ln[len("worktree "):].strip()
+            if "/.agent-worktrees/" in path or "/.gate-worktrees/" in path:
+                _git("worktree", "remove", "--force", path)
+                summary["worktrees_removed"].append(path.rsplit("/", 1)[-1])
+        _git("worktree", "prune")
+    except Exception as exc:  # noqa: BLE001
+        summary["errors"].append(f"worktrees: {type(exc).__name__}: {exc}")
+
+    # 2) Tear down leftover orchestrator / acceptance docker compose stacks
+    #    (containers + their anonymous volumes), matched by project label.
+    try:
+        ps = _docker("ps", "-a", "--format",
+                     '{{.Label "com.docker.compose.project"}}')
+        projects = {ln.strip() for ln in ps.stdout.splitlines()
+                    if ln.strip() and (ln.startswith("agentic-skills-")
+                                       or ln.startswith("acceptance-"))}
+        for proj in sorted(projects):
+            ids = _docker("ps", "-aq", "--filter",
+                          f"label=com.docker.compose.project={proj}").stdout.split()
+            if ids:
+                _docker("rm", "-f", *ids)
+            vols = _docker("volume", "ls", "-q", "--filter",
+                           f"label=com.docker.compose.project={proj}").stdout.split()
+            if vols:
+                _docker("volume", "rm", "-f", *vols)
+            summary["stacks_reaped"].append(proj)
+    except Exception as exc:  # noqa: BLE001
+        summary["errors"].append(f"stacks: {type(exc).__name__}: {exc}")
+
+    # 3) Purge run-scoped gate/acceptance images no longer needed (skip any
+    #    still referenced by a running container).
+    if purge_images:
+        try:
+            in_use = set(_docker("ps", "--format", "{{.Image}}").stdout.split())
+            seen: set[str] = set()
+            for row in _docker("images", "--format", "{{.ID}}\t{{.Repository}}").stdout.splitlines():
+                if "\t" not in row:
+                    continue
+                iid, name = row.split("\t", 1)
+                if ((name.startswith("agentic-skills-") or name.startswith("acceptance-"))
+                        and name not in in_use and iid not in seen):
+                    if _docker("rmi", "-f", iid).returncode == 0:
+                        summary["images_removed"] += 1
+                        seen.add(iid)
+        except Exception as exc:  # noqa: BLE001
+            summary["errors"].append(f"images: {type(exc).__name__}: {exc}")
+
+    # 4) Archive live orchestrator run-state → done/.
+    try:
+        state_dir = Path(__file__).resolve().parents[2] / ".orchestrator-state"
+        if state_dir.is_dir():
+            done = state_dir / "done"
+            for f in state_dir.glob("*.json"):
+                done.mkdir(exist_ok=True)
+                f.rename(done / f.name)
+                summary["state_archived"].append(f.name)
+    except Exception as exc:  # noqa: BLE001
+        summary["errors"].append(f"state: {type(exc).__name__}: {exc}")
+
+    return summary
+
+
 # ----------------------- doctrine-meta (B-4 / I-7) --------------------
 
 class RunDoctrineMetaRequest(BaseModel):

@@ -43,6 +43,7 @@ export function AppV2() {
   // sprint_complete as "partial" when the actual ratio falls short.
   const [minUiCoverageRatio, setMinUiCoverageRatio] = useState("0.0");
   const [running, setRunning] = useState(false);
+  const [endingSprint, setEndingSprint] = useState(false);
   const [stages, setStages] = useState(initialStages());
   const [bls, setBls] = useState([]); // {id, title, deps, steps:{engineer, reindex_e, qa, reindex_q, scorer}, outcome}
   const [events, setEvents] = useState([]);
@@ -373,6 +374,41 @@ export function AppV2() {
     if (abortRef.current) abortRef.current.abort();
   }
 
+  // "End current Sprint": kill the running run (abort the SSE — the orchestrator
+  // treats the disconnect as a stop) AND run the backend cleanup sweep
+  // (worktrees, docker stacks/volumes, run-scoped images, run-state, lock).
+  async function endSprint() {
+    if (!repo) return;
+    if (!window.confirm(
+      "End the current sprint?\n\nThis aborts the running run and reaps its " +
+      "worktrees, docker stacks + volumes, run-scoped docker images, and the " +
+      "per-repo run lock. The agent branch and merged work are NOT touched."
+    )) return;
+    if (abortRef.current) abortRef.current.abort();  // kill the run client-side
+    setEndingSprint(true);
+    try {
+      const r = await fetch(`${API}/api/projects/${encodeURIComponent(repo)}/end-sprint`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ purge_images: true }),
+      });
+      const body = await r.json();
+      setDetail({ end_sprint: true, ...body });
+      ingest({
+        type: "_meta", phase: "orchestrator.ended_by_operator",
+        reason: `${(body.worktrees_removed || []).length} worktrees, ` +
+                `${(body.stacks_reaped || []).length} stacks, ` +
+                `${body.images_removed || 0} images reaped`,
+      });
+    } catch (e) {
+      ingest({ type: "_error", error: `end-sprint failed: ${e.message || String(e)}`,
+               phase: "orchestrator.ended_by_operator" });
+    } finally {
+      setEndingSprint(false);
+      setRunning(false);
+      reloadBranches();
+    }
+  }
+
   return (
     <div className="v2-root">
       <header className="v2-header">
@@ -463,6 +499,14 @@ export function AppV2() {
             {running ? "Running…" : "Run pipeline"}
           </button>
           <button onClick={stop} disabled={!running} className="v2-secondary">Stop</button>
+          <button
+            onClick={endSprint}
+            disabled={endingSprint}
+            className="v2-secondary"
+            title="Kill the running sprint AND clean up: reap worktrees, docker stacks + volumes, purge run-scoped images, archive run-state, clear the run lock. Safe to click even when idle (cleanup-only)."
+          >
+            {endingSprint ? "Ending…" : "⛔ End current Sprint"}
+          </button>
           <span className="v2-status">{running ? "● live" : "○ idle"}</span>
         </div>
       </section>
@@ -597,10 +641,16 @@ export function AppV2() {
         <summary>Event log ({events.length})</summary>
         <div className="v2-log-body">
           {events.slice(-200).map((e, i) => (
-            <div key={i} className="v2-log-line">
-              <span className="v2-log-phase">{e.phase || e.type || "?"}</span>
+            <div
+              key={i}
+              className="v2-log-line"
+              style={{ cursor: "pointer" }}
+              title="click → full event (all attributes) in the Detail rail"
+              onClick={() => setDetail({ event: true, ...e })}
+            >
+              <span className="v2-log-phase">{eventLabel(e)}</span>
               {e.bl_id ? <span className="v2-log-bl">{e.bl_id}</span> : null}
-              <span className="v2-log-text">{shortDesc(e)}</span>
+              <span className="v2-log-text">{eventDetail(e)}</span>
             </div>
           ))}
           <div ref={logEndRef} />
@@ -684,6 +734,52 @@ function shortDesc(e) {
   if (e.phase === "worktree_ready") return e.role || "";
   if (e.summary) return typeof e.summary === "string" ? e.summary.slice(0, 80) : "";
   return "";
+}
+
+// Richer one-line detail for the event log. shortDesc() covers orchestrator
+// _meta/role phases; this also unpacks the agent stream-json events
+// (assistant/user/system/result) the agent subprocess emits, so the log shows
+// WHAT each agent did (tool calls, text, results) — not just the role.
+function eventDetail(e) {
+  const sd = shortDesc(e);
+  if (sd) return sd;
+  if (e.type === "assistant" && e.message?.content) {
+    const parts = e.message.content.map((c) => {
+      if (c.type === "text") return "💬 " + (c.text || "").trim().replace(/\s+/g, " ").slice(0, 110);
+      if (c.type === "thinking") return "💭 thinking";
+      if (c.type === "tool_use") {
+        const inp = c.input || {};
+        const arg = inp.command || inp.file_path || inp.path || inp.pattern
+                  || inp.query || (inp.prompt ? String(inp.prompt).slice(0, 50) : "");
+        return "🔧 " + (c.name || "?") + (arg ? " " + String(arg).slice(0, 80) : "");
+      }
+      return c.type;
+    }).filter(Boolean);
+    return parts.join(" · ");
+  }
+  if (e.type === "user" && e.message?.content) {
+    const tr = e.message.content.find((c) => c.type === "tool_result");
+    if (tr) {
+      const body = typeof tr.content === "string" ? tr.content
+                 : Array.isArray(tr.content) ? tr.content.map((x) => x.text || "").join(" ")
+                 : JSON.stringify(tr.content);
+      return (tr.is_error ? "⚠ " : "← ") + String(body).replace(/\s+/g, " ").slice(0, 90);
+    }
+  }
+  if (e.type === "result") {
+    return (e.is_error ? "✗" : "✓") + " result"
+      + (e.duration_ms ? ` · ${Math.round(e.duration_ms / 1000)}s` : "")
+      + (e.num_turns ? ` · ${e.num_turns} turns` : "");
+  }
+  if (e.type === "system") return "hook: " + (e.hook_name || e.subtype || "");
+  return "";
+}
+
+// Field-name chip for the event-log label: orchestrator phase (stripped) when
+// present, else the agent role, else the raw event type.
+function eventLabel(e) {
+  if (e.phase) return e.phase.replace(/^orchestrator\./, "");
+  return e.orchestrator_step || e.type || "?";
 }
 
 // ─────────────────────────────────────────────────────────────────────
