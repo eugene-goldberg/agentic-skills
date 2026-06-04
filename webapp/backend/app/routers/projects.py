@@ -1426,12 +1426,29 @@ async def merge_branch(repo: str, req: MergeBranchRequest):
     cfg = repo_config_svc.load(repo_dir)
     if req.skip_gate:
         merge = await fast_forward_target(repo_dir, req.branch, target_ref=cfg.agent_branch)
-        return {"gate": {"kind": "skipped"}, "merge": merge}
+        return {"gate": {"kind": "skipped"}, "merge": merge,
+                "ledger_synced": _sync_followup_ledger(repo_dir, req.branch, merge)}
     gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=req.branch, target_ref=cfg.agent_branch)
     if not gate.get("ok"):
         return {"gate": gate, "merge": None}
     merge = await fast_forward_target(repo_dir, req.branch, target_ref=cfg.agent_branch)
-    return {"gate": gate, "merge": merge}
+    return {"gate": gate, "merge": merge,
+            "ledger_synced": _sync_followup_ledger(repo_dir, req.branch, merge)}
+
+
+def _sync_followup_ledger(repo_dir, branch: str, merge: dict):
+    """A50: after a successful merge of a follow-up dispatch branch, close the
+    owning finding's dispatch lifecycle (dispatch_state → "merged") so the
+    findings ledger reflects the merge an out-of-band review-&-merge produced.
+
+    Best-effort: returns the sync result dict (or None when not applicable /
+    the merge didn't land); never raises — the merge already happened.
+    """
+    if not (merge and merge.get("ok") and merge.get("merged_sha")):
+        return None
+    return findings_ledger_svc.sync_followup_merge_to_ledger(
+        repo_dir, branch, merge.get("merged_sha"),
+    )
 
 
 # ----------------------- doctrine-meta (B-4 / I-7) --------------------

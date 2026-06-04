@@ -513,3 +513,94 @@ def _extract_evidence_summary_dual(journey: dict, failure: dict) -> str:
         return json.dumps(payload, sort_keys=True, default=str)
     except Exception:
         return str(payload)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# A50: cross-feature resolution helpers.
+#
+# `POST /merge-branch` lands a follow-up dispatch's branch at the git layer
+# but does not know which finding it resolves. These helpers let the router
+# (or any caller) map a merged follow-up branch back to its owning finding
+# and close the dispatch lifecycle (dispatch_state → "merged"), keeping the
+# ledger honest after an out-of-band merge.
+# ─────────────────────────────────────────────────────────────────────
+
+def followup_run_id_from_branch(branch: str) -> Optional[str]:
+    """Extract the dispatch run_id from a follow-up branch name, or None.
+
+    Follow-up engineers run in a worktree branch named
+    ``agent/followup-<run_id>-<index>`` (see orchestrator._dispatch_one_followup
+    / git_worktree.create_worktree). Given such a branch, return ``<run_id>``;
+    return None for any branch that isn't a follow-up branch.
+
+    The index is the trailing ``-<digits>`` segment; the run_id is everything
+    between the ``followup-`` prefix and that index (run_ids themselves contain
+    hyphens, e.g. ``manual-dispatch-20260604T035643Z-db2d82``).
+    """
+    name = branch.rsplit("/", 1)[-1]  # strip any "agent/" (or other) prefix
+    prefix = "followup-"
+    if not name.startswith(prefix):
+        return None
+    rest = name[len(prefix):]          # "<run_id>-<index>"
+    head, sep, idx = rest.rpartition("-")
+    if not sep or not head or not idx.isdigit():
+        return None
+    return head
+
+
+def resolve_finding_by_dispatch_run_id(
+    repo_root: Path, run_id: str,
+) -> Optional[tuple[str, "Finding"]]:
+    """Find the (feature_slug, Finding) whose ``dispatch_run_id == run_id``.
+
+    Scans every per-feature ledger under ``<repo>/_brownfield/features/*/``.
+    Returns the first match (a run_id dispatches at most one finding — R15),
+    or None if none is found / the features dir is absent.
+    """
+    base = repo_root / "_brownfield" / "features"
+    if not base.is_dir():
+        return None
+    for feat_dir in sorted(p for p in base.iterdir() if p.is_dir()):
+        ledger_path = feat_dir / "acceptance" / "findings_log.jsonl"
+        if not ledger_path.exists():
+            continue
+        try:
+            ledger = FindingsLedger(repo_root, feat_dir.name)
+            for f in ledger.list_all():
+                if f.dispatch_run_id == run_id:
+                    return (feat_dir.name, f)
+        except Exception:
+            continue  # a malformed ledger must not break resolution
+    return None
+
+
+def sync_followup_merge_to_ledger(
+    repo_root: Path, branch: str, merged_sha: Optional[str],
+) -> Optional[dict]:
+    """Best-effort: after a follow-up branch merges, close its finding.
+
+    Maps ``branch`` → run_id → owning finding and sets the finding's
+    ``dispatch_state`` to ``"merged"`` with ``merged_sha``. Returns a small
+    dict describing what happened (for an observability event), or None when
+    the branch is not a follow-up branch / no owning finding exists. Never
+    raises — a ledger problem must not fail the merge that already happened.
+    """
+    try:
+        run_id = followup_run_id_from_branch(branch)
+        if not run_id:
+            return None
+        hit = resolve_finding_by_dispatch_run_id(repo_root, run_id)
+        if not hit:
+            return {"run_id": run_id, "matched": False}
+        feature_slug, finding = hit
+        if finding.dispatch_state == "merged":
+            return {"run_id": run_id, "feature_slug": feature_slug,
+                    "finding_id": finding.finding_id, "already_merged": True}
+        FindingsLedger(repo_root, feature_slug).set_dispatch_state(
+            finding.finding_id, "merged", merged_sha=merged_sha,
+        )
+        return {"run_id": run_id, "feature_slug": feature_slug,
+                "finding_id": finding.finding_id, "dispatch_state": "merged",
+                "merged_sha": merged_sha}
+    except Exception as exc:  # noqa: BLE001 — advisory; never fail the merge
+        return {"error": f"{type(exc).__name__}: {exc}"}
