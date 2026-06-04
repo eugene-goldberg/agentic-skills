@@ -25,6 +25,14 @@ export function AppV2() {
   // until the 3-smoke calibration discipline (§I.1) clears the flip;
   // mirrors the run_acceptance default-OFF→ON history.
   const [injectAcceptancePriors, setInjectAcceptancePriors] = useState(false);
+  // ABL-0015 — auto-dispatch a follow-up engineer INLINE during the sprint on
+  // operator-pre-confirmed product_bug findings. Default OFF (highest-risk
+  // action). The on-demand "Dispatch fix" button needs no flag; this only
+  // matters when re-running a sprint whose findings are already confirmed.
+  const [runAcceptanceFollowup, setRunAcceptanceFollowup] = useState(false);
+  // ABL-0016 — surface prior operator-confirmed lessons to the brownfield
+  // roles (advisory, target-scoped). Default OFF until calibration.
+  const [injectLessons, setInjectLessons] = useState(false);
   // ABL-0014 — last acceptance.done/skipped/error event, surfaced as a tile.
   const [acceptance, setAcceptance] = useState(null);
   // ABL-0014 Item 2 (Batch C/D, 2026-06-01) — UI-coverage breakdown from
@@ -43,6 +51,10 @@ export function AppV2() {
   // default the rail to the FindingsTriagePanel (operator-facing) and
   // let the user toggle to raw JSON for deep debugging.
   const [showRawDetail, setShowRawDetail] = useState(false);
+  // Unmerged agent/* branches — the anomaly-resolution surface. A BL or a
+  // follow-up dispatch whose gate did not auto-merge leaves its branch here;
+  // the operator reviews & merges it without leaving the UI (GET /branches).
+  const [branches, setBranches] = useState(null); // { agent_branch, unmerged:[{branch,sha,when}] }
   const abortRef = useRef(null);
   const logEndRef = useRef(null);
   // Init-feature bootstrap state
@@ -67,6 +79,22 @@ export function AppV2() {
   useEffect(() => {
     if (logEndRef.current) logEndRef.current.scrollIntoView({ block: "end" });
   }, [events.length]);
+
+  // Refresh the unmerged-branch list (anomaly surface). Called on repo change
+  // and after a run finishes — a gate that didn't auto-merge surfaces here.
+  async function reloadBranches() {
+    if (!repo) return;
+    try {
+      const r = await fetch(`${API}/api/projects/${encodeURIComponent(repo)}/branches`);
+      if (!r.ok) return;
+      setBranches(await r.json());
+    } catch { /* non-fatal: the panel has its own refresh */ }
+  }
+
+  useEffect(() => {
+    reloadBranches();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo]);
 
   function initialStages() {
     return {
@@ -304,6 +332,10 @@ export function AppV2() {
         run_acceptance: runAcceptance,
         // ABL-0014 §I.3 Batch E — classifier priors injection (default OFF).
         inject_acceptance_priors: injectAcceptancePriors,
+        // ABL-0015 — inline auto-dispatch on pre-confirmed findings (default OFF).
+        run_acceptance_followup: runAcceptanceFollowup,
+        // ABL-0016 — inject prior confirmed lessons into role prompts (default OFF).
+        inject_lessons: injectLessons,
         // ABL-0014 Item 2 Batch D — operator-tunable UI-coverage floor.
         min_ui_coverage_ratio: parseFloat(minUiCoverageRatio) || 0.0,
         // A18: per-feature isolation — server creates
@@ -331,6 +363,9 @@ export function AppV2() {
     } finally {
       setRunning(false);
       abortRef.current = null;
+      // A BL that failed its gate (engineer_unmerged) leaves an unmerged
+      // branch; surface it so the operator can review & merge from the UI.
+      reloadBranches();
     }
   }
 
@@ -360,6 +395,8 @@ export function AppV2() {
           <label><input type="checkbox" checked={skipPo} onChange={(e) => setSkipPo(e.target.checked)} disabled={running} /> Skip PO (re-run on existing backlog)</label>
           <label title="ABL-0014 — runs the Acceptance Agent after sprint_complete to exercise end-to-end user journeys and produce a report. Default OFF for first 3 calibration sprints (§E.1 Q6)."><input type="checkbox" checked={runAcceptance} onChange={(e) => setRunAcceptance(e.target.checked)} disabled={running} /> Run acceptance pass</label>
           <label title="ABL-0014 §I.3 Batch E — inject classifier-accuracy priors from the findings ledger into the acceptance agent's spawn prompt. Default OFF until §I.1 3-smoke calibration clears the flip."><input type="checkbox" checked={injectAcceptancePriors} onChange={(e) => setInjectAcceptancePriors(e.target.checked)} disabled={running || !runAcceptance} /> Inject priors</label>
+          <label title="ABL-0015 — auto-dispatch a follow-up engineer INLINE during the sprint on operator-pre-confirmed product_bug findings. Default OFF (highest-risk action). The on-demand 'Dispatch fix' button needs no flag; this mainly matters on a re-run whose findings are already confirmed."><input type="checkbox" checked={runAcceptanceFollowup} onChange={(e) => setRunAcceptanceFollowup(e.target.checked)} disabled={running || !runAcceptance} /> Auto-dispatch followups</label>
+          <label title="ABL-0016 — surface prior operator-confirmed lessons to the brownfield roles (advisory, target-scoped). Default OFF until calibration."><input type="checkbox" checked={injectLessons} onChange={(e) => setInjectLessons(e.target.checked)} disabled={running} /> Inject lessons</label>
           <label title="ABL-0014 Item 2 (Batch C) — minimum fraction of merged BLs that must touch UI for sprint_complete to surface as 'full'. 0.0 = informational only (no partial flag ever); 0.5 = at least half the merged BLs must have UI surface; 1.0 = every merged BL must touch UI. Operator-visibility only — sprint still completes either way.">
             UI cov ≥
             <input
@@ -508,6 +545,25 @@ export function AppV2() {
               )}
             </div>
           )}
+          {/* Anomaly surface: agent/* branches whose gate did not auto-merge
+              (a failed-gate BL, or a follow-up dispatch that came back
+              not_merged). Operator resolves them in-place via the rail. */}
+          {branches && Array.isArray(branches.unmerged) && branches.unmerged.length > 0 && (
+            <div
+              className="v2-branches-tile"
+              style={{
+                marginTop: 12, padding: 12, borderRadius: 6,
+                background: "#3b2f1f", cursor: "pointer", fontSize: 13,
+              }}
+              onClick={() => setDetail({ branches: true })}
+              title="Agent branches not yet merged into the agent branch — review & merge here."
+            >
+              <strong>⚠ Unmerged branches ({branches.unmerged.length})</strong>
+              <div style={{ marginTop: 4, opacity: 0.85, fontSize: 12 }}>
+                into <code>{branches.agent_branch}</code> · click → review &amp; merge
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="v2-rail">
@@ -527,8 +583,10 @@ export function AppV2() {
               </button>
             )}
           </h2>
-          {detail?.acceptance && detail?.feature_slug && !showRawDetail ? (
-            <FindingsTriagePanel repo={repo} featureSlug={detail.feature_slug} />
+          {detail?.branches ? (
+            <BranchesPanel repo={repo} onChanged={reloadBranches} />
+          ) : detail?.acceptance && detail?.feature_slug && !showRawDetail ? (
+            <FindingsTriagePanel repo={repo} featureSlug={detail.feature_slug} onMerged={reloadBranches} />
           ) : (
             <pre className="v2-detail">{detail ? JSON.stringify(detail, null, 2) : "Click a stage or BL step to inspect."}</pre>
           )}
@@ -629,6 +687,145 @@ function shortDesc(e) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Review & merge — resolve an unmerged agent branch from the UI.
+//
+// A BL that failed its gate (engineer_unmerged) or a follow-up dispatch
+// that came back not_merged leaves its agent/* branch behind. This is the
+// in-UI recovery path: re-run the gate and merge on green, or force-merge
+// with an explicit skip_gate override (justified e.g. when A49 gate
+// flakiness false-reds a fix the operator has independently verified).
+//
+// Backend: POST /api/projects/{repo}/merge-branch {branch, skip_gate}
+//          → { gate:{kind,reason?}, merge:{ok,kind,merged_sha}|null }
+// ─────────────────────────────────────────────────────────────────────
+
+function ReviewMergeButton({ repo, branch, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const run = async (skip_gate) => {
+    setBusy(true); setResult(null);
+    try {
+      const r = await fetch(`${API}/api/projects/${encodeURIComponent(repo)}/merge-branch`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branch, skip_gate }),
+      });
+      const body = await r.json();
+      setResult(body);
+      if (body?.merge?.ok) onDone?.();
+    } catch (err) {
+      setResult({ error: String(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (result?.merge?.ok) {
+    return (
+      <span style={{ color: "var(--ok, #6abf69)", fontSize: 11 }}>
+        ✓ merged{result.merge.merged_sha ? ` · ${String(result.merge.merged_sha).slice(0, 8)}` : ""}
+        {result.gate?.kind === "skipped" ? " (gate skipped)" : ""}
+      </span>
+    );
+  }
+  return (
+    <span className="v2-row" style={{ gap: 6, alignItems: "center" }}>
+      <button className="v2-secondary" disabled={busy} onClick={() => run(false)}
+              style={{ fontSize: 11, padding: "3px 8px" }}
+              title="Re-run the regression gate against this branch; merge only if green.">
+        {busy ? "Re-gating…" : "Review & merge (re-run gate)"}
+      </button>
+      <button className="v2-secondary" disabled={busy} onClick={() => run(true)}
+              style={{ fontSize: 11, padding: "3px 8px" }}
+              title="Skip the gate and merge now. Use only when you have independently verified the branch (e.g. A49 gate flakiness).">
+        Force merge (skip gate)
+      </button>
+      {result?.gate && !result.merge && (
+        <span style={{ fontSize: 11, color: "#d6a13a" }}>
+          gate {result.gate.kind}{result.gate.reason ? `: ${String(result.gate.reason).slice(0, 80)}` : ""}
+        </span>
+      )}
+      {result?.error && (
+        <span style={{ fontSize: 11, color: "#d66" }}>❌ {result.error}</span>
+      )}
+    </span>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Branches panel — lists agent/* branches not yet merged into the agent
+// branch (GET /branches) and offers Review & merge per branch. This is the
+// general "resolve any anomaly without leaving the UI" surface: failed-gate
+// BLs and not_merged follow-up dispatches both land here.
+// ─────────────────────────────────────────────────────────────────────
+
+function BranchesPanel({ repo, onChanged }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function refetch() {
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch(`${API}/api/projects/${encodeURIComponent(repo)}/branches`);
+      const body = await r.json();
+      if (!r.ok) { setError(body.detail || JSON.stringify(body)); setData(null); }
+      else { setData(body); }
+    } catch (e) {
+      setError(e.message || String(e)); setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (repo) refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo]);
+
+  const unmerged = data?.unmerged || [];
+
+  return (
+    <div className="v2-branches-panel">
+      <div className="v2-row" style={{ marginBottom: 8, alignItems: "center", gap: 8 }}>
+        <strong style={{ fontSize: 13 }}>Unmerged branches ({unmerged.length})</strong>
+        {data?.agent_branch && (
+          <span style={{ opacity: 0.65, fontSize: 11 }}>→ <code>{data.agent_branch}</code></span>
+        )}
+        <span style={{ flex: 1 }} />
+        <button onClick={refetch} disabled={loading} className="v2-secondary"
+                style={{ fontSize: 11, padding: "2px 8px" }}>
+          {loading ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ background: "#3b1f1f", padding: "8px 12px", borderRadius: 4, fontSize: 12, marginBottom: 8 }}>
+          ❌ {error}
+        </div>
+      )}
+
+      {!loading && unmerged.length === 0 && !error && (
+        <div style={{ opacity: 0.65, fontSize: 12, padding: 12 }}>
+          No unmerged branches — all work landed on <code>{data?.agent_branch || "the agent branch"}</code>.
+        </div>
+      )}
+
+      {unmerged.map((b) => (
+        <div key={b.branch} className="v2-branch-card"
+             style={{ border: "1px solid #333", borderRadius: 6, padding: 10, marginBottom: 8, fontSize: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+            <code style={{ fontSize: 11 }}>{b.branch}</code>
+            <span style={{ flex: 1 }} />
+            {b.sha && <span style={{ opacity: 0.6, fontSize: 11 }}>{String(b.sha).slice(0, 8)}</span>}
+            {b.when && <span style={{ opacity: 0.5, fontSize: 10 }}>{String(b.when).replace("T", " ").slice(0, 19)}</span>}
+          </div>
+          <ReviewMergeButton repo={repo} branch={b.branch} onDone={() => { refetch(); onChanged?.(); }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // ABL-0014 §I.3 Batch D — Findings Triage Panel
 //
 // Operator surface for the per-feature acceptance findings ledger.
@@ -651,7 +848,7 @@ const CLASSIFICATION_BG = {
   uncertain:   "#2a2a2a",  // gray
 };
 
-function FindingsTriagePanel({ repo, featureSlug }) {
+function FindingsTriagePanel({ repo, featureSlug, onMerged }) {
   const [findings, setFindings] = useState([]);
   const [statusFilter, setStatusFilter] = useState("pending");
   const [loading, setLoading] = useState(false);
@@ -941,6 +1138,22 @@ function FindingsTriagePanel({ repo, featureSlug }) {
               <div style={{ fontSize: 11, marginTop: 4, opacity: 0.8 }}>
                 merged sha: <code>{String(f.dispatch_merged_sha).slice(0, 12)}</code>
                 {f.dispatch_bl_id ? ` · ${f.dispatch_bl_id}` : ""}
+              </div>
+            )}
+
+            {/* In-place recovery: a dispatched fix whose gate did not merge.
+                Review & merge the follow-up branch right here (the same action
+                as the Unmerged-branches panel), without leaving the finding. */}
+            {f.dispatch_state === "not_merged" && f.dispatch_run_id && (
+              <div style={{ marginTop: 6, padding: "6px 8px", borderRadius: 3, background: "#2a2419" }}>
+                <div style={{ fontSize: 11, marginBottom: 4, opacity: 0.85 }}>
+                  ⚠ fix dispatched but the gate did not auto-merge — resolve in place:
+                </div>
+                <ReviewMergeButton
+                  repo={repo}
+                  branch={`agent/followup-${f.dispatch_run_id}-0`}
+                  onDone={() => { refetch(); onMerged?.(); }}
+                />
               </div>
             )}
 
