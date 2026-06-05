@@ -33,3 +33,4 @@
 - [A48 disk-leak fixes](arch_disk_leak_fixes.md) — 4 shipped fixes (`02ebd7b`); Docker.raw 60 GB Mac VM cap and the four leak classes it closes; force-kill worktree-leak open gap
 - [Pre-flight checklist](../../../../dev/ai-projects/agentic-skills/PREFLIGHT.md) — PF-1..10 verifiable artifacts; run before every sprint launch
 - [Live run: invoice soft-delete](arch_live_run_invoice_soft_delete.md) — first live ABL-0021 Dispatch-fix exercise (2026-06-04); 6/6 BLs, acceptance found real cross-BL product_bug, loop validated; surfaced A49 gate non-determinism (flaky false-red blocked a correct fix); merged via skip_gate
+- [Harness hardening (search run)](arch_harness_hardening.md) — 2026-06-04/05; live search_and_discovery_2 sprint reproduced the A39+A45+A49 compound wedge on BL-0006; shipped A45/A51/A50/End-Sprint/AppV2-review-merge; deferred A39/A49/orchestrator-wedge(#3); the canonical "why the harness control plane is the fragility" evidence
