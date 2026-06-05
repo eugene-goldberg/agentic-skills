@@ -125,6 +125,25 @@ def _claude_binary() -> str:
     return os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
 
 
+def _inflight_readline_timeout(
+    inflight_tools: int, idle_timeout: int | None, wall_timeout: int,
+) -> int:
+    """A45: choose the per-readline timeout.
+
+    While a tool is in flight — a long synchronous Bash child (e.g. the agent
+    running a gate/pytest/playwright), or an API rate-limit backoff that emits
+    no stream lines — the agent is *working*, not hung, so we must NOT idle-kill
+    it. Fall back to the wall timeout in that case. With nothing in flight, the
+    idle timeout applies (capped by the wall). ``idle_timeout=None`` disables
+    idle entirely (wall only), preserving pre-B5 behavior.
+    """
+    if idle_timeout is None:
+        return wall_timeout
+    if inflight_tools > 0:
+        return wall_timeout
+    return min(idle_timeout, wall_timeout)
+
+
 def _build_retrieval_mcp_config(
     reference_repo: Path | None,
     target_repo: Path | None,
@@ -267,7 +286,13 @@ async def stream_agent_task(
     )
     if retrieval is not None:
         mcp_config_path, mcp_tools = retrieval
-        extra_cli += ["--mcp-config", str(mcp_config_path)]
+        # A51: --strict-mcp-config restricts the agent to ONLY the retrieval
+        # server we pass. Without it the subprocess inherits the operator's
+        # global/corporate MCP fleet (Gmail, Drive, MS365, azure-devops,
+        # ghost-Postgres, …) — an isolation/security leak and a source of
+        # wasted agent turns probing irrelevant servers (the scorer-vs-azure
+        # incident).
+        extra_cli += ["--mcp-config", str(mcp_config_path), "--strict-mcp-config"]
         effective_allowed = ",".join([allowed_tools, *mcp_tools])
 
     cmd = [
@@ -342,11 +367,13 @@ async def stream_agent_task(
         try:
             # B5: per-readline timeout = min(idle_timeout, timeout_seconds).
             # idle_timeout=None preserves prior behavior (timeout_seconds only).
-            effective_timeout = (
-                min(idle_timeout, timeout_seconds) if idle_timeout is not None
-                else timeout_seconds
-            )
+            inflight_tools: set[str] = set()  # A45: tool_use ids awaiting a result
             while True:
+                # A45: recompute each iteration — use the wall timeout while a
+                # tool is in flight (working, not hung), else the idle timeout.
+                effective_timeout = _inflight_readline_timeout(
+                    len(inflight_tools), idle_timeout, timeout_seconds
+                )
                 # readline with timeout so a hung claude process doesn't hang us.
                 try:
                     raw = await asyncio.wait_for(
@@ -355,7 +382,13 @@ async def stream_agent_task(
                     )
                 except asyncio.TimeoutError:
                     await _kill_pgroup(proc)
-                    kind = "idle_timeout" if (idle_timeout is not None and idle_timeout <= timeout_seconds) else "wall_timeout"
+                    # A45: if a tool was in flight we used the wall timeout, so
+                    # label it wall_timeout (not a false "idle" kill).
+                    used_idle = (
+                        idle_timeout is not None and not inflight_tools
+                        and idle_timeout <= timeout_seconds
+                    )
+                    kind = "idle_timeout" if used_idle else "wall_timeout"
                     evt = {
                         "type": "_error",
                         "error": (
@@ -419,6 +452,9 @@ async def stream_agent_task(
                 # R8: total mcp__retrieval__* calls capped at max_retrieval_calls.
                 for tu in _tool_uses_in_event(evt):
                     name = tu.get("name", "")
+                    tid = tu.get("id")
+                    if tid:
+                        inflight_tools.add(tid)  # A45: mark tool in flight
                     if name.startswith("mcp__retrieval__"):
                         retrieval_call_count += 1
                         if name in GROUNDED_RETRIEVAL_TOOLS:
@@ -440,6 +476,13 @@ async def stream_agent_task(
                         if isinstance(cmd, str) and FORBIDDEN_GIT_RE.search(cmd):
                             forbidden_git_op = cmd[:500]  # cap for the event
                             break
+
+                # A45: a tool's result arrived → it's no longer in flight.
+                if isinstance(evt, dict) and evt.get("type") == "user":
+                    _msg = evt.get("message") or {}
+                    for _c in (_msg.get("content") or []):
+                        if isinstance(_c, dict) and _c.get("type") == "tool_result":
+                            inflight_tools.discard(_c.get("tool_use_id"))
 
                 if trace is not None:
                     trace.write_event(evt)
