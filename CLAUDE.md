@@ -194,6 +194,7 @@ Read these in this order on any non-trivial session:
 | 21 | [`ABL-0021_ONDEMAND_DISPATCH_UI.md`](ABL-0021_ONDEMAND_DISPATCH_UI.md) | Operator-facing on-demand "Dispatch fix" — `POST /dispatch-followup` + FindingsTriagePanel button. Complete on `followup-dispatch-ui`; closes the triage-UI ↔ ABL-0015-engine seam. |
 | 22 | [`CONTROL_FLOW.md`](CONTROL_FLOW.md) | Flowchart (Mermaid + ASCII) of every check/gate/control action: streaming Tier-1.5 kills, post-agent doctrine+gate, sprint-level acceptance/closure/doctrine-meta, with the I-2 enforcement-point table. |
 | 23 | [`DOCTRINE.md`](DOCTRINE.md) | What "doctrine" is, the two families (brownfield/greenfield), where it's stored (SKILLS.md + doctrine_spec.py registry + CLAUDE.md prose + rubric + enforcement code), and the R-rules with enforcement points. |
+| 24 | [`ABL-0015_CALIBRATION_CAMPAIGN.md`](ABL-0015_CALIBRATION_CAMPAIGN.md) | The phased, evidence-gated campaign to flip `inject_acceptance_priors` then `run_acceptance_followup` ON — closing the acceptance→triage→dispatch loop into an *unattended* cycle. Trust signal = per-classification precision prior; zero-false-merge halt; operationalizes ABL-0015 Batch E. The next-most-impactful move toward "walk away." |
 
 The `.claude/memory/` directory carries cross-session memory files (see
 `MEMORY.md` index). Architectural memory entries (`arch_*.md`) summarize
