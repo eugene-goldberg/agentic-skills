@@ -488,7 +488,7 @@ async def _engineer_flow(
             gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                      target_ref=cfg.agent_branch, run_id=run_id)
             yield _ptag({"type": "_meta", "phase": "regression_gate",
-                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
+                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
                        "engineer", bl_id)
             gate_attempt = 0
             # A25b: only retry on regressed (code regression the engineer can
@@ -512,7 +512,7 @@ async def _engineer_flow(
                                                          target_ref=cfg.agent_branch, run_id=run_id)
                 yield _ptag({"type": "_meta", "phase": "regression_gate",
                             "gate_attempt": gate_attempt,
-                            **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
+                            **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
                            "engineer", bl_id)
             if validation["ok"] and gate.get("ok"):
                 merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
@@ -538,7 +538,7 @@ async def _engineer_flow(
                         gate2 = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                                    target_ref=cfg.agent_branch, run_id=run_id)
                         yield _ptag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
-                                    **{k: gate2.get(k) for k in ("ok","kind","regressions","reason","post_tail")}},
+                                    **{k: gate2.get(k) for k in ("ok","kind","regressions","failing_tests","reason","post_tail")}},
                                    "engineer", bl_id)
                         if gate2.get("ok"):
                             merge = await fast_forward_target(repo_dir, wt.branch,
@@ -647,7 +647,7 @@ async def _qa_or_scorer_flow(
             gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                      target_ref=cfg.agent_branch, run_id=run_id)
             yield _ptag({"type": "_meta", "phase": "regression_gate",
-                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
+                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
                        role, bl_id)
             gate_attempt = 0
             # A25b: only retry on regressed (code regression the engineer can
@@ -670,7 +670,7 @@ async def _qa_or_scorer_flow(
                                                          target_ref=cfg.agent_branch, run_id=run_id)
                 yield _ptag({"type": "_meta", "phase": "regression_gate",
                             "gate_attempt": gate_attempt,
-                            **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
+                            **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
                            role, bl_id)
             if validation["ok"] and gate.get("ok"):
                 merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
@@ -692,7 +692,7 @@ async def _qa_or_scorer_flow(
                         gate2 = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                                    target_ref=cfg.agent_branch, run_id=run_id)
                         yield _ptag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
-                                    **{k: gate2.get(k) for k in ("ok","kind","regressions","reason","post_tail")}},
+                                    **{k: gate2.get(k) for k in ("ok","kind","regressions","failing_tests","reason","post_tail")}},
                                    role, bl_id)
                         if gate2.get("ok"):
                             merge = await fast_forward_target(repo_dir, wt.branch,
@@ -1961,14 +1961,31 @@ async def run_brief(
             # Engineer
             yield _evt("engineer.start", bl_id=bl_id)
             eng_outcome = None
-            async for e in _engineer_flow(repo_dir, repo_name, bl_id,
-                                           timeout_per_role, retrieval_kwargs_builder,
-                                           run_id=run_id, feature_slug=feature_slug,
-                                           inject_lessons=inject_lessons):
-                if "_orchestrator_outcome" in e:
-                    eng_outcome = e
-                    continue
-                yield e
+            try:
+                async for e in _engineer_flow(repo_dir, repo_name, bl_id,
+                                               timeout_per_role, retrieval_kwargs_builder,
+                                               run_id=run_id, feature_slug=feature_slug,
+                                               inject_lessons=inject_lessons):
+                    if "_orchestrator_outcome" in e:
+                        eng_outcome = e
+                        continue
+                    yield e
+            except Exception as exc:  # noqa: BLE001
+                # #3 wedge-proof (A45-coupled, 2026-06-04 BL-0006): _engineer_flow
+                # raised before yielding its outcome sentinel — e.g. an idle-kill
+                # propagating mid-await, a gate subprocess crash, or an unexpected
+                # error. Treat it as engineer_unmerged so the standard not-merged
+                # path below fires bl.done(engineer_unmerged) and honors
+                # stop_on_failure deterministically, instead of letting the
+                # exception escape the BL loop with no terminal event (the
+                # 0-procs-no-terminal wedge that only End-Sprint could clear).
+                # This does NOT touch the R10/R10.1/R10.2 retry loops inside
+                # _engineer_flow; CancelledError/GeneratorExit are BaseException
+                # → not caught → clean shutdown still propagates.
+                yield _evt("engineer.error", bl_id=bl_id,
+                           error=f"{type(exc).__name__}: {exc}"[:500])
+                eng_outcome = {"role": "engineer", "bl_id": bl_id,
+                               "merged": False, "no_op": False, "engineer_error": True}
             per_bl["engineer"] = eng_outcome or {"merged": False}
             yield _evt("engineer.done", **(eng_outcome or {"bl_id": bl_id}))
             # R11 no_op: engineer detected work already in codebase. But QA may
@@ -2223,6 +2240,23 @@ async def run_brief(
                                 for k in {v.kind for v in violations}})
         except Exception as exc:
             yield _evt("closure_check.error", error=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        # #3 wedge-proof backstop: any exception that escaped the sprint body
+        # before sprint_complete MUST still produce a terminal event. The outer
+        # try previously had ONLY a finally — and an async generator cannot
+        # yield from finally during aclose() (PEP 525) — so an unhandled raise
+        # propagated out of run() and the SSE stream ended with NO terminal
+        # event: the 0-procs-no-terminal wedge that only the End-Sprint button
+        # could clear (BL-0006, search_and_discovery_2, 2026-06-04). Emit
+        # `aborted` here so the stream always terminates cleanly. terminal_status
+        # stays "aborted" (its default) so the A7 disk-state move tags the run
+        # correctly. We deliberately do NOT re-raise — the structured terminal
+        # event IS the contract; re-raising would break the very stream we just
+        # guaranteed. CancelledError/GeneratorExit are BaseException → not
+        # caught → consumer-disconnect / End-Sprint cancellation still propagate.
+        yield _evt("aborted",
+                   reason=f"unhandled orchestrator error: {type(exc).__name__}: {exc}"[:600],
+                   error_type=type(exc).__name__)
     finally:
         # A7: move the disk state file into done/ tagged with how the run ended.
         try:

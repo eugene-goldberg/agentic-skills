@@ -129,7 +129,98 @@ def extract_disk_full_reason(post_tail: str) -> str | None:
     return None
 
 
+# A49 (2026-06-03/04, invoice-soft-delete dispatch): the regression gate is
+# non-deterministic — transient network/IO errors in E2E (socket hang up /
+# ECONNRESET / ECONNREFUSED / axios "Network Error" / ETIMEDOUT) can fail a
+# test on ALL Playwright retries and surface as a `regressed` verdict that
+# blocks a CORRECT fix from merging. These verdicts are not a function of the
+# diff under test. We deliberately do NOT auto-flip the verdict here — turning
+# a red gate non-red is a gate-semantics doctrine change requiring operator
+# sign-off (A49 fix #2, deferred). Instead `detect_transient_markers` is an
+# ANNOTATION: it surfaces detected transient markers into the gate result so
+# the engineer retry prompt and the operator triage UI can flag "this red may
+# be a network flake; a standalone re-run may differ" (A49 fix #5).
+_TRANSIENT_MARKERS = (
+    re.compile(r"socket hang up", re.IGNORECASE),
+    re.compile(r"\bECONNRESET\b", re.IGNORECASE),
+    re.compile(r"\bECONNREFUSED\b", re.IGNORECASE),
+    re.compile(r"\bETIMEDOUT\b", re.IGNORECASE),
+    re.compile(r"\bNetwork Error\b", re.IGNORECASE),
+)
+
+
+def detect_transient_markers(post_tail: str) -> list[str]:
+    """A49: return the distinct transient network/IO error markers present in
+    the gate tail, in first-seen order. Annotation only — this NEVER flips a
+    verdict (that is deferred to an operator-approved doctrine change), so it
+    cannot mask a real regression. Returns ``[]`` when none match.
+    """
+    if not post_tail:
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for pat in _TRANSIENT_MARKERS:
+        m = pat.search(post_tail)
+        if m:
+            tok = m.group(0).lower()
+            if tok not in seen:
+                seen.add(tok)
+                found.append(m.group(0))
+    return found
+
+
 PYTEST_RESULT_RE = re.compile(r"^(?P<file>tests?/[\w./-]+)::(?P<name>[\w.\[\]-]+)\s+(?P<verdict>PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)", re.MULTILINE)
+
+# A39 (2026-06-04 BL-0006 wedge): the gate template (regression_gate.sh)
+# collapses every Playwright E2E failure into ONE synthetic pytest-format
+# line, `tests/playwright::e2e_suite FAILED`. The parser above then reports
+# a single regression nodeid no matter how many distinct E2E tests broke.
+# The engineer retry prompt therefore says "1 regression:
+# tests/playwright::e2e_suite" — opaque, un-actionable — so the engineer
+# self-runs the gate to discover the real failures, which is exactly the
+# loop that wedged BL-0006 for 8h. This regex parses Playwright's own
+# failure-summary block to recover the per-test node-ids:
+#
+#     3 failed
+#       [chromium] › tests/search.spec.ts:11:1 › Search page ... ──────────
+#       [chromium] › tests/search.spec.ts:24:1 › Smart views ... ──────────
+#     7 passed (3.3m)
+#
+#   - `\[[^\]]+\]`  matches any project label ([chromium]/[firefox]/[webkit]/…)
+#   - `›`           is U+203A (Playwright's separator); inner `›` in a title
+#                   is captured intact because the title group runs to EOL.
+#   - location is `<path>:<line>:<col>`; the trailing fill is U+2500 (`─`).
+PLAYWRIGHT_SUITE_NODEID = "tests/playwright::e2e_suite"
+_PLAYWRIGHT_FAIL_RE = re.compile(
+    r"\[[^\]]+\]\s*›\s*(?P<loc>[^\s›]+:\d+:\d+)\s*›\s*(?P<title>.+?)\s*(?:─|$)",
+    re.MULTILINE,
+)
+
+
+def _extract_playwright_failures(raw_tail: str) -> list[dict]:
+    """A39: expand the single synthetic ``tests/playwright::e2e_suite``
+    regression into the real per-test Playwright failures parsed from the
+    runner tail, so the engineer retry gets actionable test names.
+
+    Returns a list of ``{location, title, nodeid}`` dicts, de-duplicated by
+    nodeid in first-seen order. The Playwright failure summary is printed
+    once per retry attempt, so the same failing test recurs in the tail;
+    de-dup unions them. Returns ``[]`` when nothing parses (caller then
+    keeps the opaque suite marker rather than dropping the regression).
+    """
+    if not raw_tail:
+        return []
+    seen: set[str] = set()
+    out: list[dict] = []
+    for m in _PLAYWRIGHT_FAIL_RE.finditer(raw_tail):
+        location = m.group("loc").strip()
+        title = m.group("title").strip().rstrip("─").strip()
+        nodeid = f"tests/playwright::{location}"
+        if nodeid in seen:
+            continue
+        seen.add(nodeid)
+        out.append({"location": location, "title": title, "nodeid": nodeid})
+    return out
 
 
 @dataclass
@@ -370,6 +461,23 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
         # A test that was passing pre-merge but is now failing (or missing) is a regression.
         regressions = sorted(pre.passed - post.passed)
         new_failures = sorted(post.failed - pre.failed)
+
+        # A39: when the opaque Playwright suite marker is among the failures,
+        # expand it into the real per-test node-ids parsed from the tail.
+        # Only fire when the marker is actually present so non-E2E gates pay
+        # nothing; if extraction yields nothing the marker is left in place.
+        playwright_failures: list[dict] = []
+        if PLAYWRIGHT_SUITE_NODEID in regressions or PLAYWRIGHT_SUITE_NODEID in new_failures:
+            playwright_failures = _extract_playwright_failures(post.raw_tail)
+
+        def _expand_suite(nodes: list[str]) -> list[str]:
+            if not playwright_failures or PLAYWRIGHT_SUITE_NODEID not in nodes:
+                return nodes
+            kept = [n for n in nodes if n != PLAYWRIGHT_SUITE_NODEID]
+            return sorted(kept + [pf["nodeid"] for pf in playwright_failures])
+
+        regressions = _expand_suite(regressions)
+        new_failures = _expand_suite(new_failures)
         # Distinguish "tests ran clean" from "tests never ran". If post exited
         # non-zero but emitted no parseable results, the gate is inconclusive
         # (e.g. backend container down, missing fixture, import error) — that
@@ -393,6 +501,22 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
             kind, reason = "inconclusive", "tests did not execute (no pass/fail parsed); verify test_cmd"
         else:
             kind, reason = "green", f"post suite green ({len(post.passed)} passed)"
+        # A39: name a few real Playwright failures in the one-line reason so
+        # the engineer retry prompt carries actionable test locations instead
+        # of the opaque suite marker.
+        if playwright_failures:
+            names = ", ".join(pf["location"] for pf in playwright_failures[:4])
+            more = "…" if len(playwright_failures) > 4 else ""
+            reason = f"{reason} [playwright: {names}{more}]"
+        # A49: annotate (never flip) when the failing tail shows transient
+        # network/IO markers — gate non-determinism may have produced this red.
+        transient_markers: list[str] = []
+        if kind in ("regressed", "inconclusive"):
+            transient_markers = detect_transient_markers(post.raw_tail)
+            if transient_markers:
+                reason = (f"{reason} [transient markers seen: "
+                          f"{', '.join(transient_markers[:3])} — gate "
+                          "non-determinism possible (A49); a standalone re-run may differ]")
         ok = (kind == "green")
         return {
             "ok": ok,
@@ -401,6 +525,8 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
             "post": post.to_dict(),
             "regressions": regressions[:50],
             "new_failures": new_failures[:50],
+            "failing_tests": playwright_failures[:50],
+            "transient_markers": transient_markers,
             "command": test_cmd,
             "reason": reason,
             "post_tail": post.raw_tail[-15000:],

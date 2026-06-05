@@ -74,7 +74,17 @@ $COMPOSE run --rm --no-deps \
 be_rc=$?
 
 # ─── 5. Playwright E2E against running stack ───────────────────────────
-$COMPOSE --profile gate-e2e run --rm -e CI=1 playwright bunx playwright test
+# A49: `--retries=2` is passed explicitly so the gate's flake tolerance is
+# self-contained and does NOT depend on the target repo's playwright.config
+# reading CI env (full-stack-fastapi-template already sets
+# `retries: process.env.CI ? 2 : 0`, so on that target this is belt-and-
+# suspenders; on a target whose config omits CI-retries it is the actual
+# source of retry tolerance). A test that fails then passes on retry counts
+# as `flaky` → exit 0 → PASSED. Note: this does NOT rescue a transient
+# (socket hang up / ECONNRESET) that fails ALL retries — that case is
+# annotated downstream by regression_gate.detect_transient_markers (A49),
+# pending an operator-approved verdict-reclassification doctrine change.
+$COMPOSE --profile gate-e2e run --rm -e CI=1 playwright bunx playwright test --retries=2
 e2e_rc=$?
 if [ $e2e_rc -eq 0 ]; then
   echo "tests/playwright::e2e_suite PASSED"
