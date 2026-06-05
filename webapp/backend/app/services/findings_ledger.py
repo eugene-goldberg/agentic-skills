@@ -138,6 +138,19 @@ class Finding:
     dispatch_run_id: Optional[str] = None       # sprint run that dispatched
     dispatch_merged_sha: Optional[str] = None   # merge SHA if the fix landed
     dispatch_ts: Optional[str] = None           # ISO-8601 UTC, dispatch start
+    # SKILLS v0.2 (2026-06-05) verified root-cause dossier. The acceptance
+    # agent must now ship source-grounded attribution, not a one-sentence
+    # hypothesis; these fields persist that intelligence so the triage UI, the
+    # dispatch fixer's prompt, and the calibration priors consume the *verified
+    # cause*, not just a truncated free-text blurb. All nullable + defaulted so
+    # pre-v0.2 ledgers load unchanged via ``from_jsonl`` → ``cls(**d)``. NOT
+    # part of ``_compute_finding_id`` (these can shift across reruns; identity
+    # must stay stable).
+    root_cause: Optional[str] = None              # causal chain: symptom → cause
+    source_refs: Optional[list] = None            # ["file.ext:line", ...]
+    alternatives_falsified: Optional[str] = None  # evidence ruling out siblings
+    fix_locus: Optional[str] = None               # artifact/fixer to route to
+    confidence: Optional[float] = None            # agent's calibrated confidence
 
     def to_jsonl(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))
@@ -439,6 +452,7 @@ def _extract_finding_from_journey(
         if classification not in VALID_CLASSIFICATIONS:
             return None
         evidence_raw = _extract_caveat_evidence(caveat)
+        dossier = _extract_dossier(caveat, journey)
     elif status in ("failed", "fail", "error"):
         # Shapes #1 + #2: failed journey.
         failure = journey.get("failure") if isinstance(journey.get("failure"), dict) else {}
@@ -450,6 +464,7 @@ def _extract_finding_from_journey(
         if classification not in VALID_CLASSIFICATIONS:
             return None
         evidence_raw = _extract_evidence_summary_dual(journey, failure)
+        dossier = _extract_dossier(journey, failure)
     else:
         return None
 
@@ -469,7 +484,40 @@ def _extract_finding_from_journey(
         first_seen_ts=now,
         last_seen_ts=now,
         seen_count=1,
+        **dossier,
     )
+
+
+def _extract_dossier(primary: dict, secondary: dict | None) -> dict:
+    """SKILLS v0.2: pull the verified root-cause dossier fields off a finding,
+    preferring the primary shape (top-level journey, or the caveat object) and
+    falling back to the secondary (nested ``failure``). Absent fields stay
+    None so pre-v0.2 reports persist unchanged. Coerces ``source_refs`` to a
+    list and ``confidence`` to a float when possible."""
+    secondary = secondary or {}
+
+    def pick(key: str) -> Any:
+        v = primary.get(key)
+        if v not in (None, "", [], {}):
+            return v
+        return secondary.get(key)
+
+    refs = pick("source_refs")
+    if isinstance(refs, str):
+        refs = [refs]
+    conf = pick("confidence")
+    if isinstance(conf, str):
+        try:
+            conf = float(conf)
+        except ValueError:
+            conf = None
+    return {
+        "root_cause": pick("root_cause"),
+        "source_refs": refs if isinstance(refs, list) else None,
+        "alternatives_falsified": pick("alternatives_falsified"),
+        "fix_locus": pick("fix_locus"),
+        "confidence": conf if isinstance(conf, (int, float)) else None,
+    }
 
 
 def _extract_caveat_evidence(caveat: dict) -> str:

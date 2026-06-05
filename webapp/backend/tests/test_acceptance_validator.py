@@ -177,7 +177,10 @@ def test_failed_journey_only_needs_one_png(tmp_path: Path) -> None:
     journeys = yaml.safe_load((acc / "journeys.yaml").read_text())
     _write_report_json(acc, journeys, outcomes=[
         {"id": 1, "slug": "slug_1", "outcome": "failed",
-         "failure": {"classification": "product_bug", "step": "step_03"}},
+         "failure": {"classification": "product_bug", "step": "step_03",
+                     "root_cause": "backend/app/search/engine.py:120 applies @@ tsquery unconditionally",
+                     "source_refs": ["backend/app/search/engine.py:120"],
+                     "alternatives_falsified": "test_bug ruled out: selector matches; data_bug ruled out: seed_log shows rows"}},
         {"id": 2, "slug": "slug_2", "outcome": "passed"},
     ])
     # Delete 3 of 4 declared pngs for journey 1; one png remains as evidence
@@ -195,7 +198,10 @@ def test_classification_nested_under_failure_accepted(tmp_path: Path) -> None:
     journeys = yaml.safe_load((acc / "journeys.yaml").read_text())
     _write_report_json(acc, journeys, outcomes=[
         {"id": 1, "slug": "slug_1", "outcome": "failed",
-         "failure": {"classification": "test_bug", "step": "x"}},
+         "failure": {"classification": "test_bug", "step": "x",
+                     "root_cause": "frontend/tests/search.spec.ts:13 non-strict getByRole resolves 3 elements",
+                     "source_refs": ["frontend/tests/search.spec.ts:13"],
+                     "alternatives_falsified": "product_bug ruled out: UI renders correctly in screenshot"}},
         {"id": 2, "slug": "slug_2", "outcome": "passed"},
     ])
     # Need a png in journey_01_slug_1 (which the builder already provided)
@@ -426,3 +432,105 @@ def test_api_too_many_requests_per_journey_flagged(tmp_path: Path) -> None:
     assert result["ok"] is False
     assert any(f"> MAX {av.MAX_REQUESTS_PER_API_JOURNEY}" in m
                for m in result["missing"])
+
+
+# ─── SKILLS v0.2: verified root-cause dossier enforcement ─────────────────
+
+
+def _failed_finding(**extra) -> dict:
+    base = {"id": 1, "slug": "slug_1", "outcome": "failed",
+            "failure": {"classification": "product_bug", "step": "step_02"}}
+    base["failure"].update(extra)
+    return base
+
+
+def test_product_bug_without_source_is_flagged(tmp_path: Path) -> None:
+    """A code-fault finding with no source location is incomplete (v0.2)."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    journeys = yaml.safe_load((acc / "journeys.yaml").read_text())
+    _write_report_json(acc, journeys, outcomes=[
+        _failed_finding(alternatives_falsified="x ruled out"),  # source missing
+        {"id": 2, "slug": "slug_2", "outcome": "passed"},
+    ])
+    result = av.validate_acceptance(acc)
+    assert result["ok"] is False
+    assert any("no verified source location" in m for m in result["missing"]), result
+
+
+def test_product_bug_without_alternatives_is_flagged(tmp_path: Path) -> None:
+    acc = _build_valid_acceptance_dir(tmp_path)
+    journeys = yaml.safe_load((acc / "journeys.yaml").read_text())
+    _write_report_json(acc, journeys, outcomes=[
+        _failed_finding(source_refs=["backend/app/x.py:42"]),  # alternatives missing
+        {"id": 2, "slug": "slug_2", "outcome": "passed"},
+    ])
+    result = av.validate_acceptance(acc)
+    assert result["ok"] is False
+    assert any("alternatives_falsified" in m for m in result["missing"]), result
+
+
+def test_product_bug_with_full_dossier_passes(tmp_path: Path) -> None:
+    acc = _build_valid_acceptance_dir(tmp_path)
+    journeys = yaml.safe_load((acc / "journeys.yaml").read_text())
+    _write_report_json(acc, journeys, outcomes=[
+        _failed_finding(
+            root_cause="backend/app/x.py:42 returns None for empty input",
+            source_refs=["backend/app/x.py:42"],
+            alternatives_falsified="test_bug ruled out: selector ok; data_bug ruled out: seed present",
+        ),
+        {"id": 2, "slug": "slug_2", "outcome": "passed"},
+    ])
+    result = av.validate_acceptance(acc)
+    assert result["ok"] is True, result
+
+
+def test_root_cause_inline_file_line_satisfies_source_rule(tmp_path: Path) -> None:
+    """A `file.ext:line` token inside root_cause counts as a source location
+    even without a separate source_refs list."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    journeys = yaml.safe_load((acc / "journeys.yaml").read_text())
+    _write_report_json(acc, journeys, outcomes=[
+        _failed_finding(
+            root_cause="traced to backend/app/search/engine.py:120 (unconditional @@)",
+            alternatives_falsified="others ruled out by reading the query builder",
+        ),
+        {"id": 2, "slug": "slug_2", "outcome": "passed"},
+    ])
+    result = av.validate_acceptance(acc)
+    assert result["ok"] is True, result
+
+
+def test_uncertain_without_record_is_flagged(tmp_path: Path) -> None:
+    acc = _build_valid_acceptance_dir(tmp_path)
+    journeys = yaml.safe_load((acc / "journeys.yaml").read_text())
+    _write_report_json(acc, journeys, outcomes=[
+        _failed_finding(classification="uncertain"),  # no investigation record
+        {"id": 2, "slug": "slug_2", "outcome": "passed"},
+    ])
+    result = av.validate_acceptance(acc)
+    assert result["ok"] is False
+    assert any("no investigation record" in m for m in result["missing"]), result
+
+
+def test_uncertain_with_next_steps_passes(tmp_path: Path) -> None:
+    acc = _build_valid_acceptance_dir(tmp_path)
+    journeys = yaml.safe_load((acc / "journeys.yaml").read_text())
+    _write_report_json(acc, journeys, outcomes=[
+        _failed_finding(classification="uncertain",
+                        next_steps="1) check the FTS index 2) diff the seed"),
+        {"id": 2, "slug": "slug_2", "outcome": "passed"},
+    ])
+    result = av.validate_acceptance(acc)
+    assert result["ok"] is True, result
+
+
+def test_infra_bug_exempt_from_dossier(tmp_path: Path) -> None:
+    """infra_bug has no product source line — exempt from the dossier rule."""
+    acc = _build_valid_acceptance_dir(tmp_path)
+    journeys = yaml.safe_load((acc / "journeys.yaml").read_text())
+    _write_report_json(acc, journeys, outcomes=[
+        _failed_finding(classification="infra_bug"),  # no dossier needed
+        {"id": 2, "slug": "slug_2", "outcome": "passed"},
+    ])
+    result = av.validate_acceptance(acc)
+    assert result["ok"] is True, result

@@ -33,6 +33,7 @@ artifacts written by the agent. It never spawns or mutates anything.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,25 @@ VALID_OUTCOMES = {"passed", "failed", "unshippable"}
 VALID_CLASSIFICATIONS = {
     "product_bug", "test_bug", "data_bug", "infra_bug", "uncertain",
 }
+
+# SKILLS v0.2 (2026-06-05) — verified root-cause doctrine. A failure
+# attributed to code/test/data is NOT reportable as a bare classification or a
+# one-sentence hypothesis: the acceptance agent must ship a *verified* dossier
+# — the responsible source location (file:line) plus the evidence that
+# falsifies the competing causes. This validator enforces that contract so the
+# SKILLS demand is binding, not advisory: a code/test/data finding missing its
+# dossier is flagged `missing` → routed through the R10.1 retry loop with the
+# gap named, exactly like any other contract violation.
+#
+# `infra_bug` is exempt (an environment failure has no product source line).
+# `uncertain` is exempt from source-refs BUT must carry an investigation
+# record (the candidates/checks/next-steps that earned the uncertainty) — an
+# `uncertain` with no record is a shortcut, not an earned verdict.
+CODE_FAULT_CLASSIFICATIONS = {"product_bug", "test_bug", "data_bug"}
+
+# A concrete source location: a path-ish token ending in `.<ext>:<line>`,
+# e.g. `backend/app/search/engine.py:120` or `engine.py:120:5`.
+_FILE_LINE_RE = re.compile(r"[\w./\\-]+\.[A-Za-z0-9]+:\d+")
 
 # ─── ABL-0014 Item 1 (API-acceptance pass) ────────────────────────────────
 # Cap parallel to MAX_JOURNEYS; one api_journey per backend BL is the
@@ -272,8 +292,72 @@ def _validate_screenshots(acc_dir: Path, journeys: list[dict], acc: dict) -> Non
             )
 
 
+def _finding_field(obj: dict, key: str) -> Any:
+    """Read ``key`` from a finding dict, accepting either the top-level form
+    or the agent's natural nested-under-``failure`` shape (mirrors how the
+    classification is resolved)."""
+    if key in obj and obj[key] not in (None, "", [], {}):
+        return obj[key]
+    failure = obj.get("failure")
+    if isinstance(failure, dict):
+        return failure.get(key)
+    return None
+
+
+def _has_source_location(obj: dict) -> bool:
+    """True if the finding carries a concrete source location — either a
+    non-empty ``source_refs`` list, or a ``root_cause`` string containing a
+    ``file.ext:line`` token."""
+    refs = _finding_field(obj, "source_refs")
+    if isinstance(refs, list) and any(isinstance(r, str) and _FILE_LINE_RE.search(r) for r in refs):
+        return True
+    rc = _finding_field(obj, "root_cause")
+    if isinstance(rc, str) and _FILE_LINE_RE.search(rc):
+        return True
+    return False
+
+
+def _validate_finding_dossier(obj: dict, cls: str, label: str, acc: dict) -> None:
+    """SKILLS v0.2: enforce the verified root-cause dossier on a failed
+    finding (UI journey or api_journey). Mutates ``acc['missing']``.
+
+    - code/test/data fault → require a source `file:line` AND a non-empty
+      `alternatives_falsified` (the evidence ruling out competing causes).
+    - uncertain → require a non-empty investigation record
+      (`next_steps`/`next_diagnostic_steps`/`investigation`/`alternatives_falsified`).
+    - infra_bug → exempt (no product source line exists).
+    """
+    if cls in CODE_FAULT_CLASSIFICATIONS:
+        if not _has_source_location(obj):
+            acc["missing"].append(
+                f"{label} classified '{cls}' but has no verified source location "
+                f"(SKILLS v0.2: require `source_refs:[file:line]` or a `root_cause` "
+                f"naming `file.ext:line` — a one-sentence hypothesis is not acceptable; "
+                f"investigate to the source or classify `uncertain`)"
+            )
+        if not _finding_field(obj, "alternatives_falsified"):
+            acc["missing"].append(
+                f"{label} classified '{cls}' but missing `alternatives_falsified` "
+                f"(SKILLS v0.2: cite the evidence that ruled out the competing causes)"
+            )
+    elif cls == "uncertain":
+        record = (
+            _finding_field(obj, "next_steps")
+            or _finding_field(obj, "next_diagnostic_steps")
+            or _finding_field(obj, "investigation")
+            or _finding_field(obj, "alternatives_falsified")
+        )
+        if not record:
+            acc["missing"].append(
+                f"{label} classified 'uncertain' but carries no investigation record "
+                f"(SKILLS v0.2: `uncertain` must be earned — attach the candidates "
+                f"considered / checks run / next diagnostic steps)"
+            )
+
+
 def _validate_report_json(acc_dir: Path, acc: dict) -> None:
-    """report.json must hold per-journey outcomes with valid enums."""
+    """report.json must hold per-journey outcomes with valid enums AND, for
+    failed findings, the SKILLS v0.2 verified root-cause dossier."""
     path = acc_dir / "report.json"
     if not path.exists():
         return  # already flagged by REQUIRED_TOP_LEVEL check
@@ -313,6 +397,28 @@ def _validate_report_json(acc_dir: Path, acc: dict) -> None:
                     f"(must be one of {sorted(VALID_CLASSIFICATIONS)}; "
                     f"accepted at top-level or nested under 'failure')"
                 )
+                continue
+            _validate_finding_dossier(j, cls, f"report.json journeys[{idx}]", acc)
+
+    # SKILLS v0.2: api_journey findings in report.json carry the same
+    # verified-dossier obligation as UI journeys.
+    api_journeys = data.get("api_journeys")
+    if isinstance(api_journeys, list):
+        for idx, j in enumerate(api_journeys):
+            if not isinstance(j, dict):
+                continue
+            if _journey_outcome_for_screenshot_rule(j) != "failed":
+                continue
+            cls = j.get("classification")
+            if cls is None and isinstance(j.get("failure"), dict):
+                cls = j["failure"].get("classification")
+            if cls not in VALID_CLASSIFICATIONS:
+                acc["missing"].append(
+                    f"report.json api_journeys[{idx}] failed but classification={cls!r} "
+                    f"(must be one of {sorted(VALID_CLASSIFICATIONS)})"
+                )
+                continue
+            _validate_finding_dossier(j, cls, f"report.json api_journeys[{idx}]", acc)
 
 
 def _check_required_file(acc_dir: Path, rel: str, acc: dict) -> None:
