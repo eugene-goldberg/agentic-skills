@@ -1,152 +1,110 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-03.
+> Hand-off written 2026-06-05.
 
 ---PROMPT START---
 
-You are picking up the agentic-skills project. **You are the architect.**
-Read `CLAUDE.md` first — especially the **"Operating principle: quality
-over speed"** section (Rules 1–6, the **95% verified/tested certainty
-floor**, Rule 3 on **narrative momentum**). The main project is the crew
-itself; brownfield targets and their `_brownfield/` derivatives are never
-committed to this repo — we only commit/push/maintain agentic-skills.
+You are picking up the agentic-skills project. **You are the architect.** Read
+`CLAUDE.md` first (esp. "Operating principle: quality over speed" — Rules 1–6,
+the **95% verified/tested floor**, Rule 3 narrative momentum). Only
+agentic-skills is committed/pushed; brownfield targets and their `_brownfield/`
+are never committed here.
 
-## ⭐ THIS SESSION'S GOAL (operator-stated, top priority)
+## ⭐ THIS SESSION'S GOAL — finish the harness hardening, then re-run the sprint
 
-**Run a NEW brownfield sprint end-to-end via the web app UI, observe and
-react to any findings the acceptance pass exposes, and review / approve
-immediate engineering fixes — exercising the new ABL-0021 "Dispatch fix"
-flow live.**
+Last session ran a **live brownfield sprint** (`search_and_discovery_2`,
+"Advanced Search & Knowledge Discovery", on `full-stack-fastapi-template`) and
+it exposed three harness defects that compounded into a wedged run. We fixed two
+live and **deferred three** to this session. Do those, then re-run the sprint
+clean.
 
-This is a **live, operator-driven session.** Your job as architect is to
-support the operator through it: get the environment green, launch the
-sprint from the UI, watch the stream, and then drive the
-findings-review-and-fix loop. Concretely, the loop we are validating:
+### What happened last run (the evidence)
+- **5/6 BLs `merged_full`** on the clean branch; **BL-0006 (frontend) wedged.**
+- Root cause was a **3-defect compound**, all now reproduced with evidence:
+  - **A39** — the gate reported `regressions: ['tests/playwright::e2e_suite']`
+    ("1 regression") while there were **5 distinct playwright failures**. The
+    engineer retry got no actionable test names → ran the gate itself → spiral.
+  - **A45** — the retry then hit **28 rate_limit events + a 600s silence →
+    false idle-timeout kill** (it was rate-limited/working, not hung).
+  - **A49** — one of the 5 failures was the unrelated **flaky reset-password**
+    E2E (recurring; also seen in the invoice run).
+  - The 5 BL-0006 failures were: 2 **test-locator bugs** (engineer's own
+    `search.spec.ts` non-strict `getByRole`/`getByText` → strict-mode
+    violations; UI actually renders), 2 **real "search-results don't render"**
+    (`getByTestId('search-results')` not found — likely **unseeded search data**
+    in the gate DB), 1 **flaky** (reset-password).
 
-```
-launch sprint (web UI) → BLs run (engineer/QA/scorer, auto-merge)
-   → acceptance pass exposes cross-BL findings
-   → operator reviews findings in the FindingsTriagePanel
-   → Confirm the real ones (verdict)
-   → click "🛠 Dispatch fix" → a follow-up engineer fixes it on-demand
-   → observe the fix clear the regression gate + auto-merge
-```
+### Already shipped last session (on `followup-dispatch-ui`)
+- `b4a1b46` AppV2 in-UI **Review & merge** (BranchesPanel + unmerged tile +
+  inline on `not_merged` findings) + run-brief toggles (run_acceptance_followup,
+  inject_lessons).
+- `c06615e` **A50** — `merge-branch` syncs the follow-up finding to `merged`.
+- `b6ea3e9` **⛔ End current Sprint** button + `POST /end-sprint` (reaps
+  worktrees, docker stacks/volumes, run-scoped images, run-state, lock).
+- `8005dda` **A45 + A51** agent guards: `_inflight_readline_timeout()` (don't
+  idle-kill while a tool is in flight / rate-limited) + **`--strict-mcp-config`**
+  (agents no longer inherit the operator's global MCP fleet — Gmail/Drive/MS365/
+  azure-devops/ghost-Postgres). Suite **272 passed**.
+- Docs: `CONTROL_FLOW.md` (Mermaid + ASCII control-flow), `DOCTRINE.md`.
 
-The "Dispatch fix" facility (ABL-0021) was just built and is the headline
-thing to exercise. It needs **no flag** — it's an explicit operator action
-on a confirmed product_bug.
+### ⭐ DO THIS SESSION — the 3 deferred harness fixes (precise specs)
+1. **#1 A39 (regression_gate.py, LOW risk, do first):** add
+   `_extract_playwright_failures(raw_tail)` —
+   regex `\[chromium\]\s*›\s*(tests/\S+:\d+:\d+)\s*›\s*(.+?)\s*(?:─|$)`. In
+   `run_gate`, when `tests/playwright::e2e_suite` is in `regressions`, **expand
+   it to the real node-ids** into `regressions` (+ a `failing_tests` field), and
+   name a few in `reason`. Unit-test the extractor on a sample tail. *This is the
+   fix that gives the engineer something to fix.*
+2. **#5 A49 (gate template, LOW risk):** add `--retries=2` to the playwright
+   invocation in `webapp/backend/app/templates/regression_gate.sh` AND the
+   active branch's `scripts/regression_gate.sh`, so flaky-final-pass = PASS
+   (kills the reset-password false regression). Optional `_TRANSIENT_RE`
+   annotation in `regression_gate.py`. Test: template contains `--retries`.
+3. **#3 wedge-proof (orchestrator.py `_engineer_flow`, HIGHER risk — own care):**
+   on retry-exhaustion/idle, **always emit `bl.done(engineer_unmerged)`** and
+   continue/abort deterministically — never leave 0-procs-no-terminal (a wedged
+   run that only the End-Sprint button can clear). Read the retry loop carefully
+   first; don't break the R10/R10.1/R10.2 paths.
 
-### Run from the right branch
+Also: **file A51 in the ledger** (implemented but not yet filed) and bump
+A39/A45/A49 with this run's evidence (A45 partial fix is already noted).
 
-**Check out `followup-dispatch-ui`** to run the webapp — it carries
-everything this loop needs: the ABL-0015 dispatch engine, the §I.3 triage
-panel + verdict/findings endpoints, AND the ABL-0021 `POST
-/dispatch-followup` endpoint + the "Dispatch fix" button. (It was branched
-off `cumulative_learning`, so it also has ABL-0016 lessons + ABL-0020
-registry.)
-
-```bash
-cd /Users/eugenegoldberg/dev/ai-projects/agentic-skills
-git checkout followup-dispatch-ui && git status -s   # clean, synced
-```
-
-### Pre-flight (do the FULL checklist — don't skip)
-
-Run `PREFLIGHT.md` (PF-1..10) before launching: Milvus stack (3 containers
-healthy + 19530 reachable), Ollama `bge-m3` + a real embedding probe,
-indexer end-to-end against the target, `claude` binary version, target tree
-on the right branch/head, leftover worktrees reaped, Docker.raw room,
-`254/254` backend tests. Lessons from prior sessions (don'ts §below) bite
-hardest when pre-flight is skipped.
-
-### How to launch + what to watch
-
-- Start the webapp per `webapp/PROJECT_STATE.md` §13 ("How to run from a
-  fresh clone" — backend uvicorn + `vite`/built frontend). Use **Ctrl+C
-  (SIGTERM)** to stop uvicorn, never `kill -9` (the SIGTERM handler reaps
-  Docker stacks; A48).
-- Submit a brief via the UI (`POST /run-brief` under the hood). Watch the
-  SSE stream: per-BL `engineer/qa/scorer`, `regression_gate`,
-  `merge_to_target`, then `sprint_complete`, then the **acceptance** phase
-  (`acceptance.start` … `acceptance.ledger.appended` with
-  `findings_persisted`, `acceptance.done`).
-- When acceptance persists findings, the acceptance tile surfaces them and
-  the **FindingsTriagePanel** opens in the detail rail.
-
-### The findings-review + fix loop (ABL-0021 — the thing to exercise)
-
-In the FindingsTriagePanel (`webapp/frontend/src/AppV2.jsx`):
-1. Each finding shows classification + evidence + a `fix:<state>` badge.
-2. **Confirm** a real `product_bug` (verdict). Refute/Defer the others.
-3. A **"🛠 Dispatch fix"** button appears on confirmed product_bugs →
-   click it → `POST /dispatch-followup` spawns a follow-up engineer,
-   streams `acceptance.followup.*` + engineer sub-events live, and shows the
-   terminal outcome (✅ merged + sha / ⚠ awaiting review / ❌ error).
-4. The fix clears the **same** regression-gate + auto-merge bar as any BL
-   (it reuses the ABL-0015 engine). Verify the merge; the finding's
-   `dispatch_state` becomes `merged`.
-
-**React to what you see, honestly** (Rule 1/3/6): if the acceptance agent
-misclassifies, or a dispatched fix fails the gate, that's signal — capture
-it, don't paper over it. A real product_bug example already lives in the
-financial-management ledger (Journey 03: `PUT /billing/invoices/{id}`
-bypasses the BL-0005 transition state machine) if you want a known case.
+### Then: re-run + BL-0006 decision
+- Restart uvicorn to load `8005dda` (live PID 15816 predates A45/A51).
+- BL-0006 (frontend search UI) is **not merged**. Decide: with A39+A49+seed-data
+  fixed, re-run just BL-0006 (skip_po resume) OR hand-fix the 2 locator bugs +
+  the search-results/seed gap, then merge. The 5 merged BLs (search foundation +
+  registry, API, filtering, ranking, saved searches) are safe on
+  `agentic-skills-work-search_and_discovery`.
+- Consider whether the gate needs **seeded search data** for search/list
+  features (the `search-results` E2E can't pass against an empty DB).
 
 ## State at hand-off
+- **agentic-skills branch:** `followup-dispatch-ui` @ `8005dda` (pushed). Several
+  branches stacked (architect-prereqs→cumulative_learning→followup-dispatch-ui);
+  branch consolidation to a trunk is still deferred.
+- **Target:** `full-stack-fastapi-template` on **`agentic-skills-work-search_and_discovery`** @ `46d5bce` — clean fork off master (no billing), 5/6 search BLs merged. `.agentic-skills.json` agent_branch points here.
+- **Test posture:** `cd webapp/backend && .venv/bin/python -m pytest tests/` → **272 passed**.
+- **Live stack:** uvicorn PID 15816 (has A50, NOT A45/A51 — restart to load `8005dda`); vite frontend; Docker = milvus only; worktrees/run-images cleaned.
 
-- **Branch:** `followup-dispatch-ui` (tip `3db7705`), synced with origin.
-- **ABL-0021 on-demand "Dispatch fix" — COMPLETE** (this session): backend
-  `8bfbec7`, frontend `3db7705`. The only remaining verification is exactly
-  this session's live click-through. See `ABL-0021_ONDEMAND_DISPATCH_UI.md`
-  + `arch-ondemand-dispatch-ui` memory.
-- **Test posture:** 254/254 backend (scoped `cd webapp/backend && pytest
-  tests/` — bare pytest recurses into gitignored target repos and errors on
-  sqlmodel; not a failure). `vite build` clean.
-- Built on: ABL-0015 auto-dispatch engine (flag-OFF), §I.3 findings ledger +
-  triage panel, ABL-0016 lessons (flag-OFF), ABL-0020 doctrine-spec registry.
+## UI now (AppV2 — operator can run everything from the UI)
+submit → stream (rich event log: click any line → full event JSON; tool calls/
+text/results shown) → acceptance → triage (confirm/refute/defer) → 🛠 Dispatch
+fix (R15) → ⚠ Unmerged-branches tile + Review & merge → ⛔ End current Sprint.
 
-### Optional flags for this session (not required for the Dispatch-fix loop)
-- `run_acceptance_followup=true` → ABL-0015 would ALSO auto-dispatch inline
-  during the sprint on *pre-confirmed* findings (a fresh sprint's findings
-  are pending, so this mostly matters on a re-run). The on-demand button is
-  the simpler path and needs no flag.
-- `inject_lessons=true` → surfaces prior confirmed lessons to the roles
-  (ABL-0016). Independent of the dispatch loop.
+## Reading order
+1. `CLAUDE.md` (architect role + operating principle)
+2. This ⭐ section + `CONTROL_FLOW.md` (how the gates/checks work) + `DOCTRINE.md`
+3. `DESIGN_SHORTCOMINGS.md` A39 / A45 / A49 / A50 / A51
+4. `PREFLIGHT.md` before any re-run
 
-## Deferred architect-doable work (AFTER the live session)
-
-1. **ABL-0017 Stage 2 efficacy** (unblocked by ABL-0020) — outcome-label
-   deriver → rule-efficacy index (join `doctrine_manifest` × `bl_outcomes`)
-   → `retire` proposal kind in doctrine-meta → calibration. Plan:
-   `CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md` §4.
-2. **Branch consolidation** — `architect-prereqs` (ABL-0015), then
-   `cumulative_learning` (ABL-0016/0020), then `followup-dispatch-ui`
-   (ABL-0021) stack on each other. Consider the merge/PR strategy back to a
-   trunk once the live session validates the flow.
-3. Two flag-flip calibration smokes still open (ABL-0016 lessons, ABL-0015
-   Batch E auto-dispatch).
-
-## Other open ledger items
-A39 (gate parser baseline-vs-regressed), A45 (B5 idle-timeout), A47
-(ScheduleWakeup/Glob bypass), A48 (closeable), doctrine-meta R-CHAR
-characterization-ownership proposal.
-
-## Mandatory reading order
-1. `CLAUDE.md` — architect role + Operating principle
-2. This file's ⭐ GOAL section
-3. `ABL-0021_ONDEMAND_DISPATCH_UI.md` + `webapp/PROJECT_STATE.md` (run + the
-   findings/dispatch endpoints) + `PREFLIGHT.md`
-4. `THESIS.md`, `ARCHITECTURE_INVARIANTS.md` (if going deeper than the live run)
-
-## Don'ts (carried lessons)
-1. Don't commit brownfield targets / `_brownfield/` derivatives — only
-   agentic-skills.
-2. Don't run `docker … prune -af` without naming what to keep (wiped Milvus
-   + a ledger once).
-3. Don't skip the full pre-flight after a "clean" cleanup.
-4. Don't lose narrative-momentum awareness — read post_tail + gate fields
-   carefully every time, even when the pattern looks like prior runs.
-5. Don't force-kill uvicorn mid-sprint — Ctrl+C (SIGTERM) reaps Docker
-   stacks; worktrees only reap from `finally`.
+## Don'ts (carried)
+1. Don't commit brownfield targets / `_brownfield/`.
+2. Don't `docker … prune -af` without naming what to keep (Milvus!).
+3. Ctrl+C (SIGTERM) uvicorn, not kill -9 (A48 reaper) — but note a live SSE run
+   blocks graceful shutdown; use the **⛔ End current Sprint** button to kill a
+   live run cleanly, or kill -9 + manual reap if truly stuck.
+4. Don't rush #3 (orchestrator surgery) — it's the one that can break the
+   gate-retry loop.
 
 ---PROMPT END---
