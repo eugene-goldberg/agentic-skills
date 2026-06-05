@@ -186,6 +186,31 @@ def validate_po(repo_root: Path, feature_slug: str | None = None) -> dict:
     return _finalize("po", acc)
 
 
+def _is_committed_at_head(repo_root: Path, rel_path: str) -> bool:
+    """True if ``rel_path`` is present in the COMMITTED HEAD tree (tracked +
+    committed), not merely sitting in the working tree as an uncommitted file.
+
+    R11 no-op discriminator (defect found 2026-06-05, team-calendar-horizon
+    BL-0001): a legitimate no-op means the work — including the eng_patterns.md
+    artifact — was already delivered by an earlier BL and is therefore
+    *committed* on base_ref (== HEAD, zero diff). A FALSE no-op is when an
+    engineer is Tier-1.5/pre-grounding-killed after writing eng_patterns.md to
+    the worktree but committing no code: the artifact then exists on disk but is
+    NOT in the committed tree. Checking the committed tree (not the working
+    tree) is what separates "inherited, truly nothing to do" from "killed
+    before implementing." `git cat-file -e HEAD:<rel>` exits 0 iff the path is
+    in HEAD's tree.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "cat-file", "-e", f"HEAD:{rel_path}"],
+            cwd=repo_root, capture_output=True, text=True, timeout=30,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def validate_engineer(
     repo_root: Path,
     bl_id: str,
@@ -208,26 +233,36 @@ def validate_engineer(
     Pass retrieval_log=None to skip this check (e.g. in unit tests).
 
     R11 no-op terminal state: if base_ref is provided AND the worktree has
-    zero file changes vs base_ref AND the eng_patterns.md artifact already
-    exists at HEAD (inherited from an earlier BL that delivered this work),
+    zero file changes vs base_ref AND the eng_patterns.md artifact is already
+    COMMITTED at HEAD (inherited from an earlier BL that delivered this work),
     return ok=True with no_op=True instead of failing on missing source diff.
     This handles the legitimately-redundant-backlog-item case (e.g. BL-0003
     after BL-0005 cascaded the workspace router in early).
+
+    The committed-tree check (not working-tree existence) is load-bearing:
+    a pre-grounding/Tier-1.5-killed engineer writes eng_patterns.md to the
+    worktree but commits no code (zero committed diff). Checking working-tree
+    existence misread that as a legitimate no-op and skipped the BL entirely
+    (team-calendar-horizon BL-0001, 2026-06-05). Requiring the artifact to be
+    committed at HEAD means a killed-before-implementing engineer falls through
+    to normal validation → fails on the missing committed artifact / code diff
+    → the orchestrator's doctrine-retry loop re-spawns it (and, on exhaustion,
+    yields engineer_unmerged — never a false no_op).
     """
     art = feature_artifact_dir(repo_root, feature_slug)
     acc = {"missing": [], "empty": [], "dangling_refs": []}
     artifact_rel = f"{art}/{bl_id}/eng_patterns.md"
 
-    # R11: detect true no-op (zero diff vs base AND artifact already present)
+    # R11: detect true no-op (zero COMMITTED diff vs base AND artifact already
+    # COMMITTED at HEAD — i.e. inherited, not just written-then-killed).
     if base_ref:
         changed_for_noop = _changed_files(repo_root, base_ref)
-        artifact_path = repo_root / artifact_rel
-        if not changed_for_noop and artifact_path.exists():
+        if not changed_for_noop and _is_committed_at_head(repo_root, artifact_rel):
             result = _finalize("engineer", acc)  # acc still empty → ok=True
             result["no_op"] = True
             result["summary"] = (
                 f"engineer: no-op for {bl_id} — work already satisfied upstream "
-                f"(zero diff vs {base_ref}, eng_patterns.md present at HEAD)"
+                f"(zero diff vs {base_ref}, eng_patterns.md committed at HEAD)"
             )
             return result
 
