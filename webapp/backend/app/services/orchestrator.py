@@ -50,6 +50,8 @@ from app.services.git_worktree import (
     get_commit_sha,
     has_new_commits,
     remove_worktree,
+    reset_target_to,
+    rev_parse,
 )
 from app.services.indexing import run_claude_context_index, run_graphify_update
 from app.services.traces import TraceWriter
@@ -443,6 +445,11 @@ async def _engineer_flow(
     trace: TraceWriter | None = None
     merged = False
     no_op = False
+    # No-abort doctrine: always-defined so the escalation dossier can be built
+    # on any not-merged exit (doctrine never passed, gate never went green, …).
+    gate: dict | None = None
+    gate_attempt = 0
+    gate_signatures: list[str] = []
     try:
         # ABL-0015: a caller-supplied task_id gives the worktree a
         # scannable, run_id-bearing name so closure_check can detect a
@@ -467,9 +474,9 @@ async def _engineer_flow(
             yield {"_orchestrator_outcome": True, "role": "engineer", "bl_id": bl_id,
                    "merged": False, "no_op": True}
             return
-        # doctrine retries
+        # doctrine retries (no-abort doctrine: deep, not the old cap of 2)
         attempt = 0
-        while not validation["ok"] and attempt < 2:
+        while not validation["ok"] and attempt < MAX_FIX_ATTEMPTS:
             attempt += 1
             yield _ptag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
                         "attempt": attempt, **validation}, "engineer", bl_id, trace=trace)
@@ -491,14 +498,17 @@ async def _engineer_flow(
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
                        "engineer", bl_id)
             gate_attempt = 0
-            # A25b: only retry on regressed (code regression the engineer can
-            # plausibly fix). For infra_fail / inconclusive / error, retries
-            # cannot help — break out and let awaiting_review surface the
-            # operator-actionable reason.
-            while not gate.get("ok") and gate.get("kind") == "regressed" and gate_attempt < 2:
+            gate_signatures.append(f"{gate.get('kind')}:{','.join(sorted((gate.get('regressions') or []) + (gate.get('new_failures') or [])))}")
+            # No-abort doctrine: keep fixing until the gate is GREEN. Retry on
+            # regressed OR inconclusive — both are agent-fixable (a regression to
+            # repair, or a suite that didn't run clean: import/fixture/test
+            # error). infra_fail / error are operator-infra, not agent-fixable →
+            # break and escalate with a dossier. A49 re-samples transient flakes
+            # upstream, so a surviving red here is a real, fixable failure.
+            while not gate.get("ok") and gate.get("kind") in ("regressed", "inconclusive") and gate_attempt < MAX_FIX_ATTEMPTS:
                 gate_attempt += 1
                 fix = doctrine_svc.build_gate_fix_prompt("engineer", gate, bl_id=bl_id,
-                                                         attempt=gate_attempt, max_attempts=2)
+                                                         attempt=gate_attempt, max_attempts=MAX_FIX_ATTEMPTS)
                 async for event in stream_agent_task(fix, wt.path,
                                                       timeout_seconds=max(300, timeout // 2),
                                                       trace=trace, **rk):
@@ -561,6 +571,27 @@ async def _engineer_flow(
                 yield _ptag({"type": "_meta", "phase": "awaiting_review",
                             "reason": gate.get("reason") or "doctrine incomplete"},
                            "engineer", bl_id)
+        # No-abort doctrine (Option A): a not-merged engineer has exhausted its
+        # deep investigate→fix→re-test loop without a green gate. This is NOT a
+        # routine abort — surface a full dossier so the orchestrator escalates to
+        # the operator with the complete picture of what was tried and why it's
+        # blocked. (no_op returned earlier; merged falls through to plain outcome.)
+        if not merged and not no_op:
+            last_failing = sorted((gate.get("regressions") or []) + (gate.get("new_failures") or [])) if gate else []
+            dossier = {
+                "role": "engineer", "bl_id": bl_id,
+                "doctrine_ok": bool(validation.get("ok")),
+                "doctrine_attempts": attempt,
+                "gate_attempts": gate_attempt,
+                "last_gate_kind": gate.get("kind") if gate else None,
+                "last_gate_reason": (gate.get("reason") if gate else None) or validation.get("summary"),
+                "last_failing_tests": last_failing[:50],
+                "first_failure_signature": gate_signatures[0] if gate_signatures else None,
+                "exhausted_ceiling": gate_attempt >= MAX_FIX_ATTEMPTS,
+            }
+            yield {"_orchestrator_outcome": True, "role": "engineer", "bl_id": bl_id,
+                   "merged": False, "no_op": False, "escalated": True, "dossier": dossier}
+            return
         yield {"_orchestrator_outcome": True, "role": "engineer", "bl_id": bl_id,
                "merged": merged, "no_op": no_op}
     finally:
@@ -605,6 +636,9 @@ async def _qa_or_scorer_flow(
     wt: Worktree | None = None
     trace: TraceWriter | None = None
     merged = False
+    # No-abort doctrine: always-defined for the escalation dossier.
+    gate: dict | None = None
+    gate_attempt = 0
     try:
         wt = await create_worktree(repo_dir, base_ref=cfg.agent_branch)
         trace = TraceWriter(repo=repo_name, role=role, bl_id=bl_id, task_id=wt.task_id)
@@ -624,7 +658,8 @@ async def _qa_or_scorer_flow(
             validation = doctrine_svc.validate_scorer(wt.path, bl_id, base_ref=cfg.agent_branch,
                                                      retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
         attempt = 0
-        while not validation["ok"] and attempt < 2:
+        # No-abort doctrine: deep doctrine-fix loop (was a shallow cap of 2).
+        while not validation["ok"] and attempt < MAX_FIX_ATTEMPTS:
             attempt += 1
             yield _ptag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
                         "attempt": attempt, **validation}, role, bl_id, trace=trace)
@@ -650,14 +685,13 @@ async def _qa_or_scorer_flow(
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
                        role, bl_id)
             gate_attempt = 0
-            # A25b: only retry on regressed (code regression the engineer can
-            # plausibly fix). For infra_fail / inconclusive / error, retries
-            # cannot help — break out and let awaiting_review surface the
-            # operator-actionable reason.
-            while not gate.get("ok") and gate.get("kind") == "regressed" and gate_attempt < 2:
+            # No-abort doctrine: keep fixing until GREEN. Retry on regressed OR
+            # inconclusive (agent-fixable); infra_fail / error escalate. A49
+            # re-samples transient flakes upstream.
+            while not gate.get("ok") and gate.get("kind") in ("regressed", "inconclusive") and gate_attempt < MAX_FIX_ATTEMPTS:
                 gate_attempt += 1
                 fix = doctrine_svc.build_gate_fix_prompt("qa", gate, bl_id=bl_id,
-                                                         attempt=gate_attempt, max_attempts=2)
+                                                         attempt=gate_attempt, max_attempts=MAX_FIX_ATTEMPTS)
                 async for event in stream_agent_task(fix, wt.path,
                                                       timeout_seconds=max(300, timeout // 2),
                                                       trace=trace, **rk):
@@ -713,11 +747,26 @@ async def _qa_or_scorer_flow(
             else:
                 yield _ptag({"type": "_meta", "phase": "awaiting_review",
                             "reason": gate.get("reason")}, role, bl_id, trace=trace)
+        # No-abort doctrine: an escalation dossier the per-BL loop attaches if QA
+        # could not complete (doctrine give-up or merge failure) — so the run
+        # escalates to the operator with the full picture, never silently aborts.
+        _last_failing = sorted((gate.get("regressions") or []) + (gate.get("new_failures") or [])) if gate else []
+        qa_dossier = {
+            "role": role, "bl_id": bl_id,
+            "doctrine_ok": bool(validation.get("ok")),
+            "doctrine_attempts": attempt,
+            "gate_attempts": gate_attempt,
+            "last_gate_kind": gate.get("kind") if gate else None,
+            "last_gate_reason": (gate.get("reason") if gate else None) or validation.get("summary"),
+            "last_failing_tests": _last_failing[:50],
+            "exhausted_ceiling": gate_attempt >= MAX_FIX_ATTEMPTS,
+        }
         yield {"_orchestrator_outcome": True, "role": role, "bl_id": bl_id,
                "merged": merged, "doctrine_ok": validation["ok"],
                # A2: surface doctrine summary so the per-BL loop can emit
                # qa_doctrine_failed with diagnostic detail.
-               "doctrine_summary": validation.get("summary")}
+               "doctrine_summary": validation.get("summary"),
+               "dossier": qa_dossier}
     finally:
         if trace is not None:
             trace.close()
@@ -730,6 +779,15 @@ async def _qa_or_scorer_flow(
 
 # ─── acceptance flow (ABL-0014 — Batch B: agent spawn + R10.1 retry) ──────
 
+
+# No-abort persistence doctrine (operator, 2026-06-06 — BINDING): an agent that
+# detects an issue must investigate → fix → re-test and keep working until it is
+# resolved. The per-role doctrine/gate fix loops are therefore deep, not the old
+# shallow cap of 2. This ceiling is a SAFETY backstop (bounds infinite spend on a
+# genuinely-stuck BL), NOT a routine give-up point: on exhaustion the run does not
+# silently `abort`, it `escalates` to the operator with a full dossier (Option A).
+# The expected exit of every loop is RESOLUTION (green), not the ceiling.
+MAX_FIX_ATTEMPTS = 6
 
 ACCEPTANCE_MAX_RETRIES = 2  # R10.1 — matches per-role doctrine retry budget
 
@@ -1957,6 +2015,18 @@ async def run_brief(
             per_bl = {"bl_id": bl_id, "title": it.title}
             yield _evt("bl.start", bl_id=bl_id, title=it.title)
             _checkpoint(current_bl=bl_id)  # A7: mark which BL is in flight
+            # Auto-merge atomicity (2026-06-06): capture the agent-branch HEAD
+            # before this BL's engineer can fast-forward-merge into it. If the BL
+            # later aborts AFTER the engineer merged but BEFORE QA merged, we
+            # reset back to this SHA so an aborted BL leaves the trunk exactly as
+            # it was — the engineer's work cannot outlive the BL's failure.
+            _cfg_bl = repo_config_svc.load(repo_dir)
+            # Best-effort: if the SHA can't be read, rollback is simply skipped —
+            # a rev-parse hiccup must never abort the run.
+            try:
+                pre_bl_sha = await rev_parse(repo_dir, _cfg_bl.agent_branch)
+            except Exception:  # noqa: BLE001
+                pre_bl_sha = None
 
             # Engineer
             yield _evt("engineer.start", bl_id=bl_id)
@@ -2024,12 +2094,29 @@ async def run_brief(
                 # Skip reindex (engineer added nothing new) + skip merged check.
                 # Fall through directly to QA below.
             elif not (eng_outcome and eng_outcome.get("merged")):
+                # No-abort doctrine (Option A): the engineer exhausted its deep
+                # investigate→fix→re-test loop without a green gate. This is an
+                # ESCALATION to the operator with a full dossier, NOT a routine
+                # abort. (The engineer never merged, so the trunk is already
+                # pristine — no rollback needed here.)
+                _dossier = (eng_outcome or {}).get("dossier") or {
+                    "role": "engineer", "bl_id": bl_id,
+                    "harness_error": (eng_outcome or {}).get("engineer_error", False),
+                }
                 summary["bls"].append(per_bl)
-                bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "engineer_unmerged"})
+                bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "engineer_escalated"})
                 _checkpoint(current_bl=None)  # A7
-                yield _evt("bl.done", bl_id=bl_id, outcome="engineer_unmerged")
+                yield _evt("bl.escalated", bl_id=bl_id, role="engineer",
+                           reason=f"engineer could not reach a green gate for {bl_id} "
+                                  f"after exhaustive investigate→fix→re-test attempts",
+                           dossier=_dossier)
+                yield _evt("bl.done", bl_id=bl_id, outcome="engineer_escalated")
                 if stop_on_failure:
-                    yield _evt("aborted", reason=f"engineer did not merge {bl_id}")
+                    terminal_status = "escalated"
+                    yield _evt("escalated", bl_id=bl_id, role="engineer",
+                               reason=f"engineer escalated {bl_id} for operator review "
+                                      f"(no-abort doctrine, Option A — dossier attached)",
+                               dossier=_dossier)
                     return
                 continue
             else:
@@ -2067,9 +2154,23 @@ async def run_brief(
                     summary["bls"].append(per_bl)
                     bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "merged_no_qa"})
                     _checkpoint(current_bl=None)  # A7
-                    yield _evt("bl.done", bl_id=bl_id, outcome="merged_no_qa")
-                    yield _evt("aborted",
-                               reason=f"QA doctrine failed for {bl_id} (stop_on_qa_doctrine_failure)")
+                    # Auto-merge atomicity (2026-06-06): the engineer already
+                    # merged this BL; roll the trunk back so an aborted BL leaves
+                    # no QA-unvalidated engineer code behind.
+                    if pre_bl_sha:
+                        rb = await reset_target_to(repo_dir, _cfg_bl.agent_branch, pre_bl_sha)
+                        bl_outcomes_compact[-1]["outcome"] = "rolled_back"
+                        yield _evt("bl.rolled_back", bl_id=bl_id, to_sha=pre_bl_sha[:8],
+                                   ok=rb.get("ok"), error=rb.get("error"),
+                                   reason="QA doctrine failed; engineer merge undone")
+                    yield _evt("bl.done", bl_id=bl_id,
+                               outcome="rolled_back" if pre_bl_sha else "merged_no_qa")
+                    # No-abort doctrine (Option A): escalate with dossier, not abort.
+                    terminal_status = "escalated"
+                    yield _evt("escalated", bl_id=bl_id, role="qa",
+                               reason=f"QA could not satisfy doctrine for {bl_id} after exhaustive "
+                                      f"attempts (stop_on_qa_doctrine_failure) — escalating for operator review",
+                               dossier=(qa_outcome or {}).get("dossier") or {})
                     return
 
             # A37: QA merge failed independent of doctrine. Engineer-merge-
@@ -2091,11 +2192,33 @@ async def run_brief(
                 summary["bls"].append(per_bl)
                 bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "merged_no_qa"})
                 _checkpoint(current_bl=None)  # A7
-                yield _evt("bl.done", bl_id=bl_id, outcome="merged_no_qa")
                 if stop_on_failure:
-                    yield _evt("aborted",
-                               reason=f"QA did not merge {bl_id} despite passing doctrine")
+                    # Auto-merge atomicity (2026-06-06): the engineer's BL was
+                    # already fast-forward-merged into the trunk on its own green
+                    # gate; QA then failed to merge and we are aborting. Roll the
+                    # trunk back to pre_bl_sha so the aborted BL leaves NO
+                    # QA-unvalidated engineer code behind (an `abort` must mean
+                    # the trunk is pristine for this BL). The dropped engineer
+                    # work stays recoverable on its agent/<task_id> branch.
+                    if pre_bl_sha:
+                        rb = await reset_target_to(repo_dir, _cfg_bl.agent_branch, pre_bl_sha)
+                        bl_outcomes_compact[-1]["outcome"] = "rolled_back"
+                        yield _evt("bl.rolled_back", bl_id=bl_id, to_sha=pre_bl_sha[:8],
+                                   ok=rb.get("ok"), error=rb.get("error"),
+                                   reason="QA did not merge; engineer merge undone")
+                    yield _evt("bl.done", bl_id=bl_id,
+                               outcome="rolled_back" if pre_bl_sha else "merged_no_qa")
+                    # No-abort doctrine (Option A): escalate with dossier, not abort.
+                    terminal_status = "escalated"
+                    yield _evt("escalated", bl_id=bl_id, role="qa",
+                               reason=f"QA could not reach a green gate for {bl_id} after exhaustive "
+                                      f"investigate→fix→re-test attempts — escalating for operator review",
+                               dossier=(qa_outcome or {}).get("dossier") or {})
                     return
+                # stop_on_failure=False: best-effort continue. The engineer's
+                # merge stays on the trunk (rollback is scoped to aborts); the
+                # merged_no_qa outcome flags that it shipped without QA.
+                yield _evt("bl.done", bl_id=bl_id, outcome="merged_no_qa")
                 continue
 
             # Reindex post-QA (QA may add characterization tests)
@@ -2258,6 +2381,12 @@ async def run_brief(
                    reason=f"unhandled orchestrator error: {type(exc).__name__}: {exc}"[:600],
                    error_type=type(exc).__name__)
     finally:
+        # A49 fix #2: drop this run's same-SHA green memory (process-local,
+        # run-scoped) so it can't leak across runs.
+        try:
+            regression_gate_svc.clear_green_shas(run_id)
+        except Exception:
+            pass
         # A7: move the disk state file into done/ tagged with how the run ended.
         try:
             run_state_svc.mark_terminated(run_id, terminal_status)

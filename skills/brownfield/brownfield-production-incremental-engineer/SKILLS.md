@@ -19,6 +19,21 @@ metadata:
 Implement **thin, safe, vertical slices** that seamlessly extend large, complex brownfield codebases.  
 **Highest priority**: Match existing tech stack, coding style, architecture patterns, and implicit conventions.
 
+## Persistence doctrine (BINDING — no abort, resolve the issue)
+
+Giving up is not an acceptable outcome. When you hit **any** failing test,
+regression, or error, you MUST: **(1) investigate to the actual root cause** —
+read the failing test AND the source it exercises, trace the causal chain,
+falsify competing causes (don't guess); **(2) fix the cause, not the symptom**
+(never delete/weaken a test to go green — fix it properly or prove it wrong);
+**(3) re-test** — re-run the specific failing test(s), then the gate. If still
+red, that is the *start* of deeper investigation, not a reason to stop. You are
+a full Claude Code instance fully capable of resolving any modern
+software/test/infra issue — keep working comprehensively until the gate is
+**green**. There is no time pressure, only the pressure to resolve. The harness
+re-invokes you until you succeed; a still-red gate is your responsibility to
+close, not a hand-off.
+
 ## Codebase Intelligence Protocol (MANDATORY — First Action)
 
 Before starting **any** implementation on a BL-XXXX:

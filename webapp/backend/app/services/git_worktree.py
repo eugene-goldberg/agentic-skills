@@ -30,6 +30,43 @@ async def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
     return proc.returncode or 0, out.decode(), err.decode()
 
 
+async def rev_parse(repo_root: Path, ref: str) -> str | None:
+    """Return the full commit SHA for ``ref``, or None if it can't be resolved."""
+    code, out, _ = await _run(
+        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=repo_root)
+    return out.strip() if code == 0 and out.strip() else None
+
+
+async def reset_target_to(repo_root: Path, target_ref: str, sha: str) -> dict:
+    """Hard-reset ``target_ref`` (the agent branch, checked out in the main
+    checkout) back to ``sha``.
+
+    Used to roll back an engineer's already-merged BL when the BL does not
+    fully complete (QA did not merge) — restoring the invariant that *an
+    aborted BL leaves the trunk exactly as it was before the BL started*
+    (auto-merge atomicity fix, 2026-06-06). The orchestrator owns refs — R13
+    forbids *agents* from history-rewriting, not the orchestrator — so a hard
+    reset here is legitimate.
+
+    Returns {ok, kind, to_sha?, error?}.
+    """
+    # Mirror fast_forward_target's checkout guard: reset --hard moves whatever
+    # branch is checked out, so ensure it is target_ref first.
+    code_cur, cur_out, _ = await _run(
+        ["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=repo_root)
+    current_branch = cur_out.strip() if code_cur == 0 else None
+    if current_branch != target_ref:
+        code, _, err = await _run(["git", "checkout", target_ref], cwd=repo_root)
+        if code != 0:
+            return {"ok": False, "kind": "error",
+                    "error": f"could not checkout {target_ref}: {err.strip()}"}
+    code, _, err = await _run(["git", "reset", "--hard", sha], cwd=repo_root)
+    if code != 0:
+        return {"ok": False, "kind": "error",
+                "error": f"reset --hard {sha[:8]} failed: {err.strip()}"}
+    return {"ok": True, "kind": "reset", "to_sha": sha}
+
+
 async def create_worktree(repo_root: Path, task_id: str | None = None, *, base_ref: str | None = None) -> Worktree:
     """Create a fresh worktree off `base_ref` (default: current HEAD).
 

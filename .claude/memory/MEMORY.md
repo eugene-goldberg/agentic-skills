@@ -9,6 +9,7 @@
 - [Brownfield known gotchas](brownfield_known_gotchas.md) — gitignore, regression-gate Docker, engineer characterization gap
 - [User uses corporate Claude Code](user_corporate_claude.md) — no ANTHROPIC_API_KEY available
 - [Honest verification when asked](feedback_honest_verification.md) — user pushes back on overclaims
+- [No-abort persistence doctrine](feedback_no_abort_persistence.md) — BINDING 2026-06-06: abort=FAILURE; every agent must investigate→fix→re-test until resolved, comprehensively, no shallow give-up
 - [Subprocess-Option-A preference](feedback_subprocess_option_a.md) — Python subprocess, no TS SDK
 - [Worktree-isolated agent runs](pattern_worktree_isolation.md) — every agent invocation runs in its own git worktree
 - [Arch invariants overview](arch_invariants.md) — the seven structural rules; pointer to ARCHITECTURE_INVARIANTS.md

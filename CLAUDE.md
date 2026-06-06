@@ -115,6 +115,52 @@ that would resolve it, run those checks, and only *then* report.
 
 ---
 
+## Operating principle: persistence over abort (no-abort doctrine)
+
+> **Operator directive, 2026-06-06 — BINDING, non-negotiable.**
+> **Aborting a sprint is a FAILURE and is not an acceptable outcome.**
+
+Every agent in the crew is a full Claude Code subprocess, fully capable of
+autonomously investigating and fixing any modern software / code / test /
+infrastructure issue. Therefore, whenever **any** agent (PO, Engineer, QA,
+Scorer, Acceptance) detects an issue, it **MUST**:
+
+1. **Fully investigate** — root-cause it to the actual defect (read the real
+   source and the failing test, trace the causal chain, falsify competing
+   causes). Never patch a symptom.
+2. **Apply the proper fix** — fix the cause, not the surface.
+3. **Re-test** — confirm the fix resolves the issue (re-run the specific
+   failing test / re-run the gate).
+
+…and **keep working comprehensively until the issue is genuinely resolved.**
+No shallow give-up, no symptom-chasing, no bailing after a couple of retries.
+There is no time/cost pressure here — only the pressure to *resolve*.
+
+**The only acceptable non-success is ESCALATION (Option A), never abort.** After
+genuinely exhaustive, senior-engineer-level effort (root cause traced or proven
+a true infra/environment blocker outside the agent's control; many distinct
+fixes attempted), the run surfaces a complete, source-grounded **dossier** to
+the operator via a terminal `escalated` event — it never silently `aborted`s.
+The bar for escalation is "a competent senior engineer would also be blocked
+here," not "the retry budget ran out."
+
+**Enforcement (this is doctrine in code, not just prose):** the per-role
+doctrine + gate fix loops run to `MAX_FIX_ATTEMPTS` (a generous safety backstop,
+**not** a routine give-up point — was the shallow cap of 2); the gate-fix loop
+retries on `inconclusive` as well as `regressed` (both are agent-fixable);
+`build_gate_fix_prompt` carries the root-cause-before-patch mandate; and the
+per-BL not-merged / QA-fail paths emit a terminal `escalated` (with dossier),
+not `aborted`. `aborted` is reserved for a genuine *harness* exception
+(wedge-proof backstop) — a defect for the architect to fix, not a crew give-up.
+See `DESIGN_SHORTCOMINGS.md` A54 and `.claude/memory/feedback_no_abort_persistence.md`.
+
+This subsumes nothing in "quality over speed" — it adds that **giving up is
+itself a quality failure.** It applies to the architect (you) symmetrically:
+when you hit an issue, you investigate→fix→verify to resolution, you do not
+hand back a shrug.
+
+---
+
 ## Your role and accountability
 
 You — Claude Code, the assistant invoked per-turn in this checkout — are

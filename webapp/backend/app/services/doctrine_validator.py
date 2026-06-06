@@ -885,7 +885,7 @@ def build_gate_fix_prompt(
 
     return f"""Your previous {role_label} run{bl_clause} PASSED doctrine but FAILED the regression gate.
 
-The harness has re-invoked you in the SAME worktree. You have {max_attempts - attempt + 1} retries left (this is attempt {attempt}/{max_attempts}).
+The harness has re-invoked you in the SAME worktree (attempt {attempt}). **Doctrine: you are expected to RESOLVE this, not merely make another attempt.** Aborting/giving up is not an acceptable outcome — keep investigating and fixing until the gate is GREEN. You are a full Claude Code instance fully capable of root-causing and fixing any modern software/test/infra issue; take the time to do comprehensive, correct work.
 
 ## Failing tests (gate reported these as regressions / new failures)
 
@@ -899,12 +899,13 @@ These are the most-relevant blocks extracted from the gate's stdout (pytest + Pl
 {excerpt}
 ```
 
-## Required steps
+## Required steps — ROOT-CAUSE, do not symptom-patch
 
-1. Diagnose: read the failure blocks above. Identify whether the bug is in implementation, in tests, or in setup (fixtures, seed data, env).
-2. Fix in source: edit the implementation file(s) and/or test file(s) so the failing tests would pass against a real running stack. Do not delete failing tests just to make the gate green — fix them properly or document why they were wrong.
-3. Re-ground if needed: if your fix touches a different area than your original retrieval, call `mcp__retrieval__semantic_search` / `graph_*` again to make sure you understand the new area.
-4. `git add -A` and `git commit -m "fix: <one-line summary of the regression fix>"` to add a NEW commit on top of your prior work.
+1. **Investigate to the actual root cause.** For each failing test, OPEN and READ the failing test AND the source it exercises. Trace the causal chain from the symptom (the assertion/timeout/error in the excerpt) to the underlying defect. Enumerate the candidate causes (implementation bug / test bug / fixture-seed-data bug / env). Falsify the ones that don't fit by reading the code — do not guess. State the root cause to a specific file:line before you change anything.
+2. **Reproduce locally, then fix the CAUSE.** Where possible run the *specific* failing test(s) yourself to confirm you can reproduce the failure, then fix the real cause (implementation and/or test so they are mutually consistent), and **re-run those same test(s) locally to confirm they now pass** before you finish. Do NOT delete or weaken a failing test to make the gate green — fix it properly or prove (with a cited reason) it was wrong.
+3. **Keep going until resolved.** If your first fix doesn't make the gate green, that is the *start* of more investigation, not a reason to stop. Form a new hypothesis from the new failure detail and repeat 1–2. The harness will re-invoke you until the gate is green; treat an unresolved gate as your responsibility to close.
+4. Re-ground if your fix touches a new area: call `mcp__retrieval__semantic_search` / `graph_*` so you actually understand it.
+5. `git add -A` and `git commit -m "fix: <root cause, one line>"` to add a NEW commit on top of your prior work.
 
    **R13 boundary:** the orchestrator owns refs. You must NOT run
    `git commit --amend`, `git rebase`, `git reset --hard`, or
@@ -914,7 +915,7 @@ These are the most-relevant blocks extracted from the gate's stdout (pytest + Pl
    needed) handles the lineage. New commits are always a fast-forward
    of your branch tip.
 
-5. Print ONLY the same final JSON shape as your previous run with the new `commit_sha` (your branch's new tip after step 4).
+6. Print ONLY the same final JSON shape as your previous run with the new `commit_sha` (your branch's new tip after step 5).
 
-Doctrine and gate will both re-run after this attempt. If both pass, the branch auto-merges. If either fails after {max_attempts} attempts, the branch is left in awaiting_review for operator decision.
+Doctrine and gate both re-run after this attempt. If both pass, the branch auto-merges and the BL is done. If the gate is still not green, the harness re-invokes you again to continue — the goal is a resolved, green gate, not a fixed number of tries. Only after genuinely exhaustive effort (root cause traced, many distinct fixes attempted, or a true infrastructure/environment blocker outside your control) will the BL be escalated to the operator **with your full investigation dossier** — never silently abandoned.
 """

@@ -105,12 +105,14 @@ def test_engineer_raise_yields_terminal_not_wedge(monkeypatch) -> None:
 
     # The exception is surfaced, NOT swallowed silently.
     assert "engineer.error" in phases
-    # The standard not-merged path fired a terminal bl.done(engineer_unmerged).
+    # No-abort doctrine: the not-merged engineer escalates with a dossier.
     bl_done = _suffix(events, "bl.done")
-    assert bl_done and bl_done[-1].get("outcome") == "engineer_unmerged"
-    # stop_on_failure=True → the sprint terminates with `aborted` (a terminal
-    # event), never a silent 0-procs wedge.
-    assert "aborted" in phases
+    assert bl_done and bl_done[-1].get("outcome") == "engineer_escalated"
+    # stop_on_failure=True → the sprint terminates with `escalated` (Option A,
+    # a terminal event with dossier), never a silent wedge and never a routine
+    # abort.
+    assert "escalated" in phases
+    assert "aborted" not in phases
 
 
 def test_engineer_raise_continues_when_not_stop_on_failure(monkeypatch) -> None:
@@ -123,9 +125,9 @@ def test_engineer_raise_continues_when_not_stop_on_failure(monkeypatch) -> None:
     events = _drive(monkeypatch, engineer_flow=_raising_engineer,
                     indexers=_noop_indexers, stop_on_failure=False)
     phases = _phases(events)
-    # engineer_unmerged recorded, and with the single BL exhausted the run
+    # engineer_escalated recorded, and with the single BL exhausted the run
     # proceeds to a clean terminal (sprint_complete) rather than wedging.
-    assert any(e.get("outcome") == "engineer_unmerged" for e in _suffix(events, "bl.done"))
+    assert any(e.get("outcome") == "engineer_escalated" for e in _suffix(events, "bl.done"))
     assert "sprint_complete" in phases
 
 
@@ -144,3 +146,89 @@ def test_indexer_raise_hits_outer_backstop(monkeypatch) -> None:
     assert aborted, "outer backstop must emit a terminal aborted event"
     assert aborted[-1].get("error_type") == "RuntimeError"
     assert "unhandled orchestrator error" in aborted[-1].get("reason", "")
+
+
+# ── A53: auto-merge atomicity — rollback engineer merge on BL-abort ──────────
+
+
+def test_qa_merge_fail_rolls_back_engineer_merge(monkeypatch) -> None:
+    """Engineer merged on its green gate; QA then fails to merge under
+    stop_on_failure → the orchestrator must reset the trunk back to the
+    pre-BL SHA so the aborted BL leaves no QA-unvalidated engineer code."""
+    def _ok_engineer(*a, **k):
+        async def _gen():
+            yield {"_orchestrator_outcome": True, "role": "engineer",
+                   "bl_id": "BL-0001", "merged": True, "no_op": False}
+        return _gen()
+
+    def _qa_doc_ok_no_merge(*a, **k):
+        async def _gen():
+            yield {"_orchestrator_outcome": True, "role": "qa",
+                   "bl_id": "BL-0001", "merged": False, "doctrine_ok": True}
+        return _gen()
+
+    calls: dict = {}
+
+    async def _fake_rev_parse(repo, ref):
+        return "PRE_BL_SHA_abc123"
+
+    async def _fake_reset(repo, target_ref, sha):
+        calls["reset"] = (target_ref, sha)
+        return {"ok": True, "kind": "reset", "to_sha": sha}
+
+    monkeypatch.setattr(orch, "_qa_or_scorer_flow", _qa_doc_ok_no_merge)
+    monkeypatch.setattr(orch, "rev_parse", _fake_rev_parse)
+    monkeypatch.setattr(orch, "reset_target_to", _fake_reset)
+
+    events = _drive(monkeypatch, engineer_flow=_ok_engineer, indexers=_noop_indexers)
+    phases = _phases(events)
+
+    assert "qa_merge_failed" in phases
+    assert "bl.rolled_back" in phases
+    # No-abort doctrine: escalate (with dossier), not abort.
+    assert "escalated" in phases
+    assert "aborted" not in phases
+    # The trunk was reset to the pre-BL SHA on the configured agent branch.
+    assert calls.get("reset") == ("agentic-skills-work", "PRE_BL_SHA_abc123")
+    # The BL outcome is relabelled rolled_back (not merged_no_qa).
+    bl_done = _suffix(events, "bl.done")
+    assert bl_done and bl_done[-1].get("outcome") == "rolled_back"
+
+
+def test_qa_merge_fail_no_rollback_when_continue(monkeypatch) -> None:
+    """With stop_on_failure=False the engineer merge is intentionally kept
+    (best-effort continue) — no rollback, outcome stays merged_no_qa."""
+    def _ok_engineer(*a, **k):
+        async def _gen():
+            yield {"_orchestrator_outcome": True, "role": "engineer",
+                   "bl_id": "BL-0001", "merged": True, "no_op": False}
+        return _gen()
+
+    def _qa_doc_ok_no_merge(*a, **k):
+        async def _gen():
+            yield {"_orchestrator_outcome": True, "role": "qa",
+                   "bl_id": "BL-0001", "merged": False, "doctrine_ok": True}
+        return _gen()
+
+    reset_called = {"n": 0}
+
+    async def _fake_rev_parse(repo, ref):
+        return "PRE_BL_SHA_abc123"
+
+    async def _fake_reset(repo, target_ref, sha):
+        reset_called["n"] += 1
+        return {"ok": True, "kind": "reset", "to_sha": sha}
+
+    monkeypatch.setattr(orch, "_qa_or_scorer_flow", _qa_doc_ok_no_merge)
+    monkeypatch.setattr(orch, "rev_parse", _fake_rev_parse)
+    monkeypatch.setattr(orch, "reset_target_to", _fake_reset)
+
+    events = _drive(monkeypatch, engineer_flow=_ok_engineer,
+                    indexers=_noop_indexers, stop_on_failure=False)
+    phases = _phases(events)
+
+    assert "qa_merge_failed" in phases
+    assert "bl.rolled_back" not in phases
+    assert reset_called["n"] == 0
+    bl_done = _suffix(events, "bl.done")
+    assert bl_done and bl_done[-1].get("outcome") == "merged_no_qa"

@@ -129,31 +129,44 @@ def extract_disk_full_reason(post_tail: str) -> str | None:
     return None
 
 
-# A49 (2026-06-03/04, invoice-soft-delete dispatch): the regression gate is
-# non-deterministic — transient network/IO errors in E2E (socket hang up /
-# ECONNRESET / ECONNREFUSED / axios "Network Error" / ETIMEDOUT) can fail a
-# test on ALL Playwright retries and surface as a `regressed` verdict that
-# blocks a CORRECT fix from merging. These verdicts are not a function of the
-# diff under test. We deliberately do NOT auto-flip the verdict here — turning
-# a red gate non-red is a gate-semantics doctrine change requiring operator
-# sign-off (A49 fix #2, deferred). Instead `detect_transient_markers` is an
-# ANNOTATION: it surfaces detected transient markers into the gate result so
-# the engineer retry prompt and the operator triage UI can flag "this red may
-# be a network flake; a standalone re-run may differ" (A49 fix #5).
+# A49 (2026-06-03/04, invoice-soft-delete dispatch; fix #2 2026-06-06,
+# operator-approved): the regression gate is non-deterministic. Transient
+# network/IO errors AND Playwright timing flakes (element-stability /
+# 90s test-timeout) can fail a test on ALL per-test retries and surface as a
+# `regressed`/`inconclusive` verdict that blocks a CORRECT change from merging —
+# a verdict that is NOT a function of the diff under test (second live instance:
+# item-comments BL-0001, a dark-mode E2E timed out on the QA re-gate of a tree
+# that had gated GREEN an hour earlier).
+#
+# The Playwright markers below are AMBIGUOUS — a "Test timeout exceeded" can also
+# be a *real* break (a page that never renders; cf. Horizon's auth break).
+# Treating them as merely *suspected* transient is safe ONLY because the chosen
+# A49 strategy never blind-flips a red to green: run_gate either (a) finds the
+# identical tree already gated green this run, or (b) re-samples by re-running the
+# gate once and takes the re-run as authoritative. A reproducible real failure is
+# therefore still caught. `detect_transient_markers` decides only *whether to
+# arbitrate*, never the final verdict.
 _TRANSIENT_MARKERS = (
     re.compile(r"socket hang up", re.IGNORECASE),
     re.compile(r"\bECONNRESET\b", re.IGNORECASE),
     re.compile(r"\bECONNREFUSED\b", re.IGNORECASE),
     re.compile(r"\bETIMEDOUT\b", re.IGNORECASE),
     re.compile(r"\bNetwork Error\b", re.IGNORECASE),
+    # Playwright timing flakes (A49 fix #2):
+    re.compile(r"Test timeout of \d+ms exceeded", re.IGNORECASE),
+    re.compile(r"waiting for element to be visible, enabled and stable", re.IGNORECASE),
+    re.compile(r"Target (?:page|frame), context or browser has been closed", re.IGNORECASE),
 )
 
 
 def detect_transient_markers(post_tail: str) -> list[str]:
-    """A49: return the distinct transient network/IO error markers present in
-    the gate tail, in first-seen order. Annotation only — this NEVER flips a
-    verdict (that is deferred to an operator-approved doctrine change), so it
-    cannot mask a real regression. Returns ``[]`` when none match.
+    """A49: return the distinct suspected-transient markers present in the gate
+    tail, in first-seen order (network/IO errors + Playwright timing flakes).
+
+    This decides only whether run_gate should *arbitrate* a red verdict (via the
+    same-SHA green memory or a single gate re-run) — it never flips the verdict
+    itself, so it cannot mask a reproducible real regression. Returns ``[]`` when
+    none match.
     """
     if not post_tail:
         return []
@@ -167,6 +180,38 @@ def detect_transient_markers(post_tail: str) -> list[str]:
                 seen.add(tok)
                 found.append(m.group(0))
     return found
+
+
+# A49 fix #2 (2026-06-06, operator-approved): same-SHA green memory. Keyed by
+# run_id → set of agent-branch head SHAs that produced a GREEN gate this run.
+# A later regressed/inconclusive verdict on an IDENTICAL tree whose only
+# failures are suspected-transient is gate non-determinism (the code is
+# byte-identical to a run we already saw pass), so it is disregarded. Process-
+# local and run-scoped; the orchestrator calls clear_green_shas() at run end.
+_GREEN_SHAS: dict[str, set[str]] = {}
+
+
+def _record_green_sha(run_id: str | None, head_sha: str | None) -> None:
+    if run_id and head_sha:
+        _GREEN_SHAS.setdefault(run_id, set()).add(head_sha)
+
+
+def _sha_was_green(run_id: str | None, head_sha: str | None) -> bool:
+    return bool(run_id and head_sha and head_sha in _GREEN_SHAS.get(run_id, set()))
+
+
+def clear_green_shas(run_id: str | None) -> None:
+    """Drop a run's green-SHA memory at termination (orchestrator calls this)."""
+    if run_id:
+        _GREEN_SHAS.pop(run_id, None)
+
+
+def _suspected_transient(result: dict) -> bool:
+    """A49: the verdict is red/inconclusive AND its tail carries suspected-
+    transient markers, so it warrants arbitration (same-SHA green or a re-run)
+    rather than being taken at face value."""
+    return (result.get("kind") in ("regressed", "inconclusive")
+            and bool(result.get("transient_markers")))
 
 
 PYTEST_RESULT_RE = re.compile(r"^(?P<file>tests?/[\w./-]+)::(?P<name>[\w.\[\]-]+)\s+(?P<verdict>PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)", re.MULTILINE)
@@ -324,22 +369,82 @@ async def _git(args: list[str], cwd: Path) -> tuple[int, str]:
 
 
 async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
-                   *, run_id: str | None = None) -> dict:
-    """Run pre/post differential test suite around a dry-run merge.
+                   *, run_id: str | None = None, _allow_rerun: bool = True) -> dict:
+    """Run the differential gate, with A49 non-determinism arbitration.
 
     Returns a dict suitable for the SSE log:
 
         {
           "ok": <bool>,
-          "kind": "green" | "regressed" | "skipped" | "error",
+          "kind": "green" | "regressed" | "inconclusive" | "infra_fail"
+                  | "skipped" | "error",
           "pre":  {n_passed, n_failed, exit_code},
           "post": {n_passed, n_failed, exit_code},
           "regressions": [<test nodeid>, ...],
-          "new_failures": [<test nodeid>, ...],   # not previously passing
+          "new_failures": [<test nodeid>, ...],
           "command": ["pytest", "-v", ...],
           "reason": "<one-line summary>",
+          "head_sha": <agent-branch HEAD>,        # for the same-SHA green memory
         }
+
+    A49 arbitration (operator-approved, 2026-06-06): a `regressed`/`inconclusive`
+    verdict whose only failures look transient (``_suspected_transient``) is NOT
+    taken at face value:
+      1. If the IDENTICAL agent-branch tree already produced a GREEN gate this
+         run (same-SHA green memory), the red is gate non-determinism on byte-
+         identical code → recovered to green.
+      2. Otherwise the gate is RE-SAMPLED once (`_run_gate_once` again) and the
+         re-run is authoritative: green re-run → flake recovered; red re-run →
+         the failure reproduced → treated as a real failure.
+    This never blind-flips a red to green, so a reproducible real regression is
+    still caught. ``_allow_rerun=False`` disables the re-sample (used by tests).
     """
+    result = await _run_gate_once(repo_root, agent_branch, target_ref, run_id=run_id)
+    # A49 applies only to test verdicts; skipped/error/infra_fail pass through.
+    if result.get("kind") not in ("green", "regressed", "inconclusive"):
+        return result
+
+    code, out = await _git(["rev-parse", "--verify", f"{agent_branch}^{{commit}}"],
+                           cwd=repo_root)
+    head_sha = out.strip() if code == 0 else None
+    result["head_sha"] = head_sha
+
+    if _suspected_transient(result):
+        if _sha_was_green(run_id, head_sha):
+            prior = result.get("reason", "")
+            result["kind"] = "green"
+            result["ok"] = True
+            result["a49_recovered"] = "same-SHA green"
+            result["reason"] = (
+                "A49 recovered (identical tree already gated green this run); "
+                f"transient red disregarded [was: {prior}]")
+        elif _allow_rerun:
+            rerun = await _run_gate_once(repo_root, agent_branch, target_ref,
+                                         run_id=run_id)
+            rerun["head_sha"] = head_sha
+            rerun["reran"] = True
+            if rerun.get("kind") == "green":
+                rerun["a49_recovered"] = "re-run green"
+                rerun["reason"] = (
+                    "A49 recovered (re-run green; initial red was a transient "
+                    f"flake) [initial: {result.get('reason', '')}]")
+            else:
+                rerun["a49_reran_reproduced"] = True
+                rerun["reason"] = (
+                    f"{rerun.get('reason', '')} "
+                    "[A49: re-run reproduced the failure — treated as real, not a flake]")
+            result = rerun
+
+    if result.get("kind") == "green":
+        _record_green_sha(run_id, head_sha)
+    return result
+
+
+async def _run_gate_once(repo_root: Path, agent_branch: str, target_ref: str,
+                         *, run_id: str | None = None) -> dict:
+    """One full differential gate pass (pre/post around a dry-run merge) in
+    disposable worktrees. The A49 wrapper ``run_gate`` may call this twice to
+    re-sample a suspected-transient red."""
     cfg = repo_config_svc.load(repo_root)
     # Skip gating when the repo is unmistakably greenfield AND no override
     # config exists. Heuristic: no .agentic-skills.json AND no _brownfield dir
