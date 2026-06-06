@@ -356,30 +356,40 @@ total.
 
 ---
 
-## Auto-merge gating (brownfield)
+## Gating model (brownfield) — SIMPLE (operator directive 2026-06-06)
 
-Engineer and QA runs no longer fast-forward into the agent branch on a
-simple commit-success:
+> **The gating logic is deliberately simple. Do not re-complicate it.**
+> See `.claude/memory/feedback_simple_gating_model.md` + `DESIGN_SHORTCOMINGS` A55.
 
-1. Agent commits to its `agent/<task_id>` worktree branch.
-2. **Doctrine validator** (`app/services/doctrine_validator.py`) checks
-   that the role's required artifacts exist on disk and are ≥120 bytes.
-   If anything is missing, the agent is **re-invoked in the same
-   worktree** with a delta prompt (`build_fix_prompt`) listing exact
-   missing paths, up to 2 retries (R10.1). UI sees
-   `_meta phase=doctrine_check kind=incomplete|complete|give_up`.
-3. **Regression gate** (`app/services/regression_gate.py`) creates two
-   disposable worktrees off `target_ref`, dry-runs the agent branch into
-   the second, runs `test_cmd` in both, and computes the regressed-test
-   set. Result kinds: `green`, `regressed`, `inconclusive`, `skipped`
-   (greenfield), `error`.
-4. **A1 non-FF auto-rebase** (Sprint-2 hardening): if `fast_forward_target`
-   returns `kind="non_ff"`, the orchestrator rebases the agent branch in
-   its own worktree onto `target_ref`, re-runs the gate against the new
-   SHA, and re-attempts the merge. Conflicts escalate to operator.
-5. Auto-merge proceeds **only** if both `doctrine_ok` AND
-   `gate.kind=="green"` (or post-rebase gate ✓). Otherwise the agent
-   branch stays in place and the UI surfaces a "Review & merge" button.
+**Per-BL (repeat for every BL):**
+1. The **engineer** writes the code per the PO spec for the BL **and**
+   comprehensive **unit tests** for that BL.
+2. The **QA** agent runs **only that BL's own tests** — the test files the BL's
+   commits added/changed (`regression_gate.run_bl_tests`, scoped to a db-only
+   stack). **NOT** the full suite, **NOT** Playwright.
+3. Doctrine validation (`doctrine_validator`) still checks required artifacts
+   (R10.1 retry). Auto-merge proceeds only if `doctrine_ok` AND the BL's tests
+   are green. A1 non-FF auto-rebase still applies on merge.
+4. **No-abort doctrine:** a `failed`/`no_tests` per-BL verdict drives the deep
+   investigate→fix→re-test loop (`MAX_FIX_ATTEMPTS`); on exhaustion → terminal
+   `escalated` + dossier (never routine `aborted`).
+
+**End of sprint — the acceptance phase (the ONE integration checkpoint):**
+5. The **acceptance** agent creates a comprehensive **whole-feature E2E**:
+   **API testing always; Playwright only if the feature has UI journeys.**
+6. Plus the **one full pre-existing-suite regression run** (`run_gate` of the
+   assembled feature vs the sprint-start baseline) — the single place collateral
+   regressions to pre-existing functionality are caught. Emitted as
+   `regression_checkpoint`.
+
+**Why this shape:** the old per-BL gate ran a diff-blind full `test_cmd`
+(lint + full backend + full Playwright) on *every* BL, which manufactured
+load-induced flaky **false reds** on correctly-scoped backend BLs (item-comments
+`…251422`). Running only the BL's own tests removes that false-red surface — and
+makes the no-abort deep loop safe (you can't thrash on a ghost). The per-BL
+`run_gate` full differential + per-BL Playwright are **removed**; A28–A31/A39/A49
+(machinery for per-BL Playwright/full-suite) are superseded for the per-BL path
+(`run_gate`'s A49 arbitration still guards the one acceptance full-suite run).
 
 Endpoints:
 - `GET /api/projects/<repo>/branches` — agent branches not yet merged

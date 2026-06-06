@@ -492,23 +492,31 @@ async def _engineer_flow(
 
         new_commits = await has_new_commits(wt, base_ref="HEAD~1")
         if validation["ok"] and new_commits > 0:
-            gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
-                                                     target_ref=cfg.agent_branch, run_id=run_id)
-            yield _ptag({"type": "_meta", "phase": "regression_gate",
+            # Simple gating model (operator 2026-06-06): run ONLY this BL's own
+            # unit tests (the test files its commits added) — NOT the full suite,
+            # NOT Playwright. Whole-feature E2E + full-suite regression run once
+            # at the acceptance phase.
+            gate = await regression_gate_svc.run_bl_tests(repo_dir, agent_branch=wt.branch,
+                                                          base_ref=cfg.agent_branch, run_id=run_id)
+            yield _ptag({"type": "_meta", "phase": "bl_tests",
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
                        "engineer", bl_id)
             gate_attempt = 0
             gate_signatures.append(f"{gate.get('kind')}:{','.join(sorted((gate.get('regressions') or []) + (gate.get('new_failures') or [])))}")
-            # No-abort doctrine: keep fixing until the gate is GREEN. Retry on
-            # regressed OR inconclusive — both are agent-fixable (a regression to
-            # repair, or a suite that didn't run clean: import/fixture/test
-            # error). infra_fail / error are operator-infra, not agent-fixable →
-            # break and escalate with a dossier. A49 re-samples transient flakes
-            # upstream, so a surviving red here is a real, fixable failure.
-            while not gate.get("ok") and gate.get("kind") in ("regressed", "inconclusive") and gate_attempt < MAX_FIX_ATTEMPTS:
+            # No-abort doctrine: keep fixing until the BL's tests are GREEN.
+            # Retry on `failed` (a real unit-test failure to fix) or `no_tests`
+            # (engineer must add the required unit tests). `error` is
+            # operator-infra → break and escalate with a dossier.
+            while not gate.get("ok") and gate.get("kind") in ("failed", "no_tests") and gate_attempt < MAX_FIX_ATTEMPTS:
                 gate_attempt += 1
-                fix = doctrine_svc.build_gate_fix_prompt("engineer", gate, bl_id=bl_id,
-                                                         attempt=gate_attempt, max_attempts=MAX_FIX_ATTEMPTS)
+                if gate.get("kind") == "no_tests":
+                    fix = (f"Your BL {bl_id} added no unit tests. Doctrine requires comprehensive "
+                           "unit tests covering this BL's behavior. Add them now (e.g. under "
+                           "`backend/tests/...` as `test_*.py`), make them pass, and commit a NEW "
+                           "commit. The harness will run ONLY your BL's tests.")
+                else:
+                    fix = doctrine_svc.build_gate_fix_prompt("engineer", gate, bl_id=bl_id,
+                                                             attempt=gate_attempt, max_attempts=MAX_FIX_ATTEMPTS)
                 async for event in stream_agent_task(fix, wt.path,
                                                       timeout_seconds=max(300, timeout // 2),
                                                       trace=trace, **rk):
@@ -518,9 +526,9 @@ async def _engineer_flow(
                                                             retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
                 if not validation["ok"]:
                     break
-                gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
-                                                         target_ref=cfg.agent_branch, run_id=run_id)
-                yield _ptag({"type": "_meta", "phase": "regression_gate",
+                gate = await regression_gate_svc.run_bl_tests(repo_dir, agent_branch=wt.branch,
+                                                              base_ref=cfg.agent_branch, run_id=run_id)
+                yield _ptag({"type": "_meta", "phase": "bl_tests",
                             "gate_attempt": gate_attempt,
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
                            "engineer", bl_id)
@@ -615,6 +623,7 @@ async def _qa_or_scorer_flow(
     run_id: str | None = None,
     feature_slug: str | None = None,
     inject_lessons: bool = False,
+    bl_base_ref: str | None = None,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
@@ -679,19 +688,26 @@ async def _qa_or_scorer_flow(
 
         new_commits = await has_new_commits(wt, base_ref="HEAD~1")
         if role == "qa" and validation["ok"] and new_commits > 0:
-            gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
-                                                     target_ref=cfg.agent_branch, run_id=run_id)
-            yield _ptag({"type": "_meta", "phase": "regression_gate",
+            # Simple gating model: QA executes the BL's own tests. base_ref is the
+            # PRE-BL sha (before the engineer merged) so the diff captures the
+            # engineer's BL tests + any QA characterization tests — not the full
+            # suite, not Playwright (those run once at acceptance).
+            _bl_base = bl_base_ref or cfg.agent_branch
+            gate = await regression_gate_svc.run_bl_tests(repo_dir, agent_branch=wt.branch,
+                                                          base_ref=_bl_base, run_id=run_id)
+            yield _ptag({"type": "_meta", "phase": "bl_tests",
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
                        role, bl_id)
             gate_attempt = 0
-            # No-abort doctrine: keep fixing until GREEN. Retry on regressed OR
-            # inconclusive (agent-fixable); infra_fail / error escalate. A49
-            # re-samples transient flakes upstream.
-            while not gate.get("ok") and gate.get("kind") in ("regressed", "inconclusive") and gate_attempt < MAX_FIX_ATTEMPTS:
+            while not gate.get("ok") and gate.get("kind") in ("failed", "no_tests") and gate_attempt < MAX_FIX_ATTEMPTS:
                 gate_attempt += 1
-                fix = doctrine_svc.build_gate_fix_prompt("qa", gate, bl_id=bl_id,
-                                                         attempt=gate_attempt, max_attempts=MAX_FIX_ATTEMPTS)
+                if gate.get("kind") == "no_tests":
+                    fix = (f"No unit tests are associated with BL {bl_id}. Doctrine requires the "
+                           "BL to carry comprehensive unit tests. Add the missing tests (e.g. under "
+                           "`backend/tests/...` as `test_*.py`), make them pass, and commit.")
+                else:
+                    fix = doctrine_svc.build_gate_fix_prompt("qa", gate, bl_id=bl_id,
+                                                             attempt=gate_attempt, max_attempts=MAX_FIX_ATTEMPTS)
                 async for event in stream_agent_task(fix, wt.path,
                                                       timeout_seconds=max(300, timeout // 2),
                                                       trace=trace, **rk):
@@ -700,9 +716,9 @@ async def _qa_or_scorer_flow(
                                                       retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
                 if not validation["ok"]:
                     break
-                gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
-                                                         target_ref=cfg.agent_branch, run_id=run_id)
-                yield _ptag({"type": "_meta", "phase": "regression_gate",
+                gate = await regression_gate_svc.run_bl_tests(repo_dir, agent_branch=wt.branch,
+                                                              base_ref=_bl_base, run_id=run_id)
+                yield _ptag({"type": "_meta", "phase": "bl_tests",
                             "gate_attempt": gate_attempt,
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
                            role, bl_id)
@@ -1997,6 +2013,16 @@ async def run_brief(
                          "deps": str(it.meta.get("dependencies") or "")} for it in ordered])
         _checkpoint(current_bl=None)  # A7: first checkpoint after PO+parse
 
+        # Simple gating model (2026-06-06): the agent-branch HEAD at sprint start
+        # (after PO import, before BL-0001) is the baseline for the ONE full-suite
+        # regression checkpoint run at the acceptance phase — it catches any
+        # collateral regression the assembled feature introduced to PRE-EXISTING
+        # functionality (per-BL gates only run each BL's own tests). Best-effort.
+        try:
+            run_base_sha = await rev_parse(repo_dir, repo_config_svc.load(repo_dir).agent_branch)
+        except Exception:  # noqa: BLE001
+            run_base_sha = None
+
         # ── Step 5: per-BL loop ────────────────────────────────────────────────
         # A4: when `start_bl` is set, skip BLs in dep order until we reach it.
         # Convenience for backfilling a specific BL after a mid-sprint abort
@@ -2130,7 +2156,8 @@ async def run_brief(
             async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "qa",
                                                 timeout_per_role, retrieval_kwargs_builder,
                                                 run_id=run_id, feature_slug=feature_slug,
-                                                inject_lessons=inject_lessons):
+                                                inject_lessons=inject_lessons,
+                                                bl_base_ref=pre_bl_sha):
                 if "_orchestrator_outcome" in e:
                     qa_outcome = e
                     continue
@@ -2311,6 +2338,26 @@ async def run_brief(
         # are surfaced as acceptance.error and never abort the sprint.
         # Default off until §E.1 Q6 calibration (3 smoke runs) flips it on.
         if run_acceptance:
+            # Simple gating model (2026-06-06) — the ONE full-suite regression
+            # checkpoint: run the entire pre-existing suite of the assembled
+            # feature against the sprint-start baseline to catch collateral
+            # regressions to PRE-EXISTING functionality (per-BL gates only ran
+            # each BL's own tests). run_gate's A49 arbitration still applies, so
+            # a transient flake won't false-red it. Advisory here (acceptance is
+            # post sprint_complete): a red is surfaced loudly for operator action.
+            if run_base_sha:
+                try:
+                    _accfg = repo_config_svc.load(repo_dir)
+                    rc = await regression_gate_svc.run_gate(
+                        repo_dir, agent_branch=_accfg.agent_branch,
+                        target_ref=run_base_sha, run_id=run_id)
+                    yield _evt("regression_checkpoint",
+                               ok=rc.get("ok"), kind=rc.get("kind"),
+                               reason=rc.get("reason"),
+                               regressions=(rc.get("regressions") or [])[:50],
+                               failing_tests=(rc.get("failing_tests") or [])[:50])
+                except Exception as exc:  # noqa: BLE001
+                    yield _evt("regression_checkpoint.error", error=str(exc))
             try:
                 async for evt in _acceptance_flow(
                     repo_dir,

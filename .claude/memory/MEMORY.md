@@ -10,6 +10,7 @@
 - [User uses corporate Claude Code](user_corporate_claude.md) — no ANTHROPIC_API_KEY available
 - [Honest verification when asked](feedback_honest_verification.md) — user pushes back on overclaims
 - [No-abort persistence doctrine](feedback_no_abort_persistence.md) — BINDING 2026-06-06: abort=FAILURE; every agent must investigate→fix→re-test until resolved, comprehensively, no shallow give-up
+- [Simple gating model](feedback_simple_gating_model.md) — BINDING 2026-06-06: per-BL = engineer code+unit tests, QA runs ONLY that BL's tests; E2E only at acceptance (Playwright iff UI journeys; API testing always). NO per-BL full-suite/Playwright. Replaces the diff-blind regression gate
 - [Subprocess-Option-A preference](feedback_subprocess_option_a.md) — Python subprocess, no TS SDK
 - [Worktree-isolated agent runs](pattern_worktree_isolation.md) — every agent invocation runs in its own git worktree
 - [Arch invariants overview](arch_invariants.md) — the seven structural rules; pointer to ARCHITECTURE_INVARIANTS.md

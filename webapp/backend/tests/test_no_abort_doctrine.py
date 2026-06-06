@@ -33,7 +33,7 @@ class _FakeTrace:
 
 def _patch_engineer_flow(monkeypatch, *, gate_result: dict) -> dict:
     """Mock every collaborator _engineer_flow touches; return a call-counter."""
-    counters = {"run_gate": 0}
+    counters = {"run_bl_tests": 0}
 
     monkeypatch.setattr(orch.repo_config_svc, "load",
                         lambda *a, **k: types.SimpleNamespace(
@@ -59,15 +59,15 @@ def _patch_engineer_flow(monkeypatch, *, gate_result: dict) -> dict:
         if False:
             yield {}
 
-    async def _run_gate(*a, **k):
-        counters["run_gate"] += 1
+    async def _run_bl_tests(*a, **k):
+        counters["run_bl_tests"] += 1
         return dict(gate_result)
 
     monkeypatch.setattr(orch, "create_worktree", _mk_wt)
     monkeypatch.setattr(orch, "remove_worktree", _noop)
     monkeypatch.setattr(orch, "has_new_commits", _commits)
     monkeypatch.setattr(orch, "stream_agent_task", _stream)
-    monkeypatch.setattr(orch.regression_gate_svc, "run_gate", _run_gate)
+    monkeypatch.setattr(orch.regression_gate_svc, "run_bl_tests", _run_bl_tests)
     monkeypatch.setattr(orch.doctrine_svc, "validate_engineer",
                         lambda *a, **k: {"ok": True, "summary": "doctrine ok", "no_op": False})
     monkeypatch.setattr(orch.doctrine_svc, "build_gate_fix_prompt",
@@ -95,17 +95,17 @@ def _drive_engineer(monkeypatch, gate_result: dict) -> tuple[dict, list[dict]]:
     return {"outcome": outcome, "counters": counters}, events
 
 
-def test_persistent_inconclusive_loops_deep_then_escalates(monkeypatch) -> None:
-    """A gate stuck at `inconclusive` is retried up to MAX_FIX_ATTEMPTS (NOT the
-    old cap of 2), then the engineer escalates with an exhausted-ceiling dossier
-    instead of merging or silently aborting."""
-    gate = {"ok": False, "kind": "inconclusive",
-            "reason": "post suite did not exit clean", "regressions": [],
-            "new_failures": [], "post_tail": ""}
+def test_persistent_failed_bl_tests_loops_deep_then_escalates(monkeypatch) -> None:
+    """Per-BL: a BL whose own unit tests stay `failed` is retried up to
+    MAX_FIX_ATTEMPTS (NOT the old cap of 2), then the engineer escalates with an
+    exhausted-ceiling dossier instead of merging or silently aborting."""
+    gate = {"ok": False, "kind": "failed",
+            "reason": "1 BL unit-test failure(s)", "regressions": ["tests/test_x.py::test_y"],
+            "new_failures": ["tests/test_x.py::test_y"], "post_tail": "", "failing_tests": []}
     res, _events = _drive_engineer(monkeypatch, gate)
 
-    # initial gate + one per fix attempt up to the ceiling.
-    assert res["counters"]["run_gate"] == orch.MAX_FIX_ATTEMPTS + 1
+    # initial scoped run + one per fix attempt up to the ceiling.
+    assert res["counters"]["run_bl_tests"] == orch.MAX_FIX_ATTEMPTS + 1
     out = res["outcome"]
     assert out is not None
     assert out.get("merged") is False
@@ -113,7 +113,7 @@ def test_persistent_inconclusive_loops_deep_then_escalates(monkeypatch) -> None:
     d = out.get("dossier") or {}
     assert d.get("gate_attempts") == orch.MAX_FIX_ATTEMPTS
     assert d.get("exhausted_ceiling") is True
-    assert d.get("last_gate_kind") == "inconclusive"   # inconclusive IS retried
+    assert d.get("last_gate_kind") == "failed"   # the BL's own tests kept failing
 
 
 def test_max_fix_attempts_is_deep_not_two() -> None:

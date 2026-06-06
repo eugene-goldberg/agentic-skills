@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import re
+import shlex
 import shutil
 import uuid
 from dataclasses import dataclass
@@ -366,6 +367,123 @@ async def _git(args: list[str], cwd: Path) -> tuple[int, str]:
     )
     out, err = await proc.communicate()
     return proc.returncode or 0, (out + err).decode(errors="replace")
+
+
+# ── Simple per-BL gate (operator directive 2026-06-06) ───────────────────────
+# The per-BL gate runs ONLY the tests the BL itself added/changed — the
+# engineer's unit tests for that BL — NOT the full regression suite and NOT
+# Playwright. Whole-feature E2E + all-API + the one full-suite regression
+# checkpoint live at the acceptance phase (end of sprint). This removes the
+# diff-blind full-suite-per-BL gate that manufactured false reds on correctly-
+# scoped backend BLs (see DESIGN_SHORTCOMINGS A55; supersedes per-BL A28–A31).
+
+def _bl_test_files(changed: list[str]) -> list[str]:
+    """The unit-test files a BL touched: python test files under a tests/ dir
+    whose filename is test_*.py or *_test.py. (Playwright e2e specs under
+    frontend are deliberately excluded — E2E is an acceptance-phase concern.)"""
+    out: list[str] = []
+    for f in changed:
+        f = f.strip()
+        if not f or not f.endswith(".py"):
+            continue
+        name = f.rsplit("/", 1)[-1]
+        if "tests/" in f and (name.startswith("test_") or name.endswith("_test.py")):
+            out.append(f)
+    return out
+
+
+async def run_bl_tests(repo_root: Path, agent_branch: str, base_ref: str,
+                       *, run_id: str | None = None, timeout: int = 1800) -> dict:
+    """Run ONLY the BL's own tests (the test files its commits added/changed),
+    scoped to a db-only stack — no full suite, no Playwright.
+
+    Returns a verdict dict shaped like ``run_gate`` so the per-BL flows consume
+    it unchanged. ``kind`` ∈ {green, failed, no_tests, skipped, error}.
+    """
+    cfg = repo_config_svc.load(repo_root)
+    has_cfg = (repo_root / repo_config_svc.CONFIG_FILENAME).exists()
+    has_art = (repo_root / pick_artifact_dir(repo_root)).exists()
+    if not has_cfg and not has_art and cfg.agent_branch == "main":
+        return {"ok": True, "kind": "skipped", "reason": "greenfield",
+                "command": [], "failing_tests": [], "regressions": [],
+                "new_failures": [], "post_tail": ""}
+
+    code, out = await _git(["diff", "--name-only", f"{base_ref}...{agent_branch}"], cwd=repo_root)
+    if code != 0:
+        code, out = await _git(["diff", "--name-only", f"{base_ref}..{agent_branch}"], cwd=repo_root)
+    if code != 0:
+        return {"ok": False, "kind": "error", "reason": f"git diff failed: {out.strip()[:200]}",
+                "failing_tests": [], "regressions": [], "new_failures": [], "post_tail": ""}
+
+    bl_tests = _bl_test_files([l for l in out.splitlines() if l.strip()])
+    if not bl_tests:
+        return {"ok": False, "kind": "no_tests",
+                "reason": ("this BL added/changed no unit tests — doctrine requires "
+                           "comprehensive per-BL unit tests; the engineer must add them"),
+                "failing_tests": [], "regressions": [], "new_failures": [],
+                "post_tail": "", "command": []}
+
+    use_compose = (repo_root / "compose.yml").exists() and (repo_root / "compose.gate.yml").exists()
+    wt_id = uuid.uuid4().hex[:8]
+    wt = repo_root.parent / ".gate-worktrees" / f"bl-{wt_id}"
+    wt.parent.mkdir(parents=True, exist_ok=True)
+    base_proj = _compose_project_prefix(run_id)
+    proj = f"{base_proj}-bl-{wt_id}" if base_proj else f"blgate-{wt_id}"
+    compose = ["docker", "compose", "-f", "compose.yml", "-f", "compose.gate.yml", "-p", proj]
+    cmd: list[str] = []
+    try:
+        code, msg = await _git(["worktree", "add", "--detach", str(wt), agent_branch], cwd=repo_root)
+        if code != 0:
+            return {"ok": False, "kind": "error", "reason": f"bl worktree add failed: {msg.strip()[:200]}",
+                    "failing_tests": [], "regressions": [], "new_failures": [], "post_tail": ""}
+        if use_compose:
+            await _run_capture(compose + ["up", "-d", "db"], wt, timeout=300)
+            for _ in range(30):
+                _c, _h, _e = await _run_capture(compose + ["ps", "db", "--format", "{{.Health}}"], wt, timeout=30)
+                if "healthy" in _h:
+                    break
+                await asyncio.sleep(2)
+            await _run_capture(compose + ["run", "--rm", "prestart"], wt, timeout=600)
+            rels = [f[len("backend/"):] if f.startswith("backend/") else f for f in bl_tests]
+            inner = ("uv pip install --quiet pytest-timeout && pytest -v --timeout=120 "
+                     "--timeout-method=signal " + " ".join(shlex.quote(r) for r in rels))
+            cmd = compose + ["run", "--rm", "--no-deps",
+                             "-v", f"{wt}/backend/tests:/app/backend/tests:ro",
+                             "backend", "bash", "-c", inner]
+            exit_code, stdout, stderr = await _run_capture(cmd, wt, timeout=timeout)
+        else:
+            binary = (cfg.test_cmd or detect_test_command(repo_root) or ["pytest"])[0]
+            cmd = [binary, "-v", *bl_tests]
+            exit_code, stdout, stderr = await _run_capture(cmd, wt, timeout=timeout)
+
+        passed, failed = _parse_pytest(stdout, stderr)
+        tail = "\n".join((stdout + "\n" + stderr).splitlines()[-300:])
+        # Exit code is authoritative for pytest (0 = all passed). The parsed
+        # node-ids are for NAMING failures in the retry prompt; when they don't
+        # parse (e.g. a path prefix the parser doesn't anchor), fall back to the
+        # BL test files so the engineer still gets actionable detail.
+        if exit_code == 0:
+            kind, ok, reason = "green", True, f"BL unit tests green ({len(passed)} passed)"
+        else:
+            kind, ok = "failed", False
+            reason = (f"{len(failed)} BL unit-test failure(s)" if failed
+                      else f"BL unit tests failed (exit={exit_code}); inspect tail")
+        named = sorted(failed) if failed else (bl_tests if not ok else [])
+        return {"ok": ok, "kind": kind, "reason": reason,
+                "failing_tests": [{"nodeid": n} for n in named][:50],
+                "regressions": named[:50], "new_failures": named[:50],
+                "command": cmd, "post_tail": tail, "bl_test_files": bl_tests}
+    finally:
+        await _git(["worktree", "remove", "--force", str(wt)], cwd=repo_root)
+        if use_compose:
+            try:
+                await _run_capture(compose + ["down", "-v", "--remove-orphans"], wt if wt.exists() else repo_root, timeout=120)
+            except Exception:
+                pass
+            try:
+                await volume_reaper_svc.reap(proj)
+            except Exception:
+                pass
 
 
 async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
