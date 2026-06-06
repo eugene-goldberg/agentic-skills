@@ -39,16 +39,35 @@ terminated cleanly.
   unmerged tile, inline merge on not_merged) + run-brief flag toggles.
 - Docs `CONTROL_FLOW.md` (gate/check flowchart) + `DOCTRINE.md`.
 
-## Deferred (next session — see [[arch-active-branch]] + CONTINUATION_PROMPT)
-- **#1 A39** `_extract_playwright_failures` + expand suite→node-ids (LOW, HIGH value).
-- **#5 A49** playwright `--retries` in gate template (LOW).
-- **#3** orchestrator `_engineer_flow` wedge-proof: always emit
-  `bl.done(engineer_unmerged)` on exhaustion (HIGHER risk).
+## ALL THREE SHIPPED + VALIDATED LIVE (2026-06-05 evening, commit `4773e67`)
+- **#1 A39** `regression_gate._extract_playwright_failures` — expands the opaque
+  `tests/playwright::e2e_suite` into real per-test node-ids + names them in
+  `reason`. **Validated live** in the Horizon BL-0001 gate (named
+  admin/search/user-settings → auth.setup.ts each retry). 7 tests.
+- **#5 A49** `detect_transient_markers` (annotate-only) + explicit `--retries=2`
+  in both gate templates. Verdict-flip reclassification deferred (operator
+  sign-off). 6 tests.
+- **#3 wedge-proof** — root cause was structural: `run_brief`'s outer `try` had
+  only a `finally` (can't yield during aclose, PEP 525). Added engineer-flow
+  wrap → `engineer_unmerged` + an outer `except` backstop → terminal `aborted`.
+  **Validated live**: Horizon BL-0001 exhausted retries → clean `aborted`, NOT a
+  wedge. 3 tests.
 
-## Lesson
-The crew's grounded worker-loop is solid (5/6 clean, engineers did real
-contextual+graph retrieval per BL). The autonomous loop's fragility is in the
-**harness control plane**: gate signal quality (A39), liveness heuristics that
-misread rate-limit/long-tool as hung (A45), gate non-determinism (A49), and
-no-clean-terminal on exhaustion (#3). These four, together, are the gap between
-"BL fails, operator fixes it" and "8h wedge." Fix them before scaling sprint size.
+## A52 — false no_op after a pre-grounding kill (FOUND + FIXED, `ebcf4eb`)
+Discovered on the Horizon run ([[arch-horizon-run]]): a pre_grounding-killed
+engineer that wrote eng_patterns.md but committed no code was falsely marked
+`no_op` (working-tree `.exists()` check), silently skipping a foundation BL.
+Fix: R11 no_op now requires the artifact **committed at HEAD**
+(`_is_committed_at_head`). UNPUSHED at handoff.
+
+## Lesson (updated)
+The crew's grounded worker-loop is solid; the autonomous loop's fragility was
+the **harness control plane** — gate signal quality (A39), liveness heuristics
+(A45), gate non-determinism (A49), no-clean-terminal (#3 wedge-proof), and
+false-no_op skip (A52). As of this session **all are fixed and proven under a
+real failure**: the same harness that produced an 8h silent wedge now produces
+a clean, named, ~1.5h halt with broken work quarantined. The frontier has moved
+DOWNSTREAM — from "the harness wedges" to "the **crew** can't self-repair a hard
+regression in budget" (Horizon BL-0001 broke login; engineer chased symptoms).
+That is a capability problem (engineer root-cause depth), not a control-plane
+one — see [[arch-horizon-run]] + [[arch-acceptance-v02]].
