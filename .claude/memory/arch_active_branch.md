@@ -1,51 +1,54 @@
 ---
 name: arch-active-branch
-description: "followup-dispatch-ui — pushed @ b0c9b19; A52 fix ebcf4eb committed but UNPUSHED (push first next session). 2026-06-05 evening handoff. Search feature COMPLETE 6/6 + acceptance bug auto-fixed; acceptance SKILLS v0.2 (verified root-cause) shipped+enforced; Team Calendar (Horizon) run aborted cleanly at BL-0001 (auth-break capability wall). NEXT: push ebcf4eb, then decide the Horizon BL-0001 diagnosis."
+description: "followup-dispatch-ui @ 4b4be93 — all pushed, clean, 315 tests. 2026-06-06: shipped no-abort doctrine (A54), gate fidelity+auto-merge atomicity (A49 fix#2 + A53), and the SIMPLE gating model (A55: per-BL runs only the BL's own unit tests; full-suite+E2E only at acceptance). KEY FINDING: BL-0001 'capability wall' was a harness false-red artifact, not crew incapability — with the simple gate BL-0001 reached GREEN. Live run run-20260606T190150Z-ce9b56 validating end-to-end."
 metadata:
   node_type: memory
   type: project
   originSessionId: 326d1623-34a0-4f02-8c13-b7359c64685d
 ---
 
-## State at 2026-06-05 (evening)
+## State at 2026-06-06 (evening)
+- **Branch `followup-dispatch-ui` @ `4b4be93`** — all committed AND pushed; tree
+  clean (only untracked `agentic_harness.png`, ignore). Backend suite **315 passed**.
+- uvicorn live PID ~93785 on `4b4be93`.
 
-- **agentic-skills branch:** `followup-dispatch-ui`. **Pushed @ `b0c9b19`.**
-  **`ebcf4eb` (A52 fix) is committed but UNPUSHED → push first next session.**
-- **Target:** `full-stack-fastapi-template` @ `agentic-skills-work-search_and_discovery`
-  `e74ac82` — **Search & Discovery COMPLETE (6/6 BLs)** + the acceptance
-  browse-mode fix merged. Calendar/Horizon NOT merged. Broken Horizon BL-0001
-  work isolated on `agent/fd5263480b39` (RED gate — DO NOT merge).
-- **Tests:** 297 passed (`cd webapp/backend && .venv/bin/python -m pytest tests/`),
-  deselect `test_findings_ledger.py::test_concurrent_append_no_torn_lines`
-  (pre-existing parallel-exec flake; passes in isolation).
-- **Clean:** Docker = Milvus only, worktrees=1, no active run, lock clear.
-  uvicorn live on `ebcf4eb` (PID ~97469). ~96 GB disk free.
+## What shipped this session (all pushed)
+1. **A54 no-abort persistence doctrine** (BINDING): abort=failure; deep fix loops
+   `MAX_FIX_ATTEMPTS=6`; terminal `escalated`+dossier (Option A) not `aborted`;
+   root-cause mandate in build_gate_fix_prompt. See [[feedback-no-abort-persistence]].
+2. **A49 fix#2 + A53**: gate fidelity (same-SHA green memory + 1 re-sample, never
+   blind-flips red→green) + auto-merge atomicity (rollback engineer merge on
+   BL-abort via reset_target_to). Commits `05c6113`.
+3. **A55 SIMPLE gating model** (BINDING): per-BL = `regression_gate.run_bl_tests`
+   runs ONLY the BL's own changed test files (db-only, no full-suite, no
+   Playwright); full-suite + E2E run once at acceptance (`regression_checkpoint`
+   + acceptance agent; API always, Playwright iff UI). Commit `4b4be93`. See
+   [[feedback-simple-gating-model]].
 
-## What this session shipped (all pushed except ebcf4eb)
-1. **3 deferred harness fixes** (`4773e67`): A39 playwright node-id expansion,
-   A49 transient-marker annotation + explicit `--retries=2`, A45 wedge-proof
-   (outer `except` backstop on `run_brief` + engineer-flow wrap). See
-   [[arch-harness-hardening]].
-2. **Search feature finished**: BL-0006 re-run → merged_full (6/6); acceptance
-   found a real cross-BL `product_bug` (empty-query smart views → 0 rows);
-   confirmed → ABL-0021 dispatch → fixed (browse mode `4ac7e27`) → merged →
-   ledger synced. **Full deliver→diagnose→dispatch→fix→merge loop validated.**
-3. **ABL-0015 Calibration Campaign plan** (`79bc978`, governance entry 24).
-4. **Acceptance SKILLS v0.2 + binding enforcement** (`b0c9b19`). See
-   [[arch-acceptance-v02]].
-5. **A52 found + fixed** (`ebcf4eb`, UNPUSHED) — see [[arch-horizon-run]].
+## ⭐ KEY FINDING — the "crew can't do a trivial BL" puzzle is SOLVED
+BL-0001's prior "capability wall" was a **harness artifact**, not crew limit:
+- Old per-BL gate was diff-blind → ran full Playwright on a backend-only BL →
+  load-induced flaky **false reds** → no-abort loop thrashed 6→157. Crew commit
+  was correct (no frontend touched).
+- Engineer trace = **111 Bash calls**: spun its own Postgres, ran pytest
+  iteratively, ruff/mypy, psql-debugged. Competent local loop, like normal
+  Claude Code — NOT blind/incompetent.
+- With the simple gate, **BL-0001 reached GREEN (19 passed)** in 2 fix attempts
+  on a clean scoped signal. `pytest-randomly` NOT in target deps (order
+  deterministic). The simple model turned a thrashing BL into a clean win.
 
-## ⭐ NEXT SESSION
-1. **`git push`** (ebcf4eb).
-2. **Decide Horizon BL-0001**: diagnose why its CalendarEvent foundation broke
-   login (read `agent/fd5263480b39` diff — likely regenerated `client/*`, model
-   relationship/migration, or router registration), then hand-fix + resume
-   (`skip_po=True start_bl=BL-0002`) OR re-run OR stop. Full context in
-   `CONTINUATION_PROMPT.md` + [[arch-horizon-run]].
-3. Consider: a v0.2-style "root-cause before you patch" directive in the
-   engineer's `build_gate_fix_prompt` (it chased symptom specs without
-   root-causing the auth break).
+## ⭐ LIVE RUN — monitor (don't kill unless wedged)
+`run-20260606T190150Z-ce9b56` (item-comments) live, validating the simple model.
+BL-0001 green at 20:01 → merge → QA → BL-0002… First live exercise of
+`run_bl_tests`; the acceptance-phase full-suite checkpoint + E2E not yet
+exercised live. Tail `/tmp/item-comments-brief/run.sse.log`.
 
-Other deferred: ABL-0015 calibration Phase-0 (deferral hygiene + precision
-report); A49 verdict-flip (operator sign-off); A39 sub-mode 39a (build
-conflation); branch consolidation to a trunk.
+## NEXT SESSION
+1. Check `ce9b56`: live→monitor to terminal; `sprint_complete`→simple model fully
+   validated; `escalated`→read dossier (now an HONEST crew signal).
+2. Deferred: test-isolation discipline (comment tests); frontend-BL unit harness
+   (vitest); AUDIT_PROPOSAL (governance 32→20 + I-8 Gate Fidelity invariant);
+   getting-worse circuit-breaker.
+
+Related: [[feedback-no-abort-persistence]], [[feedback-simple-gating-model]],
+[[arch-harness-hardening]], [[arch-acceptance-v02]].
