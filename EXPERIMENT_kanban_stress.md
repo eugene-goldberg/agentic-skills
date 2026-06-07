@@ -113,3 +113,45 @@ repo, write `.agentic-skills.json`, get the baseline gate green (may need
 Docker/CI setup), index for retrieval, pick a non-trivial brief. Higher thesis
 fidelity, more setup risk — run it with Exp 1's feature-difficulty findings as a
 baseline so substrate-noise is isolated.
+
+---
+
+## 9. RESULTS — `run-20260607T040112Z-ae3e0d` (2026-06-07)
+
+**Verdict: the crew PASSED. All four failure predictions falsified.** ~3h,
+**6/6 BLs `merged_full`, 0 escalations, 0 doctrine violations, `main` pristine.**
+Suite 111 → **163** (+52 tests, 18 files, 3264 insertions).
+
+| Prediction (§4) | Outcome |
+|---|---|
+| #1 migration landmine ships latent `no such column` | **Falsified.** Crew wrote `db.py::_migrate_task_rank()` — guarded, idempotent `PRAGMA table_info(task)` → `ALTER TABLE task ADD COLUMN rank` + rebuilds `ix_task_rank`. Verified end-to-end on the real populated `backend/app.db`: column added, app serves existing rows 200, reorder works (deterministic neighbor-shift). No 500. |
+| #2 self-repair wall on KAN-001 | **Falsified.** No escalation; foundation BL merged clean. |
+| #3 checkpoint can't flag the ordering change | **Nuanced/true.** Checkpoint went `green` via the item-#1 *exit-code fallback*, not differential diff (`-q` emits no per-test lines). Real regression safety came from the crew's KAN-004 characterization test + full suite staying green — NOT the gate's diff. Open gap: the gate cannot differential-detect on quiet output. |
+| #4 acceptance tests happy path only | **Falsified.** Acceptance wrote Playwright `journey_05_optimistic_rollback_on_failure.spec.ts` + reorder-persists + drag-across-columns. Report verdict ✅ ACCEPT, 5/5 UI + 5/5 API, rollback + §5 landmine verified, 0 findings. |
+
+**This session's fixes validated live in a real sprint:** item #1 → checkpoint
+`green` (was blind/inconclusive); item #2 → scorer `merged=true` 6/6 (scorecards
+now persist); Janitor wired and correctly did NOT fire (no non-code failures).
+
+**Honest caveats (do not let this inflate the claim):**
+1. **The brief telegraphed the landmine (§5).** The crew implemented the fix
+   correctly *when warned* — it did not *discover* the `create_all` gap unprompted.
+   The genuinely-hard variant withholds §5; that is the next probe.
+2. **Checkpoint is green-by-exit-code, not green-by-diff** on this `-q` target —
+   weaker than true differential detection. Hardening candidate: gate should
+   differential-detect on quiet output (force `-v`, or parse the summary line).
+3. **Still the toy substrate.** Strong evidence the crew handles hard
+   refactor+migration work on a clean small codebase; NOT yet the real-brownfield
+   thesis (Exp 2).
+4. **Minor:** the UI is functional, not polished; the migration back-fills
+   existing rows to `rank=0` (`DEFAULT 0`) rather than sequential per-group ranks
+   (functionally fine — reorders assign real ranks). The crew also correctly used
+   the *actual* `todo/doing/done` enum over the brief's incorrect "in_progress" —
+   it grounded on the code, not the brief's error.
+
+**Net:** strongest evidence to date that the worker-crew can deliver a
+non-trivial, behavior-changing, migration-bearing feature autonomously — with the
+asterisk that it was a *well-specified* hard brief on a *controllable* target.
+Feature lives on the target's `integration` (no remote; not pushed). Next probes:
+(a) §5-withheld discovery variant; (b) Exp 2 real brownfield; (c) gate
+differential-detection-on-quiet-output hardening.
