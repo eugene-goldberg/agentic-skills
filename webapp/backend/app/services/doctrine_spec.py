@@ -143,6 +143,14 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
         docs=("CLAUDE.md", "ABL-0015_AUTO_DISPATCH_DESIGN.md"),
     ),
     DoctrineRule(
+        "R16", "non-code failures spawn the Janitor (never silent-abort); "
+               "structural repairs route to doctrine-meta",
+        "orchestrator", True,
+        "app.services.orchestrator:_janitor_flow",
+        has_test=True, targeted_failure_class="silent-failure",
+        docs=("CLAUDE.md", "PROPOSAL_OPS_STEWARD_ROLE.md"),
+    ),
+    DoctrineRule(
         "Tier1.5", "pre-modification kill: <min grounded calls before Write/Edit",
         "streaming", True,
         "app.services.claude_agent:stream_agent_task",
@@ -156,7 +164,7 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
 # not yet registered — its enforcement point is to be confirmed first.
 CANONICAL_RULE_IDS = frozenset({
     "R5", "R5b", "R7", "R8", "R9", "R10", "R10.1", "R10.2",
-    "R11", "R12", "R13", "R15", "Tier1.5",
+    "R11", "R12", "R13", "R15", "R16", "Tier1.5",
 })
 
 

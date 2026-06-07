@@ -763,6 +763,46 @@ async def _qa_or_scorer_flow(
             else:
                 yield _ptag({"type": "_meta", "phase": "awaiting_review",
                             "reason": gate.get("reason")}, role, bl_id, trace=trace)
+        elif role == "scorer" and validation["ok"] and new_commits > 0:
+            # Scorecard persistence (open-item #2, 2026-06-07): the scorer is
+            # READ-ONLY (validate_scorer: "makes no source-code changes, so R3
+            # does not apply"), so A55's QA-only regression gate has nothing to
+            # run for it. Doctrine validation alone gates the merge. The QA-only
+            # *gate* above is correct under A55; what was wrong is that the
+            # *merge* was also QA-only, so the committed, ff-validated scorecard
+            # (.agile-v/scorecards/<bl>.md) was dropped on the reaped scorer
+            # worktree and never reached the agent_branch. Persist it via a
+            # gate-FREE fast-forward (mirrors the QA merge mechanics minus the
+            # gate + post-rebase gate re-run, which a read-only branch can't
+            # regress).
+            merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+            if not merge.get("ok") and merge.get("kind") == "error":
+                await asyncio.sleep(2)
+                merge_retry = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+                if merge_retry.get("ok"):
+                    merge = merge_retry
+            # A1: same non_ff auto-rebase as the QA/engineer flows — QA worktrees
+            # advance the agent_branch under the scorer. No post-rebase gate:
+            # the scorer changes no source, so nothing can regress.
+            if not merge.get("ok") and merge.get("kind") == "non_ff":
+                yield _ptag({"type": "_meta", "phase": "merge_rebase_attempt",
+                            "branch": wt.branch, "target_ref": cfg.agent_branch},
+                           role, bl_id)
+                rebase = await _rebase_in_worktree(wt.path, cfg.agent_branch)
+                if rebase.get("ok"):
+                    yield _ptag({"type": "_meta", "phase": "merge_rebase_succeeded",
+                                "branch": wt.branch}, role, bl_id, trace=trace)
+                    merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+                else:
+                    yield _ptag({"type": "_meta", "phase": "merge_rebase_failed",
+                                "error": rebase.get("error"), "branch": wt.branch},
+                               role, bl_id)
+            merged = bool(merge.get("ok"))
+            yield _ptag({"type": "_meta", "phase": "merge_to_target",
+                        "ok": merge.get("ok"), "merged_sha": merge.get("merged_sha"),
+                        "kind": merge.get("kind"), "error": merge.get("error"),
+                        "branch": wt.branch},
+                       role, bl_id)
         # No-abort doctrine: an escalation dossier the per-BL loop attaches if QA
         # could not complete (doctrine give-up or merge failure) — so the run
         # escalates to the operator with the full picture, never silently aborts.
@@ -791,6 +831,187 @@ async def _qa_or_scorer_flow(
                 await remove_worktree(repo_dir, wt)
             except Exception:
                 pass
+
+
+# ─── janitor flow (Janitor / Ops-Steward — environment-anomaly investigator) ──
+# Operator directive 2026-06-07: wire the Janitor with full §6 authority. The
+# orchestrator DETECTS a non-code failure (merge precondition error, infra_fail,
+# git/worktree/config error) and spawns this agent to INVESTIGATE → REPAIR →
+# VERIFY → signal retry — the no-abort doctrine applied to the *environment*.
+#
+# Architecturally distinct from engineer/QA/scorer: it runs in the REAL repo_dir
+# (NOT an isolated worktree) because its whole job is to repair the harness's
+# relationship to the target (branch checkout, working-tree hygiene, leaked
+# resources, config). R13's universal FORBIDDEN_GIT_RE streaming-kill in
+# stream_agent_task is the hard backstop on its §6 forbidden ops (history
+# rewrite, force-push, reset --hard, …) — which is what makes "full authority"
+# safe. See PROPOSAL_OPS_STEWARD_ROLE.md + R16 in doctrine_spec.py.
+
+# Non-code failure kinds that warrant a Janitor spawn. Code-defect gate kinds
+# (failed / no_tests / regressed / inconclusive) are OWNED by the engineer/QA
+# no-abort loop and must NOT route here — clean separation prevents the Janitor
+# masking a real test failure (SKILLS "Why you were spawned").
+JANITOR_NONCODE_KINDS = frozenset({"error", "infra_fail"})
+
+
+def _build_janitor_task(skill: str, *, run_id: str, feature_slug: str | None,
+                        failed_step: str, blocker_reason: str, failing_role: str,
+                        bl_id: str | None, agent_branch: str, main_ref: str,
+                        report_rel: str, report_json_rel: str) -> str:
+    """Per-dispatch task prompt for the Janitor. Mirrors _build_acceptance_task:
+    SKILLS doctrine + a focused failure-context block + explicit deliverables."""
+    slug = feature_slug or "(no-feature)"
+    return (
+        f"{skill}\n\n---\n\n"
+        f"# Janitor dispatch — environment repair\n\n"
+        f"A non-code orchestration step just FAILED. You are spawned to "
+        f"investigate and repair the harness/environment so the run can "
+        f"proceed. You are running in the REAL target repo checkout (not an "
+        f"isolated worktree), so your repairs act on the live run state.\n\n"
+        f"## Failure context (verbatim harness signal)\n"
+        f"- run_id: `{run_id}`\n"
+        f"- feature_slug: `{slug}`\n"
+        f"- failed step: `{failed_step}`\n"
+        f"- failing role: `{failing_role}`\n"
+        f"- BL: `{bl_id or '(sprint-level)'}`\n"
+        f"- blocker: {blocker_reason}\n\n"
+        f"## Invariants you MUST preserve\n"
+        f"- configured agent branch (fork point + merge sink): `{agent_branch}`\n"
+        f"- pristine upstream (NEVER mutate except to preserve its pristine "
+        f"state): `{main_ref}`\n"
+        f"- NEVER edit target feature code or tests; NEVER mask a code defect.\n\n"
+        f"## Deliverables (BOTH required)\n"
+        f"1. Investigation+repair report → `{report_rel}`\n"
+        f"2. Machine-readable verdict JSON → `{report_json_rel}` (exact schema "
+        f"in your SKILLS 'Deliverables'). Set `retry:true` ONLY if you VERIFIED "
+        f"the blocking precondition now passes; `classification:\"structural\"` "
+        f"(+ `proposed_framework_fix`) if this is a framework defect that will "
+        f"recur.\n"
+    )
+
+
+async def _janitor_flow(
+    repo_dir: Path,
+    repo_name: str,
+    run_id: str,
+    feature_slug: str | None,
+    *,
+    failed_step: str,
+    blocker_reason: str,
+    failing_role: str,
+    bl_id: str | None = None,
+    timeout: int = 1800,
+) -> AsyncIterator[dict]:
+    """Spawn the Janitor to repair a non-code failure in the real repo checkout.
+
+    Yields the agent's stream events, optional structural-anomaly + done events,
+    and a terminal ``_orchestrator_outcome`` with
+    ``{role:"janitor", status, retry, classification, verdict}``.
+
+    Advisory by contract: a Janitor crash or unreadable verdict NEVER aborts the
+    run — it degrades to ``status="escalated", retry=False`` so the caller falls
+    through to the existing Option-A escalation. R16."""
+    cfg = repo_config_svc.load(repo_dir)
+    slug = feature_slug or "_no_feature"
+    step_safe = failed_step.replace("/", "_").replace(" ", "_")
+    janitor_dir = repo_dir / "_brownfield" / "features" / slug / "janitor"
+    report_rel = f"_brownfield/features/{slug}/janitor/{step_safe}-{run_id}.md"
+    report_json_rel = f"_brownfield/features/{slug}/janitor/{step_safe}-{run_id}.json"
+    try:
+        janitor_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+    yield _evt("janitor.start", run_id=run_id, bl_id=bl_id, failed_step=failed_step,
+               failing_role=failing_role, blocker=blocker_reason[:500],
+               report=report_rel)
+
+    # Advisory contract (R16): NOTHING below may propagate — a Janitor failure
+    # (crash, bad config, unloadable skill) must never abort the run. Everything
+    # from skill-load through stream is wrapped; on any error we degrade to an
+    # escalated/no-retry verdict so the caller falls through to its normal
+    # Option-A escalation.
+    trace = None
+    verdict: dict = {}
+    try:
+        skill = prompts_brownfield_svc._load_skill("janitor")
+        task = _build_janitor_task(
+            skill, run_id=run_id, feature_slug=feature_slug, failed_step=failed_step,
+            blocker_reason=blocker_reason, failing_role=failing_role, bl_id=bl_id,
+            agent_branch=getattr(cfg, "agent_branch", "agentic-skills-work"),
+            main_ref=getattr(cfg, "main_ref", "main"),
+            report_rel=report_rel, report_json_rel=report_json_rel)
+        trace = TraceWriter(repo=repo_name, role="janitor", bl_id=bl_id or run_id, task_id=run_id)
+        async for event in stream_agent_task(
+            task, repo_dir, timeout_seconds=timeout, idle_timeout=900,
+            allowed_tools="Bash,Read,Write,Edit", trace=trace,
+        ):
+            event.setdefault("orchestrator_step", "janitor")
+            yield event
+    except Exception as exc:  # noqa: BLE001 — advisory: a Janitor crash never aborts the run
+        yield _evt("janitor.error", run_id=run_id, bl_id=bl_id, error=str(exc)[:500])
+    finally:
+        if trace is not None:
+            try:
+                trace.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Read the deterministic sidecar verdict (disk-based, like acceptance's
+    # report.json — never trust stdout parsing).
+    report_json_abs = repo_dir / report_json_rel
+    if report_json_abs.exists():
+        try:
+            verdict = json.loads(report_json_abs.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            yield _evt("janitor.verdict.error", run_id=run_id, bl_id=bl_id,
+                       error=str(exc)[:300], path=report_json_rel)
+            verdict = {}
+
+    status = verdict.get("status") if isinstance(verdict, dict) else None
+    classification = verdict.get("classification") if isinstance(verdict, dict) else None
+    retry = bool(verdict.get("retry")) if isinstance(verdict, dict) else False
+    if status not in ("repaired", "escalated"):
+        # No usable verdict → conservative escalation, no retry.
+        status, retry = "escalated", False
+    if status != "repaired":
+        retry = False  # never retry on an escalation
+
+    # §5 self-hardening (I-7): a structural anomaly is a FRAMEWORK defect that
+    # will recur — surface it so the doctrine-meta-agent fixes the cause once,
+    # not the Janitor band-aiding it run after run.
+    if classification == "structural":
+        yield _evt("janitor.structural_anomaly", run_id=run_id, bl_id=bl_id,
+                   failed_step=failed_step,
+                   signature=(verdict.get("root_cause") or blocker_reason)[:300],
+                   proposed_framework_fix=verdict.get("proposed_framework_fix"),
+                   report=report_rel)
+
+    yield _evt("janitor.done", run_id=run_id, bl_id=bl_id, failed_step=failed_step,
+               status=status, classification=classification, retry=retry,
+               root_cause=(verdict.get("root_cause") if isinstance(verdict, dict) else None),
+               actions=(verdict.get("actions") if isinstance(verdict, dict) else None))
+    yield {"_orchestrator_outcome": True, "role": "janitor", "run_id": run_id,
+           "bl_id": bl_id, "failed_step": failed_step, "status": status,
+           "classification": classification, "retry": retry, "verdict": verdict}
+
+
+async def _run_janitor(repo_dir: Path, repo_name: str, run_id: str,
+                       feature_slug: str | None, *, failed_step: str,
+                       blocker_reason: str, failing_role: str,
+                       bl_id: str | None, timeout: int) -> AsyncIterator[dict]:
+    """Thin driver around _janitor_flow used by run_brief: re-yields the stream
+    events and captures the terminal outcome on a private attribute the caller
+    reads after iteration. Keeps the run-loop call sites small."""
+    outcome: dict | None = None
+    async for e in _janitor_flow(repo_dir, repo_name, run_id, feature_slug,
+                                 failed_step=failed_step, blocker_reason=blocker_reason,
+                                 failing_role=failing_role, bl_id=bl_id, timeout=timeout):
+        if "_orchestrator_outcome" in e:
+            outcome = e
+            continue
+        yield e
+    _run_janitor.last_outcome = outcome  # type: ignore[attr-defined]
 
 
 # ─── acceptance flow (ABL-0014 — Batch B: agent spawn + R10.1 retry) ──────
@@ -1966,6 +2187,9 @@ async def run_brief(
     inject_acceptance_priors: bool = False,  # ABL-0014 §I.3 Batch E; OFF until 3-smoke calibration
     run_acceptance_followup: bool = False,  # ABL-0015 auto-dispatch; OFF until calibrated
     inject_lessons: bool = False,  # ABL-0016 cumulative learning; OFF until calibrated
+    run_janitor: bool = True,  # Janitor/Ops role (operator 2026-06-07): spawn the
+                               # environment-repair agent on non-code failures.
+                               # Flag = named rollback (set False to disable wiring).
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -2179,6 +2403,27 @@ async def run_brief(
                     "role": "engineer", "bl_id": bl_id,
                     "harness_error": (eng_outcome or {}).get("engineer_error", False),
                 }
+                # Janitor (R16): if the engineer was blocked by a NON-CODE failure
+                # (infra_fail, merge error) — NOT a code defect (failed/no_tests/
+                # regressed/inconclusive, which the engineer's own no-abort loop
+                # owns) — spawn the environment-repair agent. It repairs the live
+                # run state (full §6 authority; R13-backstopped) and routes any
+                # structural anomaly to the doctrine-meta loop. The repair + its
+                # diagnosis attach to the escalation dossier. (Auto re-run of the
+                # BL after repair is a separate, larger increment — the per-BL
+                # body must first become a retryable unit; see handoff.)
+                if run_janitor and _dossier.get("last_gate_kind") in JANITOR_NONCODE_KINDS:
+                    try:
+                        async for je in _run_janitor(
+                            repo_dir, repo_name, run_id, feature_slug,
+                            failed_step=f"engineer.{_dossier.get('last_gate_kind')}",
+                            blocker_reason=str(_dossier.get("last_gate_reason")
+                                               or _dossier.get("last_gate_kind") or "non-code failure"),
+                            failing_role="engineer", bl_id=bl_id, timeout=timeout_per_role):
+                            yield je
+                        _dossier["janitor"] = getattr(_run_janitor, "last_outcome", None) or {}
+                    except Exception as exc:  # noqa: BLE001 — Janitor is advisory; never block the escalation
+                        yield _evt("janitor.error", bl_id=bl_id, run_id=run_id, error=str(exc)[:300])
                 summary["bls"].append(per_bl)
                 bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "engineer_escalated"})
                 _checkpoint(current_bl=None)  # A7
@@ -2266,6 +2511,28 @@ async def run_brief(
                     bl_id=bl_id,
                     summary=(qa_outcome or {}).get("doctrine_summary"),
                 )
+                # Janitor (R16): QA passed doctrine but its merge did not land —
+                # this is the canonical NON-CODE (environment) failure (dirty
+                # checkout, branch/ref drift, graphify-out symlink collision —
+                # the A35/A37 class). Spawn the environment-repair agent to fix
+                # the live run state (full §6 authority; R13-backstopped) and
+                # route structural anomalies to doctrine-meta. (Auto re-run of QA
+                # after repair is the same deferred increment as the engineer
+                # path — see handoff.)
+                _qa_dossier = (qa_outcome or {}).get("dossier") or {}
+                if run_janitor:
+                    try:
+                        async for je in _run_janitor(
+                            repo_dir, repo_name, run_id, feature_slug,
+                            failed_step="qa.merge_to_target",
+                            blocker_reason=str((qa_outcome or {}).get("doctrine_summary")
+                                               or _qa_dossier.get("last_gate_reason")
+                                               or "QA merge did not land"),
+                            failing_role="qa", bl_id=bl_id, timeout=timeout_per_role):
+                            yield je
+                        _qa_dossier["janitor"] = getattr(_run_janitor, "last_outcome", None) or {}
+                    except Exception as exc:  # noqa: BLE001 — Janitor is advisory; never block the rollback
+                        yield _evt("janitor.error", bl_id=bl_id, run_id=run_id, error=str(exc)[:300])
                 summary["bls"].append(per_bl)
                 bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "merged_no_qa"})
                 _checkpoint(current_bl=None)  # A7
@@ -2290,7 +2557,7 @@ async def run_brief(
                     yield _evt("escalated", bl_id=bl_id, role="qa",
                                reason=f"QA could not reach a green gate for {bl_id} after exhaustive "
                                       f"investigate→fix→re-test attempts — escalating for operator review",
-                               dossier=(qa_outcome or {}).get("dossier") or {})
+                               dossier=_qa_dossier)
                     return
                 # stop_on_failure=False: best-effort continue. The engineer's
                 # merge stays on the trunk (rollback is scoped to aborts); the

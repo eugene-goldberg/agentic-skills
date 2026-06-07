@@ -150,7 +150,7 @@ A dedicated, tightly-scoped role keeps each boundary clean.
 
 ## 8. Invariant / doctrine placement
 
-- New role SKILLS.md: `skills/brownfield/brownfield-production-incremental-ops/SKILLS.md`.
+- New role SKILLS.md: `skills/brownfield/brownfield-production-incremental-janitor/SKILLS.md`.
 - Enforcement: the orchestrator's non-code-failure branches spawn it (a new
   flow function `_ops_flow`), mirroring `_engineer_flow`.
 - Maps to **I-1** (resource lifecycle), **I-3** (closure postconditions), and
@@ -185,3 +185,47 @@ customers* of the Ops/doctrine-meta split this proposal defines.
    one-click applies) until trust is established, mirroring the ABL-0015
    auto-dispatch calibration discipline?
 3. **Naming** — Ops / Steward / SRE / Janitor? (affects SKILLS path + events).
+
+---
+
+## 11. Operator decisions & disposition (2026-06-07 — RESOLVED, WIRED)
+
+The operator resolved the §10 questions and authorized wiring:
+
+- **Disposition:** WIRE INTO THE ORCHESTRATOR with **full §6 authority** (not
+  read-only-propose). The agent holds the full §6 repair whitelist; R13's
+  universal `FORBIDDEN_GIT_RE` streaming-kill in `stream_agent_task` is the hard
+  backstop on the §6 forbidden ops — that is what makes full authority safe.
+- **Name:** **Janitor** (Q3). SKILLS path renamed to
+  `brownfield-production-incremental-janitor`; events are `orchestrator.janitor.*`.
+- **Q1 (role vs. embedded helper):** the deterministic, always-correct mechanical
+  repairs already live in orchestrator code (`_ensure_on_agent_branch`, the A1
+  auto-rebase, gitignore additions); the *agent* is reserved for novel anomalies.
+
+**What shipped (this session):**
+- `_janitor_flow` (runs in the REAL repo checkout, not a worktree) + `_build_janitor_task`.
+- `prompts_brownfield.SKILL_PATHS["janitor"]`.
+- Spawn triggers in `run_brief`: the engineer escalation path (fires only when
+  `last_gate_kind ∈ {error, infra_fail}` — code-defect kinds stay owned by the
+  engineer/QA no-abort loop) and the QA merge-failed branch (the canonical
+  non-code merge failure, A35/A37 class).
+- Deterministic disk-based verdict (sidecar JSON, like acceptance's report.json).
+- `janitor.structural_anomaly` event for I-7 routing to the doctrine-meta loop.
+- R16 in `doctrine_spec.py` + CLAUDE.md R-rules table (CI-guarded consistency).
+- `run_janitor` flag on `run_brief` (default ON) = named rollback.
+- Advisory contract enforced + tested: a Janitor crash/bad-config/unloadable-skill
+  NEVER aborts the run — it degrades to escalated/no-retry and the caller falls
+  through to its normal Option-A escalation.
+- Tests: `tests/test_janitor_flow.py` (5).
+
+**Deferred (next increment — needs operator nod):**
+- **Auto re-run of the failed step after a verified repair.** The Janitor
+  currently repairs the live run state (benefiting subsequent BLs) and attaches
+  its repair + diagnosis to the escalation, but does not yet re-run the engineer/
+  QA phase inline. Re-entering the per-BL success path mid-loop requires
+  refactoring the ~150-line per-BL body into a retryable unit — a larger,
+  separately-reviewed change. Until then, `retry:true` from the Janitor is
+  recorded in the dossier but not acted on automatically.
+- **doctrine-meta consumption** of `janitor.structural_anomaly`: the Janitor's
+  trace + report are visible to the doctrine-meta agent via `traces_archive/`;
+  an explicit hand-off (e.g. a findings entry) can be added when calibrated.

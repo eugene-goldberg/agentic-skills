@@ -63,34 +63,59 @@ The 3 structural fixes turned a BL-0001 merge-escalation (prior run) into a clea
 start keeps `main` pristine. All on the target's `main` baseline + the harness
 commit `238f434`.
 
-## Open items (Verified findings from the labels run — NOT yet fixed/filed)
-1. **`_parse_pytest` doesn't parse this target's pytest summary** (py3.14 /
-   pytest 9.x). Two symptoms, one cause:
-   - per-BL gate logs `green (0 passed)` — **cosmetic only** (`run_bl_tests` is
-     exit-code-authoritative, so merges are correct).
-   - acceptance `orchestrator.regression_checkpoint` returned **`inconclusive`**
-     ("tests did not execute (no pass/fail parsed); verify test_cmd") instead of
-     green. Manual re-run of the assembled suite = **111 passed** (so the feature
-     is actually clean; the checkpoint just couldn't read it).
-   - Proposed fix: make `run_gate` fall back to exit-code-authoritative on
-     unparseable output (mirror the A55 `run_bl_tests` fix) and/or repair the
-     `_parse_pytest` summary regex. One fix kills both symptoms.
-2. **Scorer no longer persists scorecards.** Scorer ran 6/6 (`doctrine_ok=True`)
-   but `merged=False` for all — because `orchestrator.py:690` gates the
-   gate+merge block to `if role == "qa"`, so the scorer path never merges. On the
-   old target, `score(BL-…)` commits landed on integration; under A55 they don't.
-   Design call: persist scorecards (merge/copy-back) or accept trace-only +
-   document. Currently silently neither.
-3. **Ops/Steward role** (`PROPOSAL_OPS_STEWARD_ROLE.md` +
-   `skills/brownfield/brownfield-production-incremental-ops/SKILLS.md`) is
-   committed as a **proposal + SKILLS only** — NOT wired into the orchestrator
-   (no `_ops_flow`, no spawn trigger). Operator open questions in §10 unanswered.
+## Open items
+
+### 1. `_parse_pytest` can't read this target's pytest output — **STILL OPEN**
+Two symptoms; verified 2026-06-07. **Correction to a prior hand-off:** the cause
+is NOT "py3.14 / pytest 9.x" — it is (a) the target `test_cmd` uses **`-q`**
+(quiet) so `run_gate` gets zero per-test lines, and (b) `PYTEST_RESULT_RE`
+anchors to `^tests?/` but this target's node-ids are `backend/tests/…` (so even
+`run_bl_tests`, which forces `-v`, parses 0). Neither is a version issue.
+- per-BL gate logs `green (0 passed)` — **cosmetic** (`run_bl_tests` is
+  exit-code-authoritative, merges correct). Caused by the regex-anchor mismatch.
+- acceptance `orchestrator.regression_checkpoint` = **`inconclusive`** ("tests
+  did not execute (no pass/fail parsed); verify test_cmd"). Manual re-run = **111
+  passed**. Caused by `-q` (no per-test lines at all).
+- **Corrected fix (NOT "one fix kills both"):** the two symptoms live in
+  different functions. `run_gate` needs an **exit-code fallback** on unparseable
+  output (fixes the acceptance `inconclusive`; a regex fix alone won't help it
+  because `-q` emits nothing to match). The cosmetic per-BL `0 passed` needs the
+  **`_parse_pytest` regex anchor** widened to match `backend/tests/…`. Two
+  distinct fixes (or drop `-q` from `test_cmd` + widen the regex).
+
+### 2. Scorer scorecard persistence — **FIXED (2026-06-07)**
+Root cause: `orchestrator.py` gated the gate+merge block to `if role == "qa"`, so
+the scorer's committed, doctrine-validated scorecard (`.agile-v/scorecards/<bl>.md`)
+was never fast-forwarded — dropped on the reaped scorer worktree. Verified: the
+labels run's 6 scorecards survive on the leftover `agent/*` branches; integration
+had `.agile-v/qa/` but no `.agile-v/scorecards/`.
+**Fix:** added a scorer `elif` that persists the scorecard via a **gate-free
+fast-forward** (scorer is read-only — A55's QA-only gate has nothing to run; only
+the merge was wrongly QA-only). A1 non-ff auto-rebase parity, no post-rebase gate.
+Tests: `tests/test_scorer_scorecard_persistence.py` (3). Operator decision:
+gate-free ff-merge.
+
+### 3. Janitor (Ops/Steward) role — **WIRED with full §6 authority (2026-06-07)**
+Operator decisions: name = **Janitor**; **wire with full §6 authority**. Shipped:
+`_janitor_flow` (runs in the REAL repo checkout) + spawn triggers in `run_brief`
+(engineer escalation on `last_gate_kind ∈ {error, infra_fail}`; QA merge-failed
+branch), deterministic sidecar verdict, `janitor.structural_anomaly` → I-7
+doctrine-meta routing, R16 in `doctrine_spec` + CLAUDE.md (CI-guarded),
+`run_janitor` flag (default ON = rollback). Advisory contract enforced+tested: a
+Janitor failure never aborts the run. Tests: `tests/test_janitor_flow.py` (5).
+SKILLS renamed `…-ops` → `…-janitor`. Full record: `PROPOSAL_OPS_STEWARD_ROLE.md`
+§11. **Deferred:** auto re-run of the failed step after a verified repair (needs
+the per-BL body refactored into a retryable unit — separate reviewed increment).
+
+## Test state after this session
+`cd webapp/backend && .venv/bin/python -m pytest tests/ -q` → **324 passed**
+(316 baseline + 3 scorer-persistence + 5 janitor). Scope to `tests/`.
 
 ## Suggested next actions (operator to direct — do not start without approval)
-- File open items #1 and #2 as ledger entries with the corrected evidence.
-- Implement the `run_gate` exit-code fallback (#1) — small, high-value.
-- Decide scorecard persistence (#2).
-- Decide whether to wire the Ops/Steward role (#3) or leave as proposal.
+- Implement item #1: `run_gate` exit-code fallback + widen `_parse_pytest` regex
+  anchor (two distinct fixes). File as a ledger entry with the corrected cause.
+- Approve the deferred Janitor auto-rerun increment (#3) if wanted.
 - Reap the 20 leftover `agent/*` branches in the target if desired.
+- Decide commit/merge of this session's work (currently uncommitted on `development`).
 
 ---PROMPT END---
