@@ -36,7 +36,8 @@ def _patch_cfg(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(g.repo_config_svc, "load",
                         lambda *a, **k: types.SimpleNamespace(
                             agent_branch="agentic-skills-work",
-                            test_cmd=["pytest"], doctrine="brownfield"))
+                            test_cmd=["pytest"], test_env=None,
+                            doctrine="brownfield"))
 
 
 def test_run_bl_tests_no_tests(monkeypatch, tmp_path) -> None:
@@ -90,3 +91,43 @@ def test_run_bl_tests_failed(monkeypatch, tmp_path) -> None:
     # exit-code-primary verdict; failures named (node-ids when parseable, else
     # the BL test files) so the retry prompt has actionable detail.
     assert any("test_comments.py" in r for r in res["regressions"])
+
+
+def test_run_bl_tests_multitoken_cmd_and_env(monkeypatch, tmp_path) -> None:
+    """A57: a target whose test_cmd is multi-token (e.g. `uv run pytest`) and
+    needs env (DATABASE_URL/HABITS_STORAGE) must run with the FULL command —
+    not just test_cmd[0] — and with test_env merged into the subprocess.
+
+    Regression guard for the beaverhabits wiring: the native run_bl_tests path
+    previously kept only `test_cmd[0]`, silently dropping `run pytest`, and had
+    no path to inject per-target env.
+    """
+    captured: dict = {}
+
+    monkeypatch.setattr(g.repo_config_svc, "load",
+                        lambda *a, **k: types.SimpleNamespace(
+                            agent_branch="integration",
+                            test_cmd=["uv", "run", "pytest"],
+                            test_env={"DATABASE_URL": "sqlite+aiosqlite:///:memory:",
+                                      "HABITS_STORAGE": "USER_DISK"},
+                            doctrine="brownfield"))
+
+    async def _git(args, cwd):
+        if args[:2] == ["diff", "--name-only"]:
+            return (0, "tests/test_apis.py\n")
+        return (0, "")
+    monkeypatch.setattr(g, "_git", _git)
+
+    async def _run_capture(cmd, cwd, timeout=1800, env=None):
+        captured["cmd"] = cmd
+        captured["env"] = env
+        return (0, "tests/test_apis.py::test_create PASSED\n== 1 passed ==\n", "")
+    monkeypatch.setattr(g, "_run_capture", _run_capture)
+
+    res = asyncio.run(g.run_bl_tests(tmp_path, "agent/x", "integration", run_id="r"))
+    assert res["kind"] == "green"
+    # FULL command preserved (not truncated to test_cmd[0]), -v inserted, BL file appended.
+    assert captured["cmd"] == ["uv", "run", "pytest", "-v", "tests/test_apis.py"]
+    # Per-target env reached the subprocess.
+    assert captured["env"] == {"DATABASE_URL": "sqlite+aiosqlite:///:memory:",
+                               "HABITS_STORAGE": "USER_DISK"}

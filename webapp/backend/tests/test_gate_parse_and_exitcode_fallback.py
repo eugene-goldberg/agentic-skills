@@ -59,6 +59,7 @@ def _patch_gate(monkeypatch, *, pre: g.TestSet, post: g.TestSet) -> None:
     monkeypatch.setattr(g.repo_config_svc, "load",
                         lambda *a, **k: types.SimpleNamespace(
                             test_cmd=["/abs/.venv/bin/pytest", "backend/tests", "-q"],
+                            test_env=None,
                             agent_branch="integration"))
     monkeypatch.setattr(g, "_free_gb", lambda *a, **k: 999.0)
 

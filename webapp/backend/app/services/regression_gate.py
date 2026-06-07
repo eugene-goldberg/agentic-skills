@@ -345,18 +345,29 @@ def _parse_pytest(stdout: str, stderr: str) -> tuple[set[str], set[str]]:
 
 
 async def _run_tests(cwd: Path, cmd: list[str], *,
-                     compose_project: str | None = None) -> TestSet:
+                     compose_project: str | None = None,
+                     extra_env: dict[str, str] | None = None) -> TestSet:
     # If pytest is the runner and the user hasn't pinned `-v`, add it so we
-    # get parseable per-test verdicts.
+    # get parseable per-test verdicts. `pytest` may be wrapped (e.g.
+    # `uv run pytest`, `python -m pytest`), so match it anywhere in the argv,
+    # not just at position 0 — otherwise a wrapped runner yields default
+    # dotted output the per-test parser can't anchor, collapsing the
+    # differential gate to a green-by-exit-code fallback.
     effective = list(cmd)
-    if effective and effective[0] == "pytest" and "-v" not in effective and "--verbose" not in effective:
+    if ("pytest" in effective and "-v" not in effective and "--verbose" not in effective):
         effective.append("-v")
     # M2-1: when a compose_project name is supplied, pass it via the standard
     # docker-compose env var so containers spawned by the test_cmd carry a
     # predictable prefix that closure_check (Move 2) can scan for.
+    # Plus any per-target `test_env` from .agentic-skills.json (e.g. a target
+    # whose suite needs DATABASE_URL/HABITS_STORAGE set to run natively).
     env: dict[str, str] | None = None
-    if compose_project:
-        env = {"COMPOSE_PROJECT_NAME": compose_project}
+    if compose_project or extra_env:
+        env = {}
+        if extra_env:
+            env.update(extra_env)
+        if compose_project:
+            env["COMPOSE_PROJECT_NAME"] = compose_project
     exit_code, stdout, stderr = await _run_capture(effective, cwd, env=env)
     passed, failed = _parse_pytest(stdout, stderr)
     # Last 300 lines so docker-compose cleanup at the end of a gate run
@@ -458,9 +469,16 @@ async def run_bl_tests(repo_root: Path, agent_branch: str, base_ref: str,
                              "backend", "bash", "-c", inner]
             exit_code, stdout, stderr = await _run_capture(cmd, wt, timeout=timeout)
         else:
-            binary = (cfg.test_cmd or detect_test_command(repo_root) or ["pytest"])[0]
-            cmd = [binary, "-v", *bl_tests]
-            exit_code, stdout, stderr = await _run_capture(cmd, wt, timeout=timeout)
+            # Use the FULL configured command, not just its binary — a target's
+            # test_cmd may be multi-token (e.g. `uv run pytest`, `python -m
+            # pytest`). Append `-v` (for parseable per-test lines) and the BL's
+            # own test files. `test_env` (e.g. DATABASE_URL/HABITS_STORAGE) is
+            # merged into the subprocess env so natively-run suites that need it
+            # can open their DB.
+            base = list(cfg.test_cmd or detect_test_command(repo_root) or ["pytest"])
+            vflag = ["-v"] if ("pytest" in base and "-v" not in base and "--verbose" not in base) else []
+            cmd = [*base, *vflag, *bl_tests]
+            exit_code, stdout, stderr = await _run_capture(cmd, wt, timeout=timeout, env=cfg.test_env)
 
         passed, failed = _parse_pytest(stdout, stderr)
         tail = "\n".join((stdout + "\n" + stderr).splitlines()[-300:])
@@ -637,7 +655,7 @@ async def _run_gate_once(repo_root: Path, agent_branch: str, target_ref: str,
         code, msg = await _git(["worktree", "add", "--detach", str(wt_pre), target_ref], cwd=repo_root)
         if code != 0:
             return {"ok": False, "kind": "error", "reason": f"pre worktree add failed: {msg.strip()}", "command": test_cmd}
-        pre = await _run_tests(wt_pre, test_cmd, compose_project=pre_proj)
+        pre = await _run_tests(wt_pre, test_cmd, compose_project=pre_proj, extra_env=cfg.test_env)
 
         code, msg = await _git(["worktree", "add", "--detach", str(wt_post), target_ref], cwd=repo_root)
         if code != 0:
@@ -654,7 +672,7 @@ async def _run_gate_once(repo_root: Path, agent_branch: str, target_ref: str,
                     "reason": f"dry-run merge failed: {msg2.strip()[:400]}",
                     "command": test_cmd,
                 }
-        post = await _run_tests(wt_post, test_cmd, compose_project=post_proj)
+        post = await _run_tests(wt_post, test_cmd, compose_project=post_proj, extra_env=cfg.test_env)
 
         # A25b: before the regression/new-failure decision tree, check
         # whether the post-run tail carries an infrastructure-failure marker

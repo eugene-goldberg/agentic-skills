@@ -70,6 +70,7 @@ class RepoConfig:
     agent_branch: str
     main_ref: str
     test_cmd: list[str] | None  # None = auto-detect via brownfield.detect_test_command
+    test_env: dict[str, str] | None  # extra env merged into the gate test subprocess
     doctrine: str | None        # None = derive from target_status
     source: str                 # "file" | "default"
     api_route_globs: list[str] | None = None  # None = use DEFAULT_API_ROUTE_GLOBS
@@ -86,6 +87,7 @@ class RepoConfig:
             "agent_branch": self.agent_branch,
             "main_ref": self.main_ref,
             "test_cmd": self.test_cmd,
+            "test_env": self.test_env,
             "doctrine": self.doctrine,
             "api_route_globs": self.api_route_globs,
             "source": self.source,
@@ -122,6 +124,7 @@ def load(repo_root: Path) -> RepoConfig:
             agent_branch = data.get("agent_branch") or DEFAULT_AGENT_BRANCH
             main_ref = data.get("main_ref") or DEFAULT_MAIN_REF
             test_cmd = data.get("test_cmd")
+            test_env = data.get("test_env")
             doctrine = data.get("doctrine")
             api_route_globs = data.get("api_route_globs")
             ui_globs = data.get("ui_globs")
@@ -130,6 +133,11 @@ def load(repo_root: Path) -> RepoConfig:
                 agent_branch=agent_branch,
                 main_ref=main_ref,
                 test_cmd=list(test_cmd) if isinstance(test_cmd, list) else None,
+                test_env=(
+                    {str(k): str(v) for k, v in test_env.items()}
+                    if isinstance(test_env, dict) and test_env
+                    else None
+                ),
                 doctrine=doctrine,
                 api_route_globs=(
                     list(api_route_globs)
@@ -153,12 +161,13 @@ def load(repo_root: Path) -> RepoConfig:
         agent_branch=branch,
         main_ref=DEFAULT_MAIN_REF,
         test_cmd=None,
+        test_env=None,
         doctrine=None,
         source="default",
     )
 
 
-def write(repo_root: Path, *, agent_branch: str = DEFAULT_AGENT_BRANCH, main_ref: str = DEFAULT_MAIN_REF, test_cmd: list[str] | None = None, doctrine: str | None = None) -> Path:
+def write(repo_root: Path, *, agent_branch: str = DEFAULT_AGENT_BRANCH, main_ref: str = DEFAULT_MAIN_REF, test_cmd: list[str] | None = None, test_env: dict[str, str] | None = None, doctrine: str | None = None) -> Path:
     """Write a fresh .agentic-skills.json. Used when bootstrapping a target."""
     config_path = repo_root / CONFIG_FILENAME
     payload = {
@@ -167,6 +176,8 @@ def write(repo_root: Path, *, agent_branch: str = DEFAULT_AGENT_BRANCH, main_ref
     }
     if test_cmd:
         payload["test_cmd"] = test_cmd
+    if test_env:
+        payload["test_env"] = test_env
     if doctrine:
         payload["doctrine"] = doctrine
     config_path.write_text(json.dumps(payload, indent=2) + "\n")
