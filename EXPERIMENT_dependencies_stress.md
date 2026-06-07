@@ -97,6 +97,46 @@ Interpretation:
   discovery.
 - Exp 2 (future): real third-party brownfield repo → tests substrate realism.
 
-## 7. RESULTS
+## 7. RESULTS — `run-20260607T135926Z-908991` (2026-06-07)
 
-_(to be appended after `run-…` terminates)_
+**Verdict: the crew PASSED the no-telegraph discovery test.** From a brief that
+stated requirements like a normal ticket and deliberately withheld the algorithm
+and gotchas, the crew **discovered and correctly implemented** the hard
+correctness on its own. ~4.5h (08:59→13:28), **6/6 BLs `merged_full`, 0
+escalations, 0 janitor spawns, `main` pristine.** Scorecards (all Pass W/R):
+BL-0001 97 · BL-0002 95 · BL-0003 95 · BL-0004 95 · BL-0005 97 · BL-0006 94.
+regression_checkpoint **green** (item-#1 exit-code fallback); scorer merged 6/6
+(item-#2 fix); acceptance validator.ok, 0 findings.
+
+**Predicted failure modes — all FALSIFIED, confirmed at BOTH code and runtime:**
+
+| Prediction (§3) | Code | Live probe (restarted backend, real data) |
+|---|---|---|
+| #1 shallow cycle detection | `_would_create_cycle` is a reachability **DFS** (`stack`+`visited`, follows edges across the graph) | A→B→C then **C→A → 409** "Dependency would create a cycle"; self-dep A→A → 409 |
+| #2 one-path / UI-only done-guard | one shared `_reject_if_blocked_done` applied to **both** `update_task` (`PATCH /tasks/{id}`) and `move_task` (`/move`), server-side, reusing the same `_blocked_state` as `TaskRead.blocked` | blocked X: `PATCH /tasks/X done` → **409**, `PATCH /tasks/X/move done` → **409** ("blocked by tasks [11]") |
+| #3 stale blocked computation | `blocked`/`blocked_by` derived from dependencies' live statuses (not stored) | complete Y → X `blocked=false` → `PATCH X done` → **200** (unblock works) |
+| #4 no characterization | BL-0005 dedicated characterization + edge BL merged | (n/a — covered by the dedicated BL) |
+| #5 regression | existing tasks/labels/Kanban untouched | full-suite regression_checkpoint green; acceptance 0 findings |
+
+**This retires Exp 1's biggest caveat.** Exp 1 proved "executes a well-specified
+hard brief (landmine telegraphed)." Exp 1b proves "**discovers** the hard
+correctness from a normally-specified ticket" — transitive closure and
+multi-path server-side invariant enforcement, unprompted.
+
+**Honest caveats:**
+1. **This run's PO grounded BLIND** (0 retrieval calls — the A56 cold-start; the
+   fix wasn't live on the running harness). So the crew produced a correct 6/6
+   *despite* the PO grounding on direct file reads, not the indexed graph/semantic
+   layer. Strong outcome, but it means PO-retrieval grounding is **not** what
+   carried this run — the engineers' retrieval (which worked) + the codebase's
+   own clarity did. A56 (live after the next harness restart) closes the PO gap;
+   a future run should confirm a grounded PO.
+2. **Still the toy substrate.** Exp 2 (real third-party brownfield) remains the
+   substrate-realism test.
+3. The feature builds on the already-merged labels + Kanban — realistic
+   incremental brownfield, but a clean, small codebase.
+
+**Net:** combined with Exp 1, the worker-crew now has evidence it can deliver
+non-additive, correctness-heavy features both when the hard part is *telegraphed*
+(Kanban) and when it must be *discovered* (dependencies). The frontier moves to
+substrate realism (Exp 2) and closing the PO-grounding gap (A56 live).

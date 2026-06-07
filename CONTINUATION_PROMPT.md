@@ -45,26 +45,19 @@ clean except untracked `agentic_harness.png` (stray — ignore). Currently on
   `localhost:19530`, Ollama `127.0.0.1:11434`, graphify on-disk cache. There is
   NO external retrieval dependency (operator was emphatic about this).
 
-## ⚠️ In-flight sprint — do NOT restart the harness until it terminates
-**Experiment 1b — Task Dependencies & Blocking**, `run-20260607T135926Z-908991`,
-streaming to `/tmp/run-brief-dependencies.log`. At write time: **RUNNING ~68min**,
-**BL-0001 `merged_full`** (scorer 97/100 — item#2 fix confirmed live), now on
-**BL-0002 (cycle detection)**. `stop_on_failure=True`. The background launcher
-(`/tmp/launch_dependencies.py`) will notify on terminal.
-- This run's PO **grounded blind** (0 retrieval calls — the A56 bug; its trace
-  shows the "still connecting" cold-start). Unfixable retroactively; A56 fixes it
-  for the NEXT run. Note this in the experiment's grounding caveat.
-- **When it terminates, run the manual probes** (the experiment's whole point —
-  the no-telegraph discovery test; see `EXPERIMENT_dependencies_stress.md` §4).
-  Against the restarted target backend on `integration`:
-  1. **Transitive cycle:** create A→B, B→C via `POST /api/tasks/{id}/dependencies/{dep}`,
-     then attempt C→A → expect 409/422. If accepted → shallow cycle detection (the
-     key predicted failure).
-  2. **Done-guard on EVERY path:** make a blocked task, `PATCH /tasks/{id}
-     {status:done}` → 409 AND `PATCH /tasks/{id}/move {status:done}` → 409.
-  3. **Unblock:** complete the dependency → dependent becomes `blocked=false` and
-     can be set `done`.
-  (curl is hook-blocked — use python `urllib`.)
+## Experiment 1b — DONE (the dependencies sprint COMPLETED + probes run)
+`run-20260607T135926Z-908991` finished `sprint_complete`: **6/6 merged_full**,
+0 escalations, scores 94–97 Pass W/R, regression_checkpoint green, acceptance 0
+findings. **The crew PASSED the no-telegraph discovery test** — all live probes
+confirmed: transitive cycle A→B→C→A → 409; done-guard 409 on BOTH `PATCH
+/tasks/{id}` AND `/move`; unblock-on-completion → 200. Full write-up in
+`EXPERIMENT_dependencies_stress.md` §7. Caveat: this run's PO grounded BLIND (0
+retrieval — A56 wasn't live), so the 6/6 happened *despite* PO grounding on
+direct reads; A56 (below) closes that for future runs.
+
+**The harness can now be safely restarted** (the run is terminal). The target
+backend was already restarted onto `integration` for the probes (the dep feature
+is live at `localhost:3002`/`:8002`).
 
 ## What this session shipped (all on `main` @ `eee9ab0`)
 1. **Scorer scorecard persistence** (`15872ad`) — read-only scorer now gate-free
