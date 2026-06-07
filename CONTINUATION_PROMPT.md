@@ -1,104 +1,96 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-06 (evening). Supersedes prior hand-offs.
+> Hand-off written 2026-06-07. Supersedes prior hand-offs.
+> Every fact below was verified from the live repo/processes at write time, not
+> from memory. Where something is NOT verified it is marked **UNVERIFIED**.
 
 ---PROMPT START---
 
 You are the architect of the agentic-skills project. Read `CLAUDE.md` first —
-especially the two **operating principles**: "quality over speed" (95%
-verified/tested floor) and "persistence over abort" (the no-abort doctrine).
-Only agentic-skills is committed/pushed; brownfield targets and their
-`_brownfield/` are never committed here.
+especially the two operating principles: "quality over speed" (95%
+verified/tested floor) and "persistence over abort" (no-abort doctrine). Only
+agentic-skills is committed/pushed; brownfield targets and their `_brownfield/`
+are never committed here.
 
-## State (all committed AND pushed)
-- **Branch `followup-dispatch-ui` @ `4b4be93`**, pushed, working tree clean
-  (only untracked `agentic_harness.png`, a stray screenshot — ignore).
-- Backend suite: **315 passed** (`cd webapp/backend && .venv/bin/python -m pytest
-  tests/ --deselect tests/test_findings_ledger.py::test_concurrent_append_no_torn_lines`).
-- uvicorn live PID ~93785 on `4b4be93` (restart only if you change backend code).
+## Operating note carried from last session (BINDING on you, the architect)
+Last session the architect repeatedly stated conclusions then retracted them.
+Root mechanical cause: reporting an **absence** ("X didn't fire / didn't run")
+from a **filtered query** (grepping unprefixed phase names) without checking the
+filter — the events were `orchestrator.*`-prefixed, so absence-in-query was read
+as absence-in-reality. Bind yourself to:
+1. **No "X didn't happen" claim until the negative is verified against the RAW
+   source**, not a filtered view.
+2. **Verify first, report once.** No conclusions narrated mid-investigation.
+3. **Mark every statement Verified vs Unverified-hypothesis.** Unverified ≠ finding.
 
-## What this session shipped (3 binding doctrine/control-plane changes)
-1. **A54 — no-abort persistence doctrine** (operator-BINDING): abort = failure.
-   Every agent investigates→fix→re-test until resolved; per-role fix loops deep
-   (`MAX_FIX_ATTEMPTS=6`, was 2); on exhaustion → terminal **`escalated`** +
-   dossier (Option A), never routine `aborted`. Root-cause mandate in
-   `build_gate_fix_prompt`. Codified in CLAUDE.md + `feedback_no_abort_persistence`.
-2. **A49 fix #2 + A53** — gate fidelity (same-SHA green memory + single re-sample,
-   never blind-flips red→green) + auto-merge atomicity (rollback engineer merge
-   on BL-abort/escalate via `git_worktree.reset_target_to`).
-3. **A55 — SIMPLE gating model** (operator-BINDING, the big one): **per-BL runs
-   ONLY the BL's own unit tests** (`regression_gate.run_bl_tests`, scoped to the
-   BL's changed test files, db-only stack — NO full suite, NO Playwright). The
-   FULL suite + Playwright E2E run **once at the acceptance phase**
-   (`regression_checkpoint` + the acceptance agent; API always, Playwright iff UI
-   journeys). Codified in CLAUDE.md ("Gating model — SIMPLE") +
-   `feedback_simple_gating_model`. **Do not re-complicate the gate.**
+## Verified state — agentic-skills (`git@github.com:eugene-goldberg/agentic-skills.git`)
+- Branches `main`, `followup-dispatch-ui`, `development` **all at `238f434`**,
+  all pushed (`git ls-remote origin` confirms). Currently checked out:
+  **`development`**.
+- Working tree clean except untracked `agentic_harness.png` (stray screenshot —
+  ignore / don't commit).
+- `238f434` = this session's commit: Ops/Steward role + `_ensure_on_agent_branch`
+  orchestrator fix + new-target docs/memory.
+- Harness tests: **316 passed** via `cd webapp/backend && .venv/bin/python -m
+  pytest tests/ -q`. NOTE: run scoped to `tests/` — bare `pytest` recurses into
+  `webapp/backend/repos/` (the symlinked targets) and errors on collection
+  (their deps: jose/passlib). Always scope to `tests/`.
 
-## ⭐ THE KEY FINDING (resolves the "why can't the crew do a trivial BL" puzzle)
-The BL-0001 "capability wall" of the prior runs was a **HARNESS artifact, not
-crew incapability.** Evidence (item-comments run `…251422`, BL-0001):
-- The old per-BL gate was **diff-blind** — it ran the full lint+backend+Playwright
-  suite on a *backend-only* BL, and load-induced Playwright flakes produced
-  **false reds** on a byte-identical frontend; the no-abort loop then thrashed
-  6→157. The crew's commit was correct (zero frontend files touched).
-- The engineer is **NOT blind/incompetent**: its trace shows **111 Bash calls** —
-  it spun its own Postgres, ran `pytest` iteratively, `ruff`/`mypy`,
-  `psql`-debugged auth. A competent local dev loop, like normal Claude Code.
-- **With the simple gate (this session), BL-0001 reached GREEN** (19 passed) in
-  2 fix attempts on a clean scoped signal. `pytest-randomly` is NOT in the
-  target deps, so order is deterministic; the 3→4→green was normal iteration.
-- **Lesson:** we over-invested in the control plane and mis-attributed
-  harness-induced false-reds as crew-capability limits. The simple gate gives an
-  honest signal and the crew converges.
+## Verified running processes (kill before a clean restart if needed)
+- webapp orchestrator: **PID 21138**, uvicorn on `127.0.0.1:8000` (loaded with
+  the committed orchestrator code).
+- target dev servers (the brownfield app, separate from the harness): backend
+  **PID 2559** on `:8002`, frontend `npm run dev` **PID 3138** on `:3002`.
+- Milvus stack up (3 containers; `milvus-minio` shows unhealthy = known
+  healthcheck-cmd defect, not real). Ollama `bge-m3` running. Milvus holds
+  collections from the labels run.
 
-## ⭐ LIVE RUN — monitor it (do NOT kill unless it wedges)
-`run-20260606T190150Z-ce9b56` (item-comments, target full-stack-fastapi-template)
-is **live and healthy**, validating the simple gating model end-to-end.
-- BL-0001 bl_tests went **green (19 passed)** at 20:01 → should merge → QA → BL-0002…
-- Tail: `/tmp/item-comments-brief/run.sse.log`; durable log:
-  `<target>/_brownfield/features/item-comments-and-activity/events.jsonl`.
-- Status check pattern (reuse): read `.orchestrator-state/done/*ce9b56*` for
-  terminal; grep events.jsonl for `phase":"bl_tests"` verdicts + `bl.done` /
-  `merge_to_target` / `escalated` / `regression_checkpoint` / `acceptance`.
-- This is the **first live run of `run_bl_tests`** — the acceptance-phase
-  full-suite `regression_checkpoint` + whole-feature E2E have NOT been exercised
-  live yet; watch them when the run reaches acceptance.
+## Verified state — current brownfield target `project-management-app`
+(`~/dev/ai-projects/brownfield-targets/project-management-app`, symlinked at
+`webapp/backend/repos/`; Docker-free FastAPI+SQLite+React; see
+`.claude/memory/arch_target_pm_app.md`.)
+- `main` pristine @ `88a0326`; `integration` @ `e9ca200` (checked out).
+- **Task Labels & Filtering sprint COMPLETE** (`run-20260607T002244Z-1a46d9`,
+  status `sprint_complete`): **6/6 BLs merged** to `integration` (6 engineer + 6
+  QA ff-merges), `main` stayed pristine throughout. Acceptance: 0 findings.
+  closure_check: 0 violations. 20 leftover `agent/*` branches (reapable).
+- Untracked in target: `_brownfield/features/task-labels-and-filtering/acceptance/`.
 
-### First actions next session
-1. Check `ce9b56` status. If still live → monitor to terminal (expect clean BL
-   merges + acceptance). If `sprint_complete` → **the simple model is fully
-   validated end-to-end** (record it). If `escalated` → read the dossier (real
-   crew limit) — that's now an HONEST signal, not a false-red.
-2. If it wedged/stuck → kill via TaskStop the launcher + `POST /end-sprint
-   {purge_images:true}` (python urllib; curl is hook-blocked), then reset trunk
-   `git reset --hard e74ac82` + remove orphan containers before any re-run.
+## What this session validated (Verified)
+The 3 structural fixes turned a BL-0001 merge-escalation (prior run) into a clean
+6/6 sprint: (1) `graphify-out` gitignored, (2) live `events.jsonl` gitignored
+(no longer dirties the merge precondition), (3) `_ensure_on_agent_branch` at run
+start keeps `main` pristine. All on the target's `main` baseline + the harness
+commit `238f434`.
 
-## Open / deferred (lower priority now)
-- **Test-isolation discipline** for the comment tests (cross-session
-  `test_delete_comment` family) — make them order-independent; minor since gate
-  order is deterministic (no pytest-randomly).
-- **Frontend-BL unit-test wrinkle**: target has no frontend unit harness (only
-  Playwright + biome); frontend BLs are lint-gated per-BL + validated at
-  acceptance E2E. Add vitest later if per-BL frontend unit coverage is wanted.
-- **AUDIT_PROPOSAL_2026-06-06.md** (governance 32→~20 consolidation + I-8 Gate
-  Fidelity invariant) — still awaiting operator action.
-- A "getting-worse circuit-breaker" (escalate when failure count increases) —
-  proposed, not built; lower priority since BL-0001 converged.
+## Open items (Verified findings from the labels run — NOT yet fixed/filed)
+1. **`_parse_pytest` doesn't parse this target's pytest summary** (py3.14 /
+   pytest 9.x). Two symptoms, one cause:
+   - per-BL gate logs `green (0 passed)` — **cosmetic only** (`run_bl_tests` is
+     exit-code-authoritative, so merges are correct).
+   - acceptance `orchestrator.regression_checkpoint` returned **`inconclusive`**
+     ("tests did not execute (no pass/fail parsed); verify test_cmd") instead of
+     green. Manual re-run of the assembled suite = **111 passed** (so the feature
+     is actually clean; the checkpoint just couldn't read it).
+   - Proposed fix: make `run_gate` fall back to exit-code-authoritative on
+     unparseable output (mirror the A55 `run_bl_tests` fix) and/or repair the
+     `_parse_pytest` summary regex. One fix kills both symptoms.
+2. **Scorer no longer persists scorecards.** Scorer ran 6/6 (`doctrine_ok=True`)
+   but `merged=False` for all — because `orchestrator.py:690` gates the
+   gate+merge block to `if role == "qa"`, so the scorer path never merges. On the
+   old target, `score(BL-…)` commits landed on integration; under A55 they don't.
+   Design call: persist scorecards (merge/copy-back) or accept trace-only +
+   document. Currently silently neither.
+3. **Ops/Steward role** (`PROPOSAL_OPS_STEWARD_ROLE.md` +
+   `skills/brownfield/brownfield-production-incremental-ops/SKILLS.md`) is
+   committed as a **proposal + SKILLS only** — NOT wired into the orchestrator
+   (no `_ops_flow`, no spawn trigger). Operator open questions in §10 unanswered.
 
-## Don'ts
-1. Don't commit brownfield targets / `_brownfield/`.
-2. Don't re-complicate the per-BL gate (A55 — operator-binding simple model).
-3. Don't `docker prune -af` without naming what to keep (Milvus!).
-4. Ctrl+C (SIGTERM) uvicorn, not kill -9. curl is hook-blocked → use python urllib.
-5. Don't claim a finding without reading the actual source/trace (95% floor) —
-   this session twice flipped a wrong hypothesis after reading the evidence
-   (engineer "over-reached scope" → false; engineer "flies blind" → false).
-
-## Reading order
-1. `CLAUDE.md` (both operating principles + gating model)
-2. Memories: `feedback_no_abort_persistence`, `feedback_simple_gating_model`,
-   `arch_active_branch`
-3. `DESIGN_SHORTCOMINGS.md` A55 / A54 / A53 / A49
-4. `AUDIT_PROPOSAL_2026-06-06.md`
+## Suggested next actions (operator to direct — do not start without approval)
+- File open items #1 and #2 as ledger entries with the corrected evidence.
+- Implement the `run_gate` exit-code fallback (#1) — small, high-value.
+- Decide scorecard persistence (#2).
+- Decide whether to wire the Ops/Steward role (#3) or leave as proposal.
+- Reap the 20 leftover `agent/*` branches in the target if desired.
 
 ---PROMPT END---
