@@ -1,6 +1,6 @@
 ---
 name: arch-ondemand-dispatch-ui
-description: "ABL-0021 operator-facing on-demand \"Dispatch fix\" — POST /dispatch-followup + FindingsTriagePanel button. Closes the seam between the §I.3 triage UI and the ABL-0015 dispatch engine. Complete on branch followup-dispatch-ui; only live operator click-through remains."
+description: "ABL-0021 operator-facing on-demand \"Dispatch fix\" — POST /dispatch-followup + FindingsTriagePanel button. Closes the seam between the §I.3 triage UI and the ABL-0015 dispatch engine. Now in main (was on the deleted followup-dispatch-ui branch); only live operator click-through remains."
 metadata: 
   node_type: memory
   type: project
@@ -15,7 +15,7 @@ another sprint. ABL-0021 lets the operator, after a sprint lands, review
 exposed findings → confirm → trigger the fix on-demand. Plan:
 `ABL-0021_ONDEMAND_DISPATCH_UI.md`.
 
-## What shipped (branch `followup-dispatch-ui`)
+## What shipped (originally on `followup-dispatch-ui`; now in `main`)
 
 - **A backend (`8bfbec7`):** refactored the per-finding dispatch body out of
   `_dispatch_followup_engineers` into shared `_dispatch_one_followup(...)`
