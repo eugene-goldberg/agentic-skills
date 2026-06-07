@@ -215,7 +215,13 @@ def _suspected_transient(result: dict) -> bool:
             and bool(result.get("transient_markers")))
 
 
-PYTEST_RESULT_RE = re.compile(r"^(?P<file>tests?/[\w./-]+)::(?P<name>[\w.\[\]-]+)\s+(?P<verdict>PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)", re.MULTILINE)
+# Item #1 fix (2026-06-07): allow an optional directory prefix before the
+# `tests/` segment so node-ids like `backend/tests/test_x.py::test_y` parse —
+# the prior `^tests?/` anchor silently matched ZERO on targets that run pytest
+# from the repo root (e.g. `pytest backend/tests`), yielding "0 passed" and the
+# acceptance regression_checkpoint `inconclusive`. The `(?:[\w.-]+/)*` prefix is
+# backward-compatible (matches zero segments for bare `tests/...`).
+PYTEST_RESULT_RE = re.compile(r"^(?P<file>(?:[\w.-]+/)*tests?/[\w./-]+)::(?P<name>[\w.\[\]-]+)\s+(?P<verdict>PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)", re.MULTILINE)
 
 # A39 (2026-06-04 BL-0006 wedge): the gate template (regression_gate.sh)
 # collapses every Playwright E2E failure into ONE synthetic pytest-format
@@ -721,7 +727,19 @@ async def _run_gate_once(repo_root: Path, agent_branch: str, target_ref: str,
             else:
                 kind, reason = "inconclusive", f"post suite did not exit clean (exit={post.raw_exit}, {len(post.passed)} passed, {len(post.failed)} failed); inspect post_tail"
         elif not post_executed:
-            kind, reason = "inconclusive", "tests did not execute (no pass/fail parsed); verify test_cmd"
+            # Item #1 fix / A55 parity (2026-06-07): we reach here only when the
+            # suite exited CLEAN (raw_exit == 0, checked above) yet emitted no
+            # parseable per-test lines — e.g. a `-q` (quiet) test_cmd, or output
+            # the parser can't anchor. pytest exit 0 == every collected test
+            # passed (a collection error is exit 2; "no tests collected" is exit
+            # 5 — neither is 0), so trust the exit code rather than blocking a
+            # CORRECT change as `inconclusive`. Name-level differential gating is
+            # unavailable in this case, but a clean exit is authoritative for
+            # "nothing failed" (mirrors run_bl_tests, which is already
+            # exit-code-authoritative).
+            kind, reason = "green", ("post suite exited clean (exit=0) but emitted no "
+                                     "parseable per-test lines; trusting exit code "
+                                     "(A55 exit-code fallback)")
         else:
             kind, reason = "green", f"post suite green ({len(post.passed)} passed)"
         # A39: name a few real Playwright failures in the one-line reason so
