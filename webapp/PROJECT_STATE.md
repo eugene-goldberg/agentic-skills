@@ -319,16 +319,23 @@ _brownfield/
 
 ### Per-target config
 
-`.agentic-skills.json` at the target repo root. Example (for full-stack-fastapi-template, which uses Docker for tests and `master` as default):
+`.agentic-skills.json` at the target repo root. Example (the current target,
+`project-management-app`, which is **Docker-free** and uses `main` as the
+pristine ref + `integration` as the agent branch):
 
 ```json
 {
-  "agent_branch": "agentic-skills-work",
-  "main_ref": "master",
+  "agent_branch": "integration",
+  "main_ref": "main",
   "doctrine": "brownfield",
-  "test_cmd": ["docker", "compose", "exec", "-T", "backend", "pytest", "-q"]
+  "test_cmd": ["/abs/path/to/target/.venv/bin/pytest", "backend/tests", "-q"]
 }
 ```
+
+For a Docker-based target the `test_cmd` would instead be something like
+`["docker", "compose", "exec", "-T", "backend", "pytest", "-q"]`. With no
+`compose.yml`/`compose.gate.yml` present, `run_bl_tests` takes its native
+(no-Docker) branch and runs `test_cmd[0]` directly against the BL's test files.
 
 ### Doctrine validation + retry
 
@@ -354,7 +361,7 @@ The chat env files (`.env.kimi`, `.env.gpt54`) are no longer used by the webapp 
 
 ### Current target
 
-`full-stack-fastapi-template` (cloned to `~/dev/ai-projects/brownfield-targets/full-stack-fastapi-template`, symlinked into `webapp/backend/repos/`). BL-0001 cycle complete; see `BROWNFIELD_PROGRESS.md` at the repo root for current scorecard, commit shas, and next BLs.
+`project-management-app` (at `~/dev/ai-projects/brownfield-targets/project-management-app`, symlinked into `webapp/backend/repos/`). Purpose-built **Docker-free** brownfield: FastAPI + SQLModel + SQLite (no auth, `create_all`, no Alembic) + React/Vite/TS, API-first Projects→Tasks. Pristine `main`, agent branch `integration`. Freshly created 2026-06-06 — baseline suite green (16 backend tests, native pytest), **no sprints run yet**. The prior target `full-stack-fastapi-template` and its crew branches were removed 2026-06-06.
 
 ### Findings triage + on-demand fix dispatch (ABL-0014 §I.3 / ABL-0015 / ABL-0021)
 

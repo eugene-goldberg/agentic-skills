@@ -22,7 +22,7 @@ Repo at `/Users/eugenegoldberg/dev/ai-projects/agentic-skills/`.
 **Notable directories:**
 - `reference-repos/fastapi-good-patterns/` — curated reference repo (originally from kimi Run #14) used by the retrieval layer's `reference` source.
 - `target-repos/lg-graph-test/` — playground greenfield target. As of 2026-05-17 contains a complete 18-BL FastAPI app I implemented manually with retrieval. Symlinked into `webapp/backend/repos/lg-graph-test`.
-- `~/dev/ai-projects/brownfield-targets/<repo>/` (OUTSIDE this repo) — real brownfield targets, symlinked into `webapp/backend/repos/`. Currently: `full-stack-fastapi-template`.
+- `~/dev/ai-projects/brownfield-targets/<repo>/` (OUTSIDE this repo) — real brownfield targets, symlinked into `webapp/backend/repos/`. Currently: `project-management-app` (Docker-free FastAPI+SQLite+React, created 2026-06-06; see [[arch-target-pm-app]]). Prior `full-stack-fastapi-template` removed 2026-06-06.
 - `skills/brownfield/brownfield-production-incremental-{po,engineer,qa}/SKILLS.md` — binding doctrine for brownfield-mode agents.
 - `runs/`, `ab_runs/` — historical agent run artifacts (scorecards, raw logs).
 

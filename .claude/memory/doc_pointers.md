@@ -9,7 +9,7 @@ metadata:
 
 - `CLAUDE.md` at repo root — short orientation, points at PROJECT_STATE.md. Auto-loaded by Claude Code.
 - `webapp/PROJECT_STATE.md` — deep current-state reference for the webapp subproject. **Section 14 (Brownfield mode)** is the brownfield-production-branch addendum: modules, endpoints, artifact layout, doctrine validator, embedding stack.
-- `BROWNFIELD_PROGRESS.md` at repo root — living progress doc for the current brownfield target (full-stack-fastapi-template). Has the per-BL ledger, scorecard summaries, known gaps, resume instructions. Update at the end of each agent cycle.
+- `BROWNFIELD_PROGRESS.md` at repo root — living progress doc; **stale as of 2026-06-06** (it describes the removed `full-stack-fastapi-template` target). The current target is `project-management-app` (Docker-free, no sprints run yet — see [[brownfield-production-branch]] / [[arch-target-pm-app]]); regenerate this doc on the first sprint against it.
 - `rubrics/production_grade_scorecard.md` — greenfield rubric (50 core + 25 role = 75).
 - `rubrics/production_grade_scorecard_brownfield.md` — sidecar brownfield rubric (50 core + 25 role + 25 brownfield = 100). Single brownfield-axis dim ≤2 forces Fail. Webapp's `score-bl` picks the file via `target_status()`.
 - `docs/SKILLS_WITH_GRAPHS_PLAN.md` (branch `skills_with_graphs`) — older implementation plan for the graph + semantic retrieval layer.

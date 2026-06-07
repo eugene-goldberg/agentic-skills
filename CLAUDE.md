@@ -318,10 +318,18 @@ Each brownfield target carries an `.agentic-skills.json` at its root with:
 - `doctrine` — optional explicit family override (`brownfield` /
   `greenfield`).
 
-Currently configured target: **`full-stack-fastapi-template`** symlinked
-from `~/dev/ai-projects/brownfield-targets/full-stack-fastapi-template/`.
-Upstream uses `master` as default branch. Active sprint branch:
-`agentic-skills-work-v3`.
+Currently configured target: **`project-management-app`** symlinked
+from `~/dev/ai-projects/brownfield-targets/project-management-app/`.
+A purpose-built, **Docker-free** brownfield: FastAPI + SQLModel + **SQLite**
+backend (no auth, `create_all` schema, no Alembic), React + Vite + TypeScript
+frontend, **API-first** "simple project management app" (Projects → Tasks).
+Pristine baseline branch: `main`. Integration branch (agent fork point +
+auto-merge sink): `integration`. The regression gate runs **natively, no
+Docker** — `test_cmd` points at the target's own venv pytest
+(`.venv/bin/pytest backend/tests`), and `run_bl_tests` falls through to its
+no-compose branch because the repo has no `compose.yml`/`compose.gate.yml`.
+The prior target (`full-stack-fastapi-template`) and all its crew branches
+were removed 2026-06-06.
 
 ---
 

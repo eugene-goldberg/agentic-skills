@@ -17,21 +17,27 @@ Brownfield work progressed through three operational tips:
 
 **How to apply:** When working on framework code (not target-repo code), branch from current architect tip. When dogfooding the framework on a brownfield target, work proceeds on `agentic-skills-work-v3` inside the target repo (NOT in this checkout).
 
-## Active brownfield target
+## Active brownfield target (2026-06-06 → )
 
-- `~/dev/ai-projects/brownfield-targets/full-stack-fastapi-template/`
-- Symlinked at `webapp/backend/repos/full-stack-fastapi-template`
-- Sprint branch progression:
-  - `master` — pristine upstream, never touched
-  - `agentic-skills-work` — Sprint 1 (Team Collaboration Module, 12 merged BLs)
-  - `agentic-skills-work-v2` — Sprint 2 archive
-  - `agentic-skills-work-v3` — Sprint 3 + Sprint 4 (Notifications & Activity System); current sprint tip at `bdaf4c4` + Sprint 4 advances post-poll
+- `~/dev/ai-projects/brownfield-targets/project-management-app/`
+- Symlinked at `webapp/backend/repos/project-management-app`
+- **Docker-free**: FastAPI + SQLModel + SQLite (no auth, `create_all`, no
+  Alembic) + React/Vite/TS; API-first "simple project management app"
+  (Projects → Tasks). See [[arch-target-pm-app]].
+- Branches:
+  - `main` — pristine baseline, never touched (gate diff target)
+  - `integration` — agent fork point + auto-merge sink (`.agentic-skills.json`)
+- Baseline suite green (16 backend tests, native pytest); **no sprints run
+  yet**.
 
-## Recent sprint completions
+## Prior target (removed 2026-06-06) — historical
 
-- Sprint 1: Team Collaboration on `agentic-skills-work`, 12+1 BLs merged, mean score ~92/100.
-- Sprint 2: full collab dogfood on `agentic-skills-work-v2`.
-- Sprint 3: Notifications & Activity System — **aborted** at BL-0005 non-FF; recovered manually.
-- Sprint 4 (active): Notifications continuation — BL-0001..BL-0005 closed (mix of no_op and merged_full), BL-0006 retry loop active for layout-shift regression in pre-existing Playwright tests. Hardening validations all green so far.
+`full-stack-fastapi-template` (Docker-based, `master`/`agentic-skills-work*`)
+hosted Sprints 1–4 (Team Collaboration, Notifications, Financial-Management,
+Intelligent-Kanban, Search & Discovery, Item-Comments, Horizon). The clone and
+all ~91 crew branches were deleted on operator instruction. The run histories
+remain in the historical-run memories ([[arch-horizon-run]],
+[[arch-intelligent-kanban-sprint]], [[arch-live-run-invoice-soft-delete]],
+[[arch-harness-hardening]]) — those are not rewritten.
 
 Source: branch list in `CLAUDE.md`, git log on `sprint-2-orchestrator` + `architect-prereqs`, `ARCHITECT_TRACKER.md`.

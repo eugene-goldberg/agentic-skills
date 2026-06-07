@@ -7,7 +7,17 @@
 Per `CLAUDE.md` Rule 6: **95% verified-tested certainty floor**. Each
 check below is a verifiable artifact — not "I assume X is running."
 
-## PF-1 — Docker storage budget
+> **Current target is Docker-free (`project-management-app`, 2026-06-06).**
+> Its regression gate runs native pytest via the target's own venv — there are
+> no `compose.yml`/`compose.gate.yml`, no gate stacks, no target Docker
+> volumes. Therefore the **target-side Docker checks below do not apply**:
+> PF-1 (Docker storage budget) and PF-9 (Docker leak watch) are relevant only
+> to the still-Dockerized **Milvus** stack, not to sprint/gate containers.
+> The PF-10 artifact check expects `.agentic-skills.json` + a target venv
+> (`.venv/bin/pytest`), **not** `compose.gate.yml`/`regression_gate.sh`. If a
+> future target is Docker-based again, restore the full readings below.
+
+## PF-1 — Docker storage budget (Milvus only, for the current Docker-free target)
 
 ```bash
 docker system df
@@ -144,13 +154,16 @@ PASS when **0 leftover gate or acceptance containers** before a fresh sprint lau
 ```bash
 cd <target_repo>
 ls _brownfield/features/<slug>/BACKLOG.md _brownfield/features/<slug>/brief.md
-ls scripts/regression_gate.sh compose.gate.yml .agentic-skills.json
+ls .agentic-skills.json
+# Docker-free target: confirm the venv pytest in test_cmd exists and the
+# baseline suite is green (this is what the gate will invoke):
+"$(python3 -c 'import json;print(json.load(open(".agentic-skills.json"))["test_cmd"][0])')" backend/tests -q
 ```
 
-PASS when all four files present. Also verify `scripts/regression_gate.sh` has both gate fixes (180s budget, PLAYWRIGHT_TEST_BASE_URL):
-```bash
-grep -E "seq 1 60|PLAYWRIGHT_TEST_BASE_URL" scripts/regression_gate.sh
-```
+PASS when the backlog/brief + `.agentic-skills.json` are present and the
+baseline pytest run is green. (For a **Docker-based** target instead check
+`scripts/regression_gate.sh` + `compose.gate.yml` and their gate fixes — N/A
+for the current Docker-free `project-management-app`.)
 
 ## When PASS
 

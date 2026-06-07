@@ -1899,6 +1899,51 @@ def _dep_order(items: list) -> list:
     return order
 
 
+def _ensure_on_agent_branch(repo_dir: Path) -> dict:
+    """Structural fix (2026-06-06, Ops/Steward proposal §9): put the target
+    checkout on the configured ``agent_branch`` at run start.
+
+    Rationale: the PO copy-back commit and ``fast_forward_target`` both act on
+    ``repo_dir``'s *currently checked-out* branch. If the checkout is left on
+    ``main_ref``, PO output commits onto main (violating its pristine status)
+    and the orchestrator's own live ``events.jsonl`` dirties the merge
+    precondition (``merge_to_target: main checkout has modified tracked
+    files``). Checking out ``agent_branch`` here makes the fast-forward target
+    equal the checked-out branch and keeps ``main_ref`` pristine. Creates the
+    agent branch from ``main_ref`` if it does not yet exist. Never raises — on
+    failure it emits an event the (future) Ops agent / operator can act on.
+    """
+    # Fully defensive: this runs inside run_brief's try/except, so any raise
+    # would turn into a terminal `aborted`. A branch-prep helper must NEVER
+    # abort the sprint — on any failure it emits ok=False and lets the run
+    # proceed (the merge-guard / future Ops agent is the backstop).
+    try:
+        import subprocess  # local: module-level import is not guaranteed here
+
+        cfg = repo_config_svc.load(repo_dir)
+        ab = cfg.agent_branch
+
+        def _g(*args):
+            return subprocess.run(
+                ["git", "-C", str(repo_dir), *args], capture_output=True, text=True
+            )
+
+        cur = _g("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        if cur == ab:
+            return _evt("run.branch_ready", agent_branch=ab, action="already_on", ok=True)
+        if _g("rev-parse", "--verify", f"refs/heads/{ab}").returncode != 0:
+            _g("branch", ab, cfg.main_ref)
+        r = _g("checkout", ab)
+        ok = r.returncode == 0
+        return _evt(
+            "run.branch_ready", agent_branch=ab,
+            action="checked_out", from_branch=cur, ok=ok,
+            detail=("" if ok else r.stderr.strip()[:200]),
+        )
+    except Exception as e:  # noqa: BLE001 — never abort the run from here
+        return _evt("run.branch_ready", action="error", ok=False, detail=str(e)[:200])
+
+
 async def run_brief(
     repo_dir: Path,
     repo_name: str,
@@ -1977,6 +2022,11 @@ async def run_brief(
     yield _evt("start", brief_chars=len(brief), project_name=project_name, run_id=run_id)
 
     try:
+        # Structural fix (2026-06-06): operate on the configured agent branch,
+        # never whatever happens to be checked out — keeps main_ref pristine and
+        # makes the FF merge target == the checked-out branch.
+        yield _ensure_on_agent_branch(repo_dir)
+
         # ── Step 2-3: initial indexing ─────────────────────────────────────────
         async for e in _run_indexers(repo_dir, "index_initial"):
             yield e

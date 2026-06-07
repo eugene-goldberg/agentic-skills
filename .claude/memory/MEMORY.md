@@ -1,6 +1,7 @@
 - [Project layout](project_layout.md) — two top-level subprojects on three branches; what lives where
 - [Doc pointers](doc_pointers.md) — CLAUDE.md, PROJECT_STATE.md, the rubric file
 - [Brownfield-production branch](brownfield_production_branch.md) — current working branch, target repo, last-known status
+- [Current target: project-management-app](arch_target_pm_app.md) — Docker-free FastAPI+SQLite+React brownfield (2026-06-06); wiring, no-Docker gating proof, branch model. Replaced full-stack-fastapi-template
 - [Embedding stack: Ollama bge-m3](embedding_stack_ollama.md) — local Ollama replaces Azure for embeddings on this branch
 - [Azure OpenAI access](azure_openai.md) — older Azure setup, still used by legacy harness
 - [Local Milvus assumption](local_milvus.md) — claude-context indexing depends on it

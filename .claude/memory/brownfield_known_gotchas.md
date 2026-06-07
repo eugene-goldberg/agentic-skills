@@ -24,6 +24,13 @@ boundary that keeps artifacts off `master`. Removing the gitignore was
 committed as `72fd7de` on the full-stack-fastapi-template clone — use
 this as the template for new brownfields.
 
+> **Note (2026-06-06):** these three gotchas were observed on the *removed*
+> `full-stack-fastapi-template` (Docker-based) target. The principles still
+> hold; gotcha #2's Docker specifics no longer apply to the current
+> Docker-free `project-management-app` target (its `test_cmd[0]` is an
+> absolute venv `pytest`, run natively — verify that venv exists and the
+> baseline suite is green before a sprint). See [[arch-target-pm-app]].
+
 ## 2. Regression gate needs a runnable test command
 
 **Why:** Engineer's auto-merge gate runs `pytest -q` pre/post in a
