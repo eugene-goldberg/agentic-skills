@@ -32,6 +32,7 @@ from app.services import doctrine_validator as doctrine_svc
 from app.services import prompts as prompts_svc
 from app.services import prompts_brownfield as prompts_brownfield_svc
 from app.services import regression_gate as regression_gate_svc
+from app.services import retrieval_warmup as retrieval_warmup_svc
 from app.services import repo_config as repo_config_svc
 from app.services import run_state as run_state_svc
 from app.services import closure_check as closure_check_svc
@@ -65,6 +66,39 @@ def _evt(phase: str, **kwargs) -> dict:
     e = {"type": "_meta", "phase": f"orchestrator.{phase}"}
     e.update(kwargs)
     return e
+
+
+# A56 part 2: the 4 grounded retrieval tools (target_status is inventory and
+# does NOT count toward grounding, matching the R5 floor definition).
+_GROUNDED_RETRIEVAL_TOOLS = frozenset({
+    "semantic_search", "graph_neighbors", "graph_find_similar", "graph_summary",
+})
+
+
+def _count_po_grounding(trace_dir: str | None) -> int:
+    """Count grounded retrieval calls (the 4 tools above) in a PO trace's
+    ``retrieval.jsonl``. Returns 0 if the file is absent/empty/unreadable — used
+    to surface a grounding-blind PO (A56). Never raises."""
+    if not trace_dir:
+        return 0
+    log = Path(trace_dir) / "retrieval.jsonl"
+    if not log.exists():
+        return 0
+    n = 0
+    try:
+        for line in log.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if rec.get("tool") in _GROUNDED_RETRIEVAL_TOOLS:
+                n += 1
+    except OSError:
+        return 0
+    return n
 
 
 async def _rebase_in_worktree(wt_path: Path, target_ref: str) -> dict:
@@ -2190,6 +2224,9 @@ async def run_brief(
     run_janitor: bool = True,  # Janitor/Ops role (operator 2026-06-07): spawn the
                                # environment-repair agent on non-code failures.
                                # Flag = named rollback (set False to disable wiring).
+    warm_retrieval: bool = True,  # A56 (operator 2026-06-07): warm the LOCAL
+                                  # retrieval backend before the PO so the first
+                                  # agent isn't grounding-blind. Flag = rollback.
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -2255,10 +2292,26 @@ async def run_brief(
         async for e in _run_indexers(repo_dir, "index_initial"):
             yield e
 
+        # ── Step 3.5: retrieval readiness gate (A56) ───────────────────────────
+        # Warm the LOCAL retrieval backend (Ollama bge-m3 load + Milvus open +
+        # graphify cache) BEFORE the first agent spawns, so the PO isn't handed a
+        # cold "still connecting" server and forced to ground blind. Advisory:
+        # warn-and-proceed on timeout (the post-PO grounding check is the safety
+        # net). External-free: retrieval_warmup forwards only local provider env.
+        if warm_retrieval:
+            yield _evt("retrieval_warmup.start", target=str(repo_dir))
+            warm = await retrieval_warmup_svc.warm_retrieval(repo_dir)
+            yield _evt(
+                "retrieval_warmup.done" if warm.get("ok") else "retrieval_warmup.timeout",
+                ok=warm.get("ok"), attempts=warm.get("attempts"),
+                elapsed_s=warm.get("elapsed_s"), reason=warm.get("reason"),
+            )
+
         # ── Step 4: PO ─────────────────────────────────────────────────────────
         po_ok = True
         if not skip_po:
             yield _evt("po.start")
+            po_trace_dir: str | None = None
             async for e in _po_flow(repo_dir, repo_name, brief, project_name,
                                     timeout_per_role, retrieval_kwargs_builder,
                                     run_id=run_id, brief_hash=brief_hash,
@@ -2267,8 +2320,24 @@ async def run_brief(
                     summary["po"] = e
                     po_ok = e.get("doctrine_ok", False)
                     continue
+                # A56 part 2: capture the PO's trace dir so we can check whether
+                # it actually grounded (its retrieval.jsonl) once it finishes.
+                if e.get("phase") == "orchestrator.po.worktree_ready" or e.get("trace_dir"):
+                    po_trace_dir = e.get("trace_dir") or po_trace_dir
                 yield e
-            yield _evt("po.done", ok=po_ok)
+            # A56 part 2: surface a grounding-blind PO LOUDLY instead of letting
+            # `doctrine_check: complete` hide it. With Step 3.5 warming the
+            # backend first, 0 grounded calls now means a genuine retrieval
+            # problem, not a cold-start race — make it observable (advisory; the
+            # PO still produced a backlog via direct reads, so the run continues).
+            po_grounding = _count_po_grounding(po_trace_dir)
+            if po_grounding == 0:
+                yield _evt("po.grounding_unavailable", trace_dir=po_trace_dir,
+                           reason=("PO produced 0 grounded retrieval calls — backlog "
+                                   "grounded on direct file reads, not the indexed "
+                                   "graph/semantic layer (A56). Warm-up ran="
+                                   f"{warm_retrieval})."))
+            yield _evt("po.done", ok=po_ok, grounded_calls=po_grounding)
             if not po_ok and stop_on_failure:
                 yield _evt("aborted", reason="PO doctrine failed")
                 return

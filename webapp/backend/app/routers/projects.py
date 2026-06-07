@@ -1188,6 +1188,9 @@ class RunBriefRequest(BaseModel):
     # sprints; legacy /run-brief invocations that omit this field fall back
     # to the pre-A18 path layout.
     feature_name: str | None = Field(None, min_length=1, max_length=120)
+    # A56: warm the LOCAL retrieval backend before the PO so the first agent
+    # isn't grounding-blind. Default ON; set False to disable (rollback knob).
+    warm_retrieval: bool = True
 
 
 @router.post("/{repo}/run-brief")
@@ -1373,6 +1376,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 inject_acceptance_priors=req.inject_acceptance_priors,
                 run_acceptance_followup=req.run_acceptance_followup,
                 inject_lessons=req.inject_lessons,
+                warm_retrieval=req.warm_retrieval,
                 acceptance_timeout=req.acceptance_timeout,
                 min_ui_coverage_ratio=req.min_ui_coverage_ratio,
             ):
