@@ -1,121 +1,128 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-07. Supersedes prior hand-offs.
-> Every fact below was verified from the live repo/processes at write time, not
-> from memory. Where something is NOT verified it is marked **UNVERIFIED**.
+> Hand-off written 2026-06-07 (evening). Supersedes prior hand-offs.
+> Every fact below was verified from the live repo/processes at write time.
+> Where something is NOT verified it is marked **UNVERIFIED**.
 
 ---PROMPT START---
 
 You are the architect of the agentic-skills project. Read `CLAUDE.md` first —
-especially the two operating principles: "quality over speed" (95%
-verified/tested floor) and "persistence over abort" (no-abort doctrine). Only
-agentic-skills is committed/pushed; brownfield targets and their `_brownfield/`
-are never committed here.
+especially the operating principles: "quality over speed" (95% verified floor),
+"persistence over abort" (no-abort doctrine). Only agentic-skills is
+committed/pushed; brownfield targets and their `_brownfield/` are never committed
+here.
 
-## Operating note carried from last session (BINDING on you, the architect)
-Last session the architect repeatedly stated conclusions then retracted them.
-Root mechanical cause: reporting an **absence** ("X didn't fire / didn't run")
-from a **filtered query** (grepping unprefixed phase names) without checking the
-filter — the events were `orchestrator.*`-prefixed, so absence-in-query was read
-as absence-in-reality. Bind yourself to:
-1. **No "X didn't happen" claim until the negative is verified against the RAW
-   source**, not a filtered view.
+## Operating note carried forward (BINDING on you, the architect)
+Verification discipline — earned the hard way this session (I made two confident
+wrong inferences about retrieval wiring before `meta.json` falsified them):
+1. **No "X didn't happen / X is broken" claim until verified against the RAW
+   source** (the authoritative artifact — `meta.json` cmd, `retrieval.jsonl`,
+   raw stream), not a filtered grep. Watch the `orchestrator.`-prefix trap on
+   `phase` fields.
 2. **Verify first, report once.** No conclusions narrated mid-investigation.
-3. **Mark every statement Verified vs Unverified-hypothesis.** Unverified ≠ finding.
+3. **Mark every statement Verified vs Unverified-hypothesis.**
 
-## Verified state — agentic-skills (`git@github.com:eugene-goldberg/agentic-skills.git`)
-- Branches `main`, `followup-dispatch-ui`, `development` **all at `238f434`**,
-  all pushed (`git ls-remote origin` confirms). Currently checked out:
-  **`development`**.
-- Working tree clean except untracked `agentic_harness.png` (stray screenshot —
-  ignore / don't commit).
-- `238f434` = this session's commit: Ops/Steward role + `_ensure_on_agent_branch`
-  orchestrator fix + new-target docs/memory.
-- Harness tests: **316 passed** via `cd webapp/backend && .venv/bin/python -m
-  pytest tests/ -q`. NOTE: run scoped to `tests/` — bare `pytest` recurses into
-  `webapp/backend/repos/` (the symlinked targets) and errors on collection
-  (their deps: jose/passlib). Always scope to `tests/`.
+## Branch model (BINDING)
+Work on **`development`**, fast-forward into **`main`** when verified. These two
+are the ONLY live branches (all others are historical). `followup-dispatch-ui`
+was merged + deleted 2026-06-07. **Both at `eee9ab0`, in sync, pushed.** Tree
+clean except untracked `agentic_harness.png` (stray — ignore). Currently on
+`development`. Scope harness tests to `tests/`:
+`cd webapp/backend && .venv/bin/python -m pytest tests/ -q` → **335 passed**
+(+1 KNOWN pre-existing flake `test_findings_ledger::test_concurrent_append_no_torn_lines`
+— passes on re-run; not yours).
 
-## Verified running processes (kill before a clean restart if needed)
-- webapp orchestrator: **PID 21138**, uvicorn on `127.0.0.1:8000` (loaded with
-  the committed orchestrator code).
-- target dev servers (the brownfield app, separate from the harness): backend
-  **PID 2559** on `:8002`, frontend `npm run dev` **PID 3138** on `:3002`.
-- Milvus stack up (3 containers; `milvus-minio` shows unhealthy = known
-  healthcheck-cmd defect, not real). Ollama `bge-m3` running. Milvus holds
-  collections from the labels run.
+## Verified running processes
+- **Harness orchestrator: PID 36211**, uvicorn `127.0.0.1:8000`. **IMPORTANT:
+  it was started BEFORE the A56 commit (`eee9ab0`), so it has scorer-persistence
+  + Janitor + item#1 gate fix but NOT A56 (retrieval warm-up).** A56 goes live
+  only on the next harness restart.
+- Target dev servers (separate from harness): backend **PID 28250** `:8002`,
+  frontend **PID 29083** `:3002` — both running the post-Kanban code; the Kanban
+  board is live (use `localhost:3002`, NOT 127.0.0.1 — vite is IPv6-only).
+- Milvus stack up (3 containers; `milvus-minio` "unhealthy" = known healthcheck
+  defect, not real). Ollama `bge-m3` up. **All retrieval is LOCAL** — Milvus
+  `localhost:19530`, Ollama `127.0.0.1:11434`, graphify on-disk cache. There is
+  NO external retrieval dependency (operator was emphatic about this).
 
-## Verified state — current brownfield target `project-management-app`
-(`~/dev/ai-projects/brownfield-targets/project-management-app`, symlinked at
-`webapp/backend/repos/`; Docker-free FastAPI+SQLite+React; see
-`.claude/memory/arch_target_pm_app.md`.)
-- `main` pristine @ `88a0326`; `integration` @ `e9ca200` (checked out).
-- **Task Labels & Filtering sprint COMPLETE** (`run-20260607T002244Z-1a46d9`,
-  status `sprint_complete`): **6/6 BLs merged** to `integration` (6 engineer + 6
-  QA ff-merges), `main` stayed pristine throughout. Acceptance: 0 findings.
-  closure_check: 0 violations. 20 leftover `agent/*` branches (reapable).
-- Untracked in target: `_brownfield/features/task-labels-and-filtering/acceptance/`.
+## ⚠️ In-flight sprint — do NOT restart the harness until it terminates
+**Experiment 1b — Task Dependencies & Blocking**, `run-20260607T135926Z-908991`,
+streaming to `/tmp/run-brief-dependencies.log`. At write time: **RUNNING ~68min**,
+**BL-0001 `merged_full`** (scorer 97/100 — item#2 fix confirmed live), now on
+**BL-0002 (cycle detection)**. `stop_on_failure=True`. The background launcher
+(`/tmp/launch_dependencies.py`) will notify on terminal.
+- This run's PO **grounded blind** (0 retrieval calls — the A56 bug; its trace
+  shows the "still connecting" cold-start). Unfixable retroactively; A56 fixes it
+  for the NEXT run. Note this in the experiment's grounding caveat.
+- **When it terminates, run the manual probes** (the experiment's whole point —
+  the no-telegraph discovery test; see `EXPERIMENT_dependencies_stress.md` §4).
+  Against the restarted target backend on `integration`:
+  1. **Transitive cycle:** create A→B, B→C via `POST /api/tasks/{id}/dependencies/{dep}`,
+     then attempt C→A → expect 409/422. If accepted → shallow cycle detection (the
+     key predicted failure).
+  2. **Done-guard on EVERY path:** make a blocked task, `PATCH /tasks/{id}
+     {status:done}` → 409 AND `PATCH /tasks/{id}/move {status:done}` → 409.
+  3. **Unblock:** complete the dependency → dependent becomes `blocked=false` and
+     can be set `done`.
+  (curl is hook-blocked — use python `urllib`.)
 
-## What this session validated (Verified)
-The 3 structural fixes turned a BL-0001 merge-escalation (prior run) into a clean
-6/6 sprint: (1) `graphify-out` gitignored, (2) live `events.jsonl` gitignored
-(no longer dirties the merge precondition), (3) `_ensure_on_agent_branch` at run
-start keeps `main` pristine. All on the target's `main` baseline + the harness
-commit `238f434`.
+## What this session shipped (all on `main` @ `eee9ab0`)
+1. **Scorer scorecard persistence** (`15872ad`) — read-only scorer now gate-free
+   ff-merges its `.agile-v/scorecards/<bl>.md`. Confirmed live (scorer
+   merged=true, 97/100 on dependencies BL-0001).
+2. **Janitor / Ops-Steward role, full §6 authority** (`15872ad`, **R16**) —
+   `_janitor_flow` runs in the REAL repo to repair non-code failures
+   (engineer infra_fail/error + QA-merge-failed); structural anomalies → I-7
+   doctrine-meta; advisory (never aborts); R13 streaming-kill backstop. SKILLS
+   renamed `…-ops`→`…-janitor`. **Deferred:** auto-rerun-after-repair (needs the
+   per-BL body refactored into a retryable unit). See `PROPOSAL_OPS_STEWARD_ROLE.md` §11.
+3. **Item #1 gate fix** (`dfc00df`) — `PYTEST_RESULT_RE` accepts `backend/tests/…`
+   prefixes + `run_gate` exit-code fallback on unparseable (`-q`) output. Proven
+   live: acceptance regression_checkpoint now `green` (was `inconclusive`).
+   Corrected the prior hand-off's misattribution (cause = `-q` + regex anchor,
+   NOT pytest 9.x).
+4. **A56 retrieval readiness gate + PO grounding check** (`eee9ab0`, behind
+   `warm_retrieval=True`) — warms the LOCAL backend before the PO so the first
+   agent isn't grounding-blind; surfaces `po.grounding_unavailable` if a PO
+   grounds 0. **External-free by construction** (forwards only Ollama/Milvus env,
+   never Azure/OpenAI — tested). Verified live: `warm_retrieval` warms the local
+   stack in 9.2s, ok=True. **Live only after the next harness restart.**
+5. **Crew stress-test program** — see below.
 
-## Open items
+## Crew stress-test program (the strategic thread)
+Operator pushed back that the toy target + additive features were weak evidence
+for the mission. Established a 2-experiment program (`EXPERIMENT_*.md`):
+- **Exp 1 — Kanban board + DnD + ordering** (`run-…T040112Z-ae3e0d`): landmine
+  *telegraphed*. **Crew PASSED** 6/6 — handled the `create_all`-no-ALTER
+  migration (`_migrate_task_rank`), wrote an optimistic-rollback Playwright
+  journey, acceptance ✅ ACCEPT. `EXPERIMENT_kanban_stress.md` §9.
+- **Exp 1b — Task Dependencies** (running now): landmine *NOT telegraphed* —
+  tests discovery (transitive cycles, every-path done-guard). The fair "would a
+  competent engineer get it right from a normal ticket?" test.
+- **Exp 2 (future)** — a REAL third-party brownfield repo (substrate realism).
+  `EXPERIMENT_dependencies_stress.md` §6.
 
-### 1. `_parse_pytest` can't read this target's pytest output — **STILL OPEN**
-Two symptoms; verified 2026-06-07. **Correction to a prior hand-off:** the cause
-is NOT "py3.14 / pytest 9.x" — it is (a) the target `test_cmd` uses **`-q`**
-(quiet) so `run_gate` gets zero per-test lines, and (b) `PYTEST_RESULT_RE`
-anchors to `^tests?/` but this target's node-ids are `backend/tests/…` (so even
-`run_bl_tests`, which forces `-v`, parses 0). Neither is a version issue.
-- per-BL gate logs `green (0 passed)` — **cosmetic** (`run_bl_tests` is
-  exit-code-authoritative, merges correct). Caused by the regex-anchor mismatch.
-- acceptance `orchestrator.regression_checkpoint` = **`inconclusive`** ("tests
-  did not execute (no pass/fail parsed); verify test_cmd"). Manual re-run = **111
-  passed**. Caused by `-q` (no per-test lines at all).
-- **Corrected fix (NOT "one fix kills both"):** the two symptoms live in
-  different functions. `run_gate` needs an **exit-code fallback** on unparseable
-  output (fixes the acceptance `inconclusive`; a regex fix alone won't help it
-  because `-q` emits nothing to match). The cosmetic per-BL `0 passed` needs the
-  **`_parse_pytest` regex anchor** widened to match `backend/tests/…`. Two
-  distinct fixes (or drop `-q` from `test_cmd` + widen the regex).
-
-### 2. Scorer scorecard persistence — **FIXED (2026-06-07)**
-Root cause: `orchestrator.py` gated the gate+merge block to `if role == "qa"`, so
-the scorer's committed, doctrine-validated scorecard (`.agile-v/scorecards/<bl>.md`)
-was never fast-forwarded — dropped on the reaped scorer worktree. Verified: the
-labels run's 6 scorecards survive on the leftover `agent/*` branches; integration
-had `.agile-v/qa/` but no `.agile-v/scorecards/`.
-**Fix:** added a scorer `elif` that persists the scorecard via a **gate-free
-fast-forward** (scorer is read-only — A55's QA-only gate has nothing to run; only
-the merge was wrongly QA-only). A1 non-ff auto-rebase parity, no post-rebase gate.
-Tests: `tests/test_scorer_scorecard_persistence.py` (3). Operator decision:
-gate-free ff-merge.
-
-### 3. Janitor (Ops/Steward) role — **WIRED with full §6 authority (2026-06-07)**
-Operator decisions: name = **Janitor**; **wire with full §6 authority**. Shipped:
-`_janitor_flow` (runs in the REAL repo checkout) + spawn triggers in `run_brief`
-(engineer escalation on `last_gate_kind ∈ {error, infra_fail}`; QA merge-failed
-branch), deterministic sidecar verdict, `janitor.structural_anomaly` → I-7
-doctrine-meta routing, R16 in `doctrine_spec` + CLAUDE.md (CI-guarded),
-`run_janitor` flag (default ON = rollback). Advisory contract enforced+tested: a
-Janitor failure never aborts the run. Tests: `tests/test_janitor_flow.py` (5).
-SKILLS renamed `…-ops` → `…-janitor`. Full record: `PROPOSAL_OPS_STEWARD_ROLE.md`
-§11. **Deferred:** auto re-run of the failed step after a verified repair (needs
-the per-BL body refactored into a retryable unit — separate reviewed increment).
-
-## Test state after this session
-`cd webapp/backend && .venv/bin/python -m pytest tests/ -q` → **324 passed**
-(316 baseline + 3 scorer-persistence + 5 janitor). Scope to `tests/`.
+## Open items (ledger)
+- **A56** (filed `3afcb42`; fix shipped `eee9ab0`) — fix is in but **needs a
+  harness restart to go live**; mark RESOLVED after a clean run shows a grounded
+  PO + `retrieval_warmup.done`. Sub-items still open: (a) make retrieval an
+  *eager* (non-deferred) tool; (b) **verify A51** `--strict-mcp-config` actually
+  contains the deferred-tool/claude.ai layer (the PO saw Microsoft 365/Excalidraw
+  despite it — do NOT assume A51 is intact).
+- **Gate differential-detection on quiet output** — the regression checkpoint is
+  green-by-exit-code on `-q` targets, not green-by-diff (Exp 1 caveat #3). Filing
+  candidate.
+- Janitor **auto-rerun-after-repair** (deferred increment, PROPOSAL §11).
+- 20+ leftover `agent/*` branches on the target (reapable).
 
 ## Suggested next actions (operator to direct — do not start without approval)
-- Implement item #1: `run_gate` exit-code fallback + widen `_parse_pytest` regex
-  anchor (two distinct fixes). File as a ledger entry with the corrected cause.
-- Approve the deferred Janitor auto-rerun increment (#3) if wanted.
-- Reap the 20 leftover `agent/*` branches in the target if desired.
-- Decide commit/merge of this session's work (currently uncommitted on `development`).
+1. Wait for the dependencies sprint to terminate; run the §4 manual probes;
+   append RESULTS to `EXPERIMENT_dependencies_stress.md` §7.
+2. **Restart the harness** (SIGTERM PID 36211, relaunch
+   `WEB_CONCURRENCY=1 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1
+   --port 8000` from `webapp/backend`) to make A56 live, then verify a run shows
+   a grounded PO.
+3. Decide Exp 2 (real brownfield) vs. the A56 follow-ups (eager retrieval / A51
+   verification) vs. the gate-diff hardening.
 
 ---PROMPT END---
