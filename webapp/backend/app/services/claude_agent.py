@@ -91,6 +91,8 @@ RETRIEVAL_MCP_TOOLS = [
     "mcp__retrieval__graph_neighbors",
     "mcp__retrieval__graph_find_similar",
     "mcp__retrieval__graph_summary",
+    # ABL-0016 Stage 1.5: pull prior lessons by a problem statement.
+    "mcp__retrieval__search_lessons",
 ]
 
 
@@ -148,11 +150,19 @@ def _build_retrieval_mcp_config(
     reference_repo: Path | None,
     target_repo: Path | None,
     log_path: Path | None,
+    lessons_repo: Path | None = None,
 ) -> tuple[Path, list[str]] | None:
     """Materialize an MCP config file pointing at the local retrieval server.
 
     Returns (config_path, mcp_tool_names) or None if no sources were provided.
     Caller is responsible for deleting the temp file when the agent finishes.
+
+    ``lessons_repo`` (ABL-0016 Stage 1.5): the STABLE main-checkout target path
+    used to key the per-target lessons vector collection and to read the
+    findings ledger. It must be the main checkout (not the per-run worktree),
+    so the write path (orchestrator) and read path (this server's
+    ``search_lessons``) agree on the collection + can see the untracked
+    ``_brownfield`` ledger. Defaults to ``target_repo`` when not supplied.
     """
     if not reference_repo and not target_repo:
         return None
@@ -169,14 +179,20 @@ def _build_retrieval_mcp_config(
         server_env["RETRIEVAL_REFERENCE_REPO"] = str(Path(reference_repo).resolve())
     if target_repo:
         server_env["RETRIEVAL_TARGET_REPO"] = str(Path(target_repo).resolve())
+    # ABL-0016 Stage 1.5: stable lessons key (main checkout). Falls back to the
+    # target_repo if not supplied — for legacy per-role endpoints that run
+    # directly off the checkout, that is already stable.
+    _lessons = lessons_repo or target_repo
+    if _lessons:
+        server_env["RETRIEVAL_LESSONS_REPO"] = str(Path(_lessons).resolve())
     if log_path:
         server_env["RETRIEVAL_LOG_PATH"] = str(Path(log_path).resolve())
-    # Inherit retrieval-relevant env (Azure / Milvus / budget).
+    # Inherit retrieval-relevant env (Azure / Milvus / Ollama / budget).
     for k in (
         "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_VERSION",
         "AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "EMBEDDING_PROVIDER", "EMBEDDING_MODEL",
         "EMBEDDING_DIMENSION", "OPENAI_API_KEY", "MILVUS_ADDRESS", "MILVUS_TOKEN",
-        "RETRIEVAL_TOOL_BUDGET", "PATH", "HOME",
+        "OLLAMA_HOST", "RETRIEVAL_TOOL_BUDGET", "PATH", "HOME",
     ):
         if k in os.environ:
             server_env.setdefault(k, os.environ[k])
@@ -254,6 +270,7 @@ async def stream_agent_task(
     allowed_tools: str = "Bash,Read,Write,Edit",
     reference_repo: str | Path | None = None,
     target_repo: str | Path | None = None,
+    lessons_repo: str | Path | None = None,
     retrieval_log_path: str | Path | None = None,
     min_pregrounding: int = 0,
     max_retrieval_calls: int = MAX_RETRIEVAL_CALLS_DEFAULT,
@@ -283,6 +300,7 @@ async def stream_agent_task(
         Path(reference_repo) if reference_repo else None,
         Path(target_repo) if target_repo else Path(repo_path),
         Path(retrieval_log_path) if retrieval_log_path else None,
+        Path(lessons_repo) if lessons_repo else None,
     )
     if retrieval is not None:
         mcp_config_path, mcp_tools = retrieval

@@ -328,6 +328,19 @@ def test_dispatch_confirmed_finding_marks_merged(tmp_path: Path, monkeypatch) ->
 # ─── A62: self-resolution -> lessons seam closure ──────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _stub_lesson_writethrough(monkeypatch):
+    """ABL-0016 Stage 1.5: stub the vector write-through so dispatch tests stay
+    hermetic (no real Ollama/Milvus) and we can assert it fired. Records
+    (repo_root, lesson) tuples."""
+    calls = []
+    def _rec(repo_root, lesson, **kw):
+        calls.append((repo_root, lesson))
+        return True
+    monkeypatch.setattr(orch.lessons_index_svc, "upsert_lesson", _rec)
+    return calls
+
+
 def test_should_self_confirm_helper() -> None:
     """Pure decision: a self-confirmed (verdict=None) finding that merged earns
     a confirmed verdict; an operator-verdicted one or a non-merge does not."""
@@ -381,6 +394,43 @@ def test_self_confirmed_finding_becomes_lesson_on_merge(tmp_path: Path, monkeypa
     lessons = lsn.list_lessons(tmp_path)
     assert [l.lesson_id for l in lessons] == ["sha256:self1"]
     assert lessons[0].classification == "product_bug"
+
+
+def test_self_confirm_writes_lesson_through_to_vector_index(tmp_path: Path, monkeypatch, _stub_lesson_writethrough) -> None:
+    """A62→Stage1.5: the just-confirmed lesson is indexed into the vector store
+    (write-through) so search_lessons can match it by problem statement, and a
+    lesson_indexed event is emitted."""
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    ledger._ensure_parent()
+    ledger.path.write_text(
+        _mk_finding(fid="sha256:wt", verdict=None, confidence=0.97).to_jsonl() + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orch, "_engineer_flow", _fake_merge_flow(merged=True))
+    events = _drain(orch._dispatch_followup_engineers(
+        tmp_path, "repo", "run-WT", "feat_a", lambda *a, **k: {}, timeout=60,
+    ))
+    # write-through fired with the CONFIRMED lesson
+    assert len(_stub_lesson_writethrough) == 1
+    repo_root, lesson = _stub_lesson_writethrough[0]
+    assert lesson.lesson_id == "sha256:wt"
+    assert lesson.verdict == "confirmed"
+    assert any(e.get("phase") == "orchestrator.acceptance.followup.lesson_indexed"
+               for e in events)
+
+
+def test_no_writethrough_when_not_merged(tmp_path: Path, monkeypatch, _stub_lesson_writethrough) -> None:
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    ledger._ensure_parent()
+    ledger.path.write_text(
+        _mk_finding(fid="sha256:wt2", verdict=None, confidence=0.97).to_jsonl() + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orch, "_engineer_flow", _fake_merge_flow(merged=False))
+    _drain(orch._dispatch_followup_engineers(
+        tmp_path, "repo", "run-WT2", "feat_a", lambda *a, **k: {}, timeout=60,
+    ))
+    assert _stub_lesson_writethrough == []
 
 
 def test_self_confirm_not_written_when_fix_not_merged(tmp_path: Path, monkeypatch) -> None:

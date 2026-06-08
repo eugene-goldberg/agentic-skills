@@ -335,5 +335,41 @@ def graph_summary(path: str, source: str = "reference") -> dict:
     return {"ok": True, "path": path, "entities": entities}
 
 
+@mcp.tool()
+def search_lessons(query: str, k: int = 5) -> dict:
+    """Find prior CONFIRMED lessons from past work on THIS codebase that match
+    the problem you are facing — by semantic similarity, above a relevance floor.
+
+    ABL-0016 Stage 1.5. Unlike a file lookup, this matches your *problem*: write
+    a short natural-language description of what you are about to do or the
+    hazard you are reasoning about (e.g. "adding a rest-aware field that the
+    frontend streak badge must also respect") and this returns the nearest prior
+    lesson(s). Lessons are **advisory falsification priors** — evidence to weigh,
+    not rules; ground each against the current code. Returns an empty list when
+    nothing is genuinely relevant (a deliberate floor, not an error).
+
+    Args:
+        query: natural-language description of your current problem / change.
+        k: max lessons to return (1-10).
+    """
+    if (b := _budget("search_lessons")):
+        return b
+    repo = os.getenv("RETRIEVAL_LESSONS_REPO") or os.getenv("RETRIEVAL_TARGET_REPO")
+    if not repo:
+        return {"ok": True, "query": query, "lessons": [], "note": "no target registered"}
+    try:
+        # Imported lazily: keeps the heavy app import off the hot path for
+        # sessions that never call search_lessons.
+        from app.services import lessons_index as _li
+        k = max(1, min(int(k), 10))
+        hits = _li.search_lessons(repo, query, k=k)
+    except Exception as exc:  # noqa: BLE001 — advisory: never fail a sprint
+        msg = f"{type(exc).__name__}: {exc}"
+        _log({"tool": "search_lessons", "query": query, "error": msg})
+        return {"ok": True, "query": query, "lessons": [], "note": f"unavailable: {msg}"}
+    _log({"tool": "search_lessons", "query": query, "n_hits": len(hits)})
+    return {"ok": True, "query": query, "lessons": hits}
+
+
 if __name__ == "__main__":
     mcp.run()

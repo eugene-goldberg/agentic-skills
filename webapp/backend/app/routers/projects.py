@@ -150,7 +150,8 @@ def _preflight_retrieval() -> tuple[bool, str]:
     return False, f"Milvus unreachable at 127.0.0.1:19530; auto-restart attempt: {restart_msg}"
 
 
-def _retrieval_kwargs(wt: Worktree, role: str, bl_id: str | None = None, trace: TraceWriter | None = None) -> dict:
+def _retrieval_kwargs(wt: Worktree, role: str, bl_id: str | None = None, trace: TraceWriter | None = None,
+                      lessons_repo: Path | None = None) -> dict:
     """Build stream_agent_task kwargs that enable the retrieval MCP server.
 
     Fail-loud: if the reference repo is missing or Milvus is unreachable, raise
@@ -168,11 +169,18 @@ def _retrieval_kwargs(wt: Worktree, role: str, bl_id: str | None = None, trace: 
     else:
         log_name = f"retrieval-{role}{('-' + bl_id) if bl_id else ''}.jsonl"
         retrieval_log = wt.path / ".agile-v" / "logs" / log_name
-    return {
+    kw = {
         "reference_repo": RETRIEVAL_REFERENCE_REPO,
         "target_repo": wt.path,
         "retrieval_log_path": retrieval_log,
     }
+    # ABL-0016 Stage 1.5: pass the STABLE main-checkout path so the lessons
+    # vector collection key + ledger read agree between the write path
+    # (orchestrator) and the read path (search_lessons MCP tool). Without it the
+    # per-run worktree path would key a fresh empty collection every run.
+    if lessons_repo is not None:
+        kw["lessons_repo"] = lessons_repo
+    return kw
 
 
 def _repo_dir(repo: str) -> Path:
@@ -1311,7 +1319,9 @@ async def run_brief(repo: str, req: RunBriefRequest):
 
     def _rk_builder(wt: Worktree, role: str, bl_id: str | None, trace: TraceWriter | None) -> dict:
         # Reuses the same preflight + path conventions as the per-role endpoints.
-        return _retrieval_kwargs(wt, role=role, bl_id=bl_id, trace=trace)
+        # repo_dir is the stable main checkout (worktrees fork off it) → use it
+        # as the lessons key/ledger source for ABL-0016 Stage 1.5 search_lessons.
+        return _retrieval_kwargs(wt, role=role, bl_id=bl_id, trace=trace, lessons_repo=repo_dir)
 
     async def gen():
         # A18: tailable per-feature event log. Open in append mode so re-runs

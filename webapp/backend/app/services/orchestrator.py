@@ -40,6 +40,7 @@ from app.services import acceptance_validator as acceptance_validator_svc
 from app.services import volume_reaper as volume_reaper_svc
 from app.services import findings_ledger as findings_ledger_svc
 from app.services import lessons as lessons_svc
+from app.services import lessons_index as lessons_index_svc
 from app.services import doctrine_spec as doctrine_spec_svc
 from app.services import traces as traces_svc
 from app.services.brownfield import classify_target, feature_artifact_dir
@@ -1790,7 +1791,7 @@ async def _dispatch_one_followup(
     # lessons.record_injection / the priors guards).
     if _should_self_confirm(finding, merged):
         try:
-            await asyncio.to_thread(
+            updated = await asyncio.to_thread(
                 ledger.set_verdict, finding.finding_id, "confirmed",
                 f"self-confirmed by crew: dispatched fix merged through the full "
                 f"doctrine+gate bar ({(merged_sha or '')[:8]}); not operator-triaged. "
@@ -1799,6 +1800,20 @@ async def _dispatch_one_followup(
             yield _evt("acceptance.followup.self_confirmed", run_id=run_id,
                        finding_id=finding.finding_id, bl_id=bl_id,
                        merged_sha=merged_sha)
+            # ABL-0016 Stage 1.5 write-through: index the just-confirmed lesson
+            # into the per-target vector store so search_lessons can match it by
+            # problem statement on future features. Best-effort, off-thread
+            # (embeds via Ollama); a failure NEVER perturbs the sprint.
+            try:
+                indexed = await asyncio.to_thread(
+                    lessons_index_svc.upsert_lesson, repo_dir,
+                    lessons_svc.Lesson.from_finding(updated),
+                )
+                if indexed:
+                    yield _evt("acceptance.followup.lesson_indexed", run_id=run_id,
+                               finding_id=finding.finding_id, bl_id=bl_id)
+            except Exception:
+                pass  # advisory telemetry only
         except Exception as exc:
             yield _evt("acceptance.followup.self_confirm_error", run_id=run_id,
                        finding_id=finding.finding_id, error=str(exc))

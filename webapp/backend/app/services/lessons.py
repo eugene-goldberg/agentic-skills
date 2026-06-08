@@ -212,6 +212,16 @@ def render_lessons_block(lessons: list[Lesson], *, bl_id: Optional[str] = None) 
             f"- **[{lesson.classification}]** ({lesson.feature_slug}) "
             f"{_lesson_body(lesson)}"
         )
+    # ABL-0016 Stage 1.5: push→pull bridge. The list above is the top recurring
+    # lessons; more may exist. Tell the agent it can retrieve lessons matched to
+    # its SPECIFIC problem via the search_lessons tool.
+    out.append("")
+    out.append(
+        "> More prior lessons may exist for this codebase. When you hit a "
+        "specific problem, call the **`search_lessons`** retrieval tool with a "
+        "short description of that problem to pull the closest-matching prior "
+        "lesson(s) — same advisory weight as above."
+    )
     out.append("")
     return "\n".join(out)
 
