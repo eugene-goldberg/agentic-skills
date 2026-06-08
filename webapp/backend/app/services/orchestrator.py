@@ -42,6 +42,7 @@ from app.services import findings_ledger as findings_ledger_svc
 from app.services import lessons as lessons_svc
 from app.services import lessons_index as lessons_index_svc
 from app.services import pattern_profile as pattern_profile_svc
+from app.services import doctrine_efficacy as doctrine_efficacy_svc
 from app.services import doctrine_spec as doctrine_spec_svc
 from app.services import traces as traces_svc
 from app.services.brownfield import classify_target, feature_artifact_dir
@@ -2226,6 +2227,49 @@ async def _doctrine_meta_flow(
     invariants_doc = agentic_root / "ARCHITECTURE_INVARIANTS.md"
     ledger_doc = agentic_root / "DESIGN_SHORTCOMINGS.md"
 
+    # ABL-0017 Stage 2: compute the cross-run doctrine-efficacy report (this run
+    # + recent archived runs) and hand it to the meta-agent so a `retire`
+    # proposal is grounded in fire-rate evidence, not a single clean sprint.
+    # Best-effort: a failure here must not block the meta analysis.
+    efficacy_block = ""
+    try:
+        archive_parent = archive_dir.parent
+        recent = sorted(
+            (p.name for p in archive_parent.iterdir()
+             if p.is_dir() and p.name.startswith("run-")
+             and doctrine_efficacy_svc.load_run_state(p.name)),
+            reverse=True,
+        )[:10]
+        if run_id not in recent:
+            recent = [run_id] + recent
+        report = doctrine_efficacy_svc.efficacy_report(recent)
+        report_path = archive_dir / "doctrine_efficacy.json"
+        try:
+            report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+        yield _evt("doctrine_meta.efficacy", run_id=run_id,
+                   run_count=report["run_count"],
+                   never_fired=report["never_fired_review_candidates"],
+                   unobserved=report["unobserved_rules"])
+        efficacy_block = (
+            f"\n## Doctrine-efficacy report (cross-run, ABL-0017)\n\n"
+            f"A machine-readable report over {report['run_count']} archived run(s) "
+            f"is at `{report_path}`. Confidence: {report['confidence']}\n"
+            f"- **never_fired_review_candidates**: {report['never_fired_review_candidates']} "
+            f"— enforced AND observed running across these runs yet NEVER caught a "
+            f"violation. These are the ONLY rules eligible for a `retire` proposal — "
+            f"and only if the report + traces show the rule's targeted failure class "
+            f"also did not occur by other means. A guardrail that never trips may "
+            f"simply mean a clean crew, so `retire` is the highest-risk direction: "
+            f"propose it conservatively, grounded in this report, operator-gated.\n"
+            f"- **unobserved_rules**: {report['unobserved_rules']} — their enforcement "
+            f"phase never appeared in the analyzed traces. These are NOT assessable "
+            f"(observability gap or no trigger arose); NEVER propose `retire` for them.\n"
+        )
+    except Exception as exc:  # noqa: BLE001
+        yield _evt("doctrine_meta.efficacy_error", run_id=run_id, error=str(exc))
+
     doctrine = prompts_brownfield_svc._load_skill("doctrine_meta")
     task = (
         f"{doctrine}\n\n"
@@ -2235,7 +2279,9 @@ async def _doctrine_meta_flow(
         f"- trace archive: `{archive_dir}` ({len(trace_subdirs)} trace dirs)\n"
         f"- canonical invariants: `{invariants_doc}`\n"
         f"- existing ledger: `{ledger_doc}`\n"
-        f"- proposals output dir: `{proposals_dir}`\n\n"
+        f"- proposals output dir: `{proposals_dir}`\n"
+        + efficacy_block
+        + "\n"
         f"Trace dirs under the archive (each holds events.jsonl, retrieval.jsonl, meta.json):\n"
         + "\n".join(f"- {n}" for n in trace_subdirs)
         + "\n\n"

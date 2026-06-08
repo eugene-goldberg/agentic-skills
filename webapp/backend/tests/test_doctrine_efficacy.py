@@ -126,3 +126,72 @@ def test_efficacy_report_fire_rate(tmp_path: Path) -> None:
 def test_missing_archive_is_empty(tmp_path: Path) -> None:
     assert de.extract_firings("nope", archive_root=tmp_path / "x") == []
     assert de.run_efficacy("nope", archive_root=tmp_path / "x", state_root=tmp_path / "y")["n_firings"] == 0
+
+
+# ─── doctrine-meta-agent wiring (ABL-0017 Stage 2) ──────────────────────────
+
+
+def test_meta_skill_has_retire_direction_and_bar() -> None:
+    """The doctrine-meta SKILLS.md exposes `retire` + its eligibility bar
+    (never_fired only, not unobserved)."""
+    skill = (ROOT.parents[1] / "skills" / "brownfield"
+             / "brownfield-production-incremental-doctrine-meta" / "SKILLS.md").read_text()
+    assert "retire" in skill
+    assert "never_fired_review_candidates" in skill
+    assert "unobserved_rules" in skill  # the eligibility guard is documented
+
+
+def _drain(agen):
+    import asyncio
+    async def run():
+        return [e async for e in agen]
+    return asyncio.run(run())
+
+
+def test_doctrine_meta_flow_injects_efficacy(tmp_path: Path, monkeypatch) -> None:
+    """End-to-end (faked agent): the meta-flow computes the efficacy report,
+    emits doctrine_meta.efficacy, writes doctrine_efficacy.json, and injects the
+    report + retire guidance into the agent prompt."""
+    from app.services import orchestrator as orch
+    from app.services import prompts_brownfield as pbf
+    run = "run-META"
+    backend = tmp_path / "webapp" / "backend"
+    tdir = backend / "traces_archive" / run / "20260608T000000Z-engineer-BL-0001-x"
+    _write_phase_events(tdir, [{"type": "_meta", "phase": "bl_tests", "kind": "green"}])
+    state = backend / ".orchestrator-state" / "done"
+    state.mkdir(parents=True)
+    (state / f"{run}.json").write_text(json.dumps({
+        "run_id": run, "doctrine_manifest": {"rules": [
+            {"id": "R10", "enforced": True}, {"id": "R13", "enforced": True}]},
+        "bl_outcomes": [{"bl_id": "BL-0001", "outcome": "merged_full"}],
+    }), encoding="utf-8")
+    (tmp_path / ".planning" / "doctrine_proposals").mkdir(parents=True)
+    (tmp_path / "ARCHITECTURE_INVARIANTS.md").write_text("x", encoding="utf-8")
+    (tmp_path / "DESIGN_SHORTCOMINGS.md").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(pbf, "AGENTIC_ROOT", tmp_path)
+    monkeypatch.setattr(de, "_ARCHIVE_DIR", backend / "traces_archive")
+    monkeypatch.setattr(de, "_STATE_DIR", backend / ".orchestrator-state")
+
+    class _T:
+        def __init__(self, **k): self.dir = tmp_path / "trace"; self.dir.mkdir(exist_ok=True)
+        def close(self): pass
+    monkeypatch.setattr(orch, "TraceWriter", _T)
+
+    captured = {}
+    async def fake_stream(task, root, **k):
+        captured["task"] = task
+        return
+        yield  # pragma: no cover (makes this an async generator)
+    monkeypatch.setattr(orch, "stream_agent_task", fake_stream)
+
+    events = _drain(orch._doctrine_meta_flow("repo", run, timeout=60))
+    phases = [e.get("phase") for e in events]
+    assert any("doctrine_meta.efficacy" in (p or "") for p in phases)
+    assert (backend / "traces_archive" / run / "doctrine_efficacy.json").exists()
+    # the report + retire guidance reached the agent prompt
+    assert "never_fired_review_candidates" in captured["task"]
+    assert "retire" in captured["task"]
+    # R13 enforced but its phase never appeared → unobserved (NOT retire-eligible)
+    ev = next(e for e in events if "doctrine_meta.efficacy" in (e.get("phase") or ""))
+    assert "R13" in ev["unobserved"]

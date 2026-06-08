@@ -107,8 +107,8 @@ Every file under `.planning/doctrine_proposals/` MUST match this skeleton:
 **Topic:** <short slug>
 **Invariant:** I-1 | I-2 | I-3 | I-4 | I-5 | I-6 | I-7 | UNCLASSIFIED
 **Class:** race | resource-leak | silent-failure | silent-success | consistency-violation | enforcement-gap | starvation | data-loss | observability-gap | scope-creep
-**Direction:** tighten | loosen | new-rule | new-invariant
-**Evidence count:** <integer; must be >=3 for tighten, >=5 for loosen>
+**Direction:** tighten | loosen | new-rule | new-invariant | retire
+**Evidence count:** <integer; must be >=3 for tighten, >=5 for loosen, >=5 for retire>
 
 ## Summary
 
@@ -123,7 +123,31 @@ A list of `(trace_path, event_id, observed_value)` triples. Each MUST be retriev
 
 ## Proposed change
 
-The concrete change. If tightening a rule, name the rule and the new floor. If new-rule, give the full rule + enforcement point + test. If new-invariant, give the invariant text + the components it governs.
+The concrete change. If tightening a rule, name the rule and the new floor. If new-rule, give the full rule + enforcement point + test. If new-invariant, give the invariant text + the components it governs. If **retire**, see the retire bar below.
+
+### `retire` — the highest-risk direction (ABL-0017 closed-loop efficacy)
+
+`retire` proposes REMOVING a rule that no longer earns its keep. It is the only
+direction grounded in the **cross-run doctrine-efficacy report** (handed to you
+in the Run context as `doctrine_efficacy.json`), never in a single sprint. The bar:
+
+1. The rule appears in the report's **`never_fired_review_candidates`** — i.e.
+   it was enforced AND *observed running* across the analyzed runs yet NEVER
+   caught a violation. A rule in **`unobserved_rules`** is NOT eligible (its
+   phase never appeared — that is an observability gap or no-trigger, not
+   evidence of uselessness). Proposing retire for an unobserved rule is a
+   discipline violation.
+2. You must show, from the report + traces, that the rule's
+   `targeted_failure_class` did not occur by other means in those runs — i.e.
+   the rule is dead weight, not a guardrail-that-never-tripped-because-the-crew-
+   was-clean. If you cannot distinguish these, DO NOT propose retire; say so.
+3. ≥5 evidence citations (same asymmetry as loosen: removing a guard is a
+   silent-degradation risk). Cite the efficacy report's run count + the per-run
+   absence of catches.
+
+Retiring a safety rule because the crew happened to be clean is the canonical
+failure mode here — when in doubt, propose nothing (A43 evidence discipline).
+Operator approval is the ONLY path to a landed retirement (I-7).
 
 ## Risk
 
