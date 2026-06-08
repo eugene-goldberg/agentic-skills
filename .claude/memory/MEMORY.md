@@ -5,6 +5,7 @@
 - [Exp-2 target: beaverhabits](arch_target_beaverhabits.md) — first REAL third-party brownfield (daya0576/beaverhabits, FastAPI+aiosqlite, BSD-3); wired + gate-verified 2026-06-07; .python-version 3.14→3.12 gotcha
 - [A57 gate multi-token test_cmd + test_env](arch_gate_multitoken_testcmd.md) — gate now runs real targets whose suite isn't bare pytest (uv run pytest + env); structural enabler, shipped b9c2aa9
 - [Self-resolution arc A57-A61](arch_self_resolution_arc.md) — 2026-06-08: crew now fully resolves its own issues (merge failures A58/A59, acceptance findings A60/A61); validated live on beaverhabits; dev=main @ b7ab0b9
+- [Cumulative push (A62/A63 + Stage1.5 + ABL-0019)](arch_cumulative_loop_closed.md) — 2026-06-08: A62/A63 close findings→lessons; ABL-0016 Stage 1.5 = semantic problem→lesson pull (search_lessons, Milvus+bge-m3, floor 0.55); ABL-0019 = per-target pattern profile from eng_patterns.md (search_patterns); ABL-0016 smoke CLEAN PASS → flag-flip justified; dev=main @ 92f8ff5
 - [DOCTRINE: improve crew, don't accommodate](feedback_improve_crew_not_accommodate.md) — BINDING 2026-06-08: every move = "what does the crew gain?"; never patch one target's condition; don't abdicate decisions; 95%=rigor-before-act not stop-and-ask
 - [Embedding stack: Ollama bge-m3](embedding_stack_ollama.md) — local Ollama replaces Azure for embeddings on this branch
 - [Azure OpenAI access](azure_openai.md) — older Azure setup, still used by legacy harness

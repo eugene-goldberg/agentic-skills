@@ -34,3 +34,8 @@ webapp/backend/traces_archive/
 .claude/scheduled_tasks.lock
 webapp/backend/screenshots/
 .gstack/
+
+# Runtime logs (harness stdout, orchestrator run logs, lessons-injection
+# provenance, ad-hoc smoke briefs/payloads) — regenerated per run, never tracked.
+webapp/backend/logs/
+agentic_harness.png

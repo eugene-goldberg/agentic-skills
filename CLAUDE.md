@@ -234,8 +234,10 @@ Read these in this order on any non-trivial session:
 | 15 | [`PREFLIGHT.md`](PREFLIGHT.md) | PF-1..10 pre-sprint verification checklist (Milvus stack, Ollama probe, indexer end-to-end, target tree, leftover worktrees, Docker.raw budget). Run before every `/run-brief` or sprint resume. Added 2026-06-02. |
 | 16 | [`CUMULATIVE_LEARNING_ROADMAP.md`](CUMULATIVE_LEARNING_ROADMAP.md) | Strategy for the mission's *cumulative* property — the 4-stage path (lessons-as-retrieval → closed-loop doctrine → cross-target transfer → pattern profile). |
 | 17 | [`CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md`](CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md) | The whole-feature program plan (ABL-0016→0019), shared architecture, per-stage batches, Batch-0 verification gates. |
-| 18 | [`ABL-0016_LESSONS_AS_CONTEXT.md`](ABL-0016_LESSONS_AS_CONTEXT.md) | Stage 1 plan — surface prior confirmed lessons to all brownfield roles. Batches A–C shipped (flag-OFF); calibration smoke open. |
-| 19 | [`ABL-0017_DOCTRINE_EFFICACY.md`](ABL-0017_DOCTRINE_EFFICACY.md) | Stage 2 — closed-loop doctrine efficacy. Batch-0 verification done; unblocked by ABL-0020; design + batches pending. |
+| 18 | [`ABL-0016_LESSONS_AS_CONTEXT.md`](ABL-0016_LESSONS_AS_CONTEXT.md) | Stage 1 — prior confirmed lessons to all brownfield roles (push block). **SHIPPED; calibration smoke PASSED; `inject_lessons` flipped DEFAULT ON 2026-06-08.** |
+| 18b | [`ABL-0016_STAGE_1.5_SEMANTIC_LESSONS.md`](ABL-0016_STAGE_1.5_SEMANTIC_LESSONS.md) | Stage 1.5 — semantic problem→lesson **pull** (`lessons_index.py`, `search_lessons` MCP tool, per-target Milvus `lessons_<md5>`, bge-m3, 0.55 floor). **SHIPPED + effectiveness-confirmed on real embeddings.** |
+| 19 | [`ABL-0017_DOCTRINE_EFFICACY.md`](ABL-0017_DOCTRINE_EFFICACY.md) | Stage 2 — closed-loop doctrine efficacy. **STARTED 2026-06-08:** A13 per-rule sealing COMPLETE; `doctrine_efficacy.py` aggregator + meta-agent `retire` wiring shipped. Remaining: accumulate POST-A13 sealed runs (data, not code). |
+| 19b | [`ABL-0019_PATTERN_PROFILE.md`](ABL-0019_PATTERN_PROFILE.md) | Stage 4 — per-target **pattern profile** (`pattern_profile.py`, `search_patterns` MCP tool): consolidates per-BL `eng_patterns.md` (was written-but-never-read-back) → `patterns_<md5>`; refresh at `sprint_complete`. **SHIPPED + effectiveness-confirmed.** |
 | 20 | [`ABL-0020_DOCTRINE_SPEC_REGISTRY.md`](ABL-0020_DOCTRINE_SPEC_REGISTRY.md) | Keystone — the I-2 doctrine-spec registry (`doctrine_spec.py`) + per-run manifest. Complete; fulfills I-2; unblocks ABL-0017. |
 | 21 | [`ABL-0021_ONDEMAND_DISPATCH_UI.md`](ABL-0021_ONDEMAND_DISPATCH_UI.md) | Operator-facing on-demand "Dispatch fix" — `POST /dispatch-followup` + FindingsTriagePanel button. Now in `main` (was on the deleted `followup-dispatch-ui`); closes the triage-UI ↔ ABL-0015-engine seam. |
 | 22 | [`CONTROL_FLOW.md`](CONTROL_FLOW.md) | Flowchart (Mermaid + ASCII) of every check/gate/control action: streaming Tier-1.5 kills, post-agent doctrine+gate, sprint-level acceptance/closure/doctrine-meta, with the I-2 enforcement-point table. |
@@ -577,7 +579,10 @@ That order ensures you inherit the structural lens before the
 per-instance ledger, and the per-instance ledger before any individual
 patch.
 
-*Last updated 2026-05-23. Architect responsibility statement added per
-operator direction. Forward references to ARCHITECTURE_INVARIANTS.md,
-ARCHITECT_PLAN.md, ARCHITECT_TRACKER.md, WORKFLOW.md, and RECOVERY.md
-added simultaneously.*
+*Last updated 2026-06-08. Cumulative-learning + Stage-2 session: the
+within-target cumulative loop is COMPLETE (A62/A63 + ABL-0016 Stage 1.5 lessons
+pull + ABL-0019 pattern profile; `inject_lessons` DEFAULT ON) and self-hardening
+is now CLOSED-LOOP (A13 seals every rule firing → `doctrine_efficacy.py`
+aggregator → doctrine-meta-agent consumes it + `retire` direction, operator-
+gated). Doc index rows 18/18b/19/19b updated. dev≡main @ `015f12c`. Prior:
+architect responsibility statement (2026-05-23) + forward refs.*
