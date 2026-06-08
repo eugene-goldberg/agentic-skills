@@ -144,6 +144,53 @@ def test_autoconfirm_respects_r15_dispatch_state() -> None:
         _mk_finding(verdict=None, confidence=0.99, dispatch_state="merged")) is False
 
 
+# ─── A61 (Lever A): full-locus deterministic resolution ────────────────────────
+
+def _mk_dossier_finding(**kw) -> Finding:
+    base = dict(
+        finding_id="sha256:loc", run_id="r1", feature_slug="feat_a", journey_id="01",
+        journey_kind="ui", classification="product_bug",
+        evidence_summary='{"id":"01","status":"fail"}', report_path="/tmp/report.json",
+        first_seen_ts="2026-06-08T00:00:00Z", last_seen_ts="2026-06-08T00:00:00Z",
+        seen_count=1,
+    )
+    base.update(kw)
+    return Finding(**base)
+
+
+def test_followup_section_surfaces_full_dossier_and_mandates_per_surface_tests() -> None:
+    """The Exp-2 miss: the fix_locus named TWO surfaces (badge + echart); the
+    engineer fixed one. The section must surface the full root_cause/fix_locus
+    AND mandate a deterministic test per surface, so the engineer's own gate loop
+    can't merge until every named surface is green (deterministic re-verify)."""
+    f = _mk_dossier_finding(
+        root_cause="badge -> current_streak; echart still -> compose_habit_streaks",
+        fix_locus="components.py:849 (badge) AND components.py:964 (echart)",
+        source_refs=["beaverhabits/frontend/components.py:964"],
+        alternatives_falsified="data_bug ruled out — same records, two functions",
+    )
+    s = orch._build_followup_section(f)
+    # full dossier surfaced (not just the thin status summary)
+    assert "components.py:964" in s
+    assert "compose_habit_streaks" in s
+    assert "components.py:964" in s
+    assert "data_bug ruled out" in s
+    # full-locus + per-surface-test mandate present
+    assert "EVERY surface" in s
+    assert "regression test" in s
+    # partial fix is explicitly called a failure
+    assert "partial fix" in s.lower() or "FAILURE" in s
+
+
+def test_followup_section_degrades_without_dossier() -> None:
+    """Pre-v0.2 findings (no root_cause/fix_locus) still produce a valid section —
+    the dossier blocks just omit, the mandate prose remains."""
+    f = _mk_dossier_finding()  # no dossier fields
+    s = orch._build_followup_section(f)
+    assert "Remediation task" in s
+    assert "EVERY surface" in s  # the binding instruction is unconditional
+
+
 def test_cost_cap_default_is_one() -> None:
     assert orch.FOLLOWUP_COST_CAP == 1
 

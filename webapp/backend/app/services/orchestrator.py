@@ -1661,25 +1661,53 @@ def _build_followup_section(finding, *, hypothesis: str = "") -> str:
         if hypothesis else
         "\n### Classifier hypothesis\n(none recorded — ground the site yourself via retrieval)\n"
     )
+    # A61 (Lever A): surface the acceptance agent's VERIFIED root-cause dossier —
+    # not just the thin status summary — and make it the authoritative scope. The
+    # root_cause / fix_locus / source_refs name EVERY surface the defect touches
+    # (e.g. both the streak badge AND the "Best Streaks" echart). Mandating a
+    # deterministic regression test for EACH named surface turns the engineer's
+    # own no-abort gate loop into the re-verify-and-iterate mechanism: the fix
+    # cannot merge until every named surface is green. This closes the
+    # "fixed one surface, missed the other" gap deterministically, without
+    # relying on a (non-deterministic) acceptance re-run to re-discover it.
+    def _block(title: str, val) -> str:
+        return f"\n### {title}\n{val}\n" if val else ""
+    dossier_block = (
+        _block("Verified root cause (causal chain)", getattr(finding, "root_cause", None))
+        + _block("Fix locus (surfaces/files to repair — fix EVERY one)", getattr(finding, "fix_locus", None))
+        + _block("Source references", ", ".join(finding.source_refs) if getattr(finding, "source_refs", None) else None)
+        + _block("Alternatives already falsified (do not re-chase these)", getattr(finding, "alternatives_falsified", None))
+    )
     return f"""## Remediation task — auto-dispatched from acceptance ({finding.finding_id})
 
 This is a FOLLOW-UP fix for a cross-BL integration defect the acceptance
 agent found on journey {finding.journey_id} ({finding.journey_kind}). It
 was NOT decomposed by the PO, so the usual
 `_brownfield/<bl_id>/codebase_context.md` will be ABSENT — treat the
-defect summary and hypothesis below as your authoritative scope, and
-ground them with your own retrieval before editing.
+defect dossier below as your authoritative scope, and ground each named
+site with your own retrieval before editing.
 
 ### Defect summary
 {finding.evidence_summary}
-{hyp_block}
+{dossier_block}{hyp_block}
 ### Source of record
 Acceptance report: {finding.report_path}
 
-### Your job
-Fix the defect above following the binding doctrine below. Keep the change
-additive and regression-safe — the same regression gate that guards every
-BL guards this one. Write your `eng_patterns.md` artifact as required.
+### Your job (BINDING — full-locus resolution)
+Resolve the defect COMPLETELY. The fix locus above may name MORE THAN ONE
+surface (e.g. several call sites, an API path AND a UI render path). You must:
+1. Fix EVERY surface named in the root cause / fix locus — not just the most
+   obvious one. A partial fix that leaves a named sibling surface broken is a
+   FAILURE, not a resolution.
+2. For EACH distinct surface you fix, add a deterministic regression test (in
+   the feature's own test file, NOT in the application's pre-existing test
+   files) that fails on the OLD behavior and passes on your fix. These tests
+   are how the gate proves the WHOLE defect is closed — the same regression
+   gate that guards every BL guards this one, and it will not go green (so this
+   will not merge) until every surface's test passes. Keep iterating
+   investigate→fix→re-test until all are green; do not stop at the first.
+3. Keep the change additive and regression-safe. Write your `eng_patterns.md`
+   artifact as required.
 """
 
 
