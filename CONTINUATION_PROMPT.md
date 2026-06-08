@@ -55,15 +55,33 @@ repeat the mistakes:
 
 ## Branch model (BINDING)
 Work on **`development`**, fast-forward into **`main`** when verified. Only live
-branches. **Both at `b7ab0b9`** (verified in sync). Tree clean except untracked
-`agentic_harness.png` (stray — ignore) and the memory/script files being
-committed alongside this hand-off. Remote: `origin`
+branches. **Both at `250ad6a`** (verified in sync, 2026-06-08). Tree clean except
+untracked `agentic_harness.png` (stray — ignore). Remote: `origin`
 (github.com/eugene-goldberg/agentic-skills). Harness tests:
-`cd webapp/backend && .venv/bin/python -m pytest tests/ -q` → **351 passed**.
+`cd webapp/backend && .venv/bin/python -m pytest tests/ -q` → **389 passed, 1 skipped**
+(the skip is an Ollama/Milvus-gated effectiveness test under load; it passes when
+Ollama is free).
+
+## What shipped 2026-06-08 (cumulative-learning push — the within-target loop is COMPLETE)
+The crew now learns across runs on a target. All shipped + tested + effectiveness-
+confirmed on real bge-m3; **`inject_lessons` is DEFAULT ON** (calibration smoke passed).
+- **A62** — self-resolved fixes self-record `verdict=confirmed` on merge (write-trigger seam).
+- **A63** — lessons render the verified A61 dossier (root_cause+fix_locus), not the status blob.
+- **ABL-0016 Stage 1.5** (`lessons_index.py`) — semantic problem→lesson PULL via per-target
+  Milvus `lessons_<md5>` (bge-m3, floor 0.55, embed retry); `search_lessons` MCP tool.
+- **ABL-0019 Stage 4** (`pattern_profile.py`) — per-target PATTERN PROFILE: consolidates
+  `eng_patterns.md` (was written-but-never-read-back) → `patterns_<md5>`; `search_patterns`
+  MCP tool; refresh hook at `sprint_complete`.
+- **ABL-0016 flag-flip** — `inject_lessons` default OFF→ON after smoke `run-20260608T162952Z-ed37bc`
+  passed clean (lessons → all roles, regression green 126 passed, 2/2 merged_full).
+Frontier next (researched): Stage 2 closed-loop doctrine efficacy (ABL-0017, blocked on
+**A13** per-rule trigger events); Stage 3 cross-target (needs ≥2 real targets); lesson/
+pattern-efficacy attribution (join `logs/lessons/<run>.jsonl` to per-BL outcomes).
 
 ## Verified running processes (re-verify with `lsof -nP -iTCP:8000/:8002/:3002`)
-- **Harness orchestrator: PID 85418**, uvicorn `127.0.0.1:8000`, running the
-  current code (A56–A61 all live). Start cmd:
+- **Harness orchestrator: PID 9191**, uvicorn `127.0.0.1:8000`, running the
+  current code (A56–A63 + Stage 1.5 + ABL-0019 + inject_lessons ON all live;
+  re-verify: `RunBriefRequest(brief='x'*25).inject_lessons` is True). Start cmd:
   `cd webapp/backend && .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`.
 - Target dev servers: backend **PID 67691** `:8002`, frontend **69699**
   `localhost:3002` (beaverhabits, on `integration`). Separate from the harness.
