@@ -77,6 +77,7 @@ payload = {
     "stop_on_failure": True,      # halt at first escalation → capture any wall cleanly
     "run_acceptance": True,       # whole-feature API E2E + the one full-suite regression checkpoint
     "run_doctrine_meta": True,    # post-sprint self-hardening analysis
+    "run_acceptance_followup": True,  # A60 — crew auto-resolves high-confidence acceptance product_bugs in-loop
     "warm_retrieval": True,       # A56 — first real PO-grounding test on a fresh target
     "timeout_per_role": 2400,     # 40 min/role
     "acceptance_timeout": 3600,

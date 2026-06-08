@@ -39,6 +39,7 @@ def _mk_finding(
     journey_id: str = "03",
     evidence: str = "PUT bypasses the transition state machine",
     report_path: str = "/tmp/report.json",
+    confidence: float | None = None,
 ) -> Finding:
     return Finding(
         finding_id=fid,
@@ -54,6 +55,7 @@ def _mk_finding(
         seen_count=1,
         verdict=verdict,
         dispatch_state=dispatch_state,
+        confidence=confidence,
     )
 
 
@@ -104,6 +106,42 @@ def test_selector_cost_cap() -> None:
     chosen, capped = orch._select_followup_candidates(findings, cost_cap=1)
     assert len(chosen) == 1
     assert capped == 3
+
+
+# ─── A60: confidence-gated auto-confirm (crew resolves, doesn't just flag) ──────
+
+def test_autoconfirm_high_confidence_unverdicted_product_bug() -> None:
+    """The Exp-2 case: a product_bug the agent root-caused at 0.97 with
+    verdict still null must be dispatched — the crew resolves what it finds."""
+    f = _mk_finding(fid="hi", verdict=None, confidence=0.97)
+    chosen, _ = orch._select_followup_candidates([f])
+    assert [c.finding_id for c in chosen] == ["hi"]
+    assert orch._finding_dispatch_eligible(f) is True
+
+
+def test_autoconfirm_threshold_boundary() -> None:
+    assert orch._finding_dispatch_eligible(_mk_finding(verdict=None, confidence=0.90)) is True
+    assert orch._finding_dispatch_eligible(_mk_finding(verdict=None, confidence=0.89)) is False
+    assert orch._finding_dispatch_eligible(_mk_finding(verdict=None, confidence=None)) is False
+
+
+def test_autoconfirm_never_overrides_operator_rejection() -> None:
+    """An operator who rejected a finding wins even at high confidence —
+    auto-confirm only fires when the verdict is still un-adjudicated (None)."""
+    for v in ("refuted", "deferred", "rejected", "false_positive"):
+        assert orch._finding_dispatch_eligible(
+            _mk_finding(verdict=v, confidence=0.99)) is False
+
+
+def test_autoconfirm_only_product_bugs() -> None:
+    for cls in ("test_bug", "infra_bug", "uncertain"):
+        assert orch._finding_dispatch_eligible(
+            _mk_finding(classification=cls, verdict=None, confidence=0.99)) is False
+
+
+def test_autoconfirm_respects_r15_dispatch_state() -> None:
+    assert orch._finding_dispatch_eligible(
+        _mk_finding(verdict=None, confidence=0.99, dispatch_state="merged")) is False
 
 
 def test_cost_cap_default_is_one() -> None:

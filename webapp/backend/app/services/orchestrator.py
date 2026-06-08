@@ -1583,21 +1583,45 @@ def _archive_acceptance_dir(acceptance_dir: Path, run_id: str) -> Path | None:
 # highest-risk action stays small until proven.
 FOLLOWUP_COST_CAP = 1
 
+# A60: confidence-gated auto-confirm. The acceptance agent is a full copy of the
+# architect — when it root-causes a product_bug, falsifies the competing
+# (data/test/infra) hypotheses, and localizes the fix at high confidence, that
+# verified root cause IS the trust signal. The crew must then RESOLVE it, not
+# leave it flagged for a human gate-keeper. The dispatched fix still clears the
+# same doctrine + gate + merge bar as any BL, so a wrong fix can't merge — the
+# gate is the safety net, not manual confirmation. An operator can still veto by
+# POSTing verdict="rejected" (only verdict is None auto-confirms).
+FOLLOWUP_AUTOCONFIRM_CONFIDENCE = 0.90
+
+
+def _finding_dispatch_eligible(finding) -> bool:
+    """A60: is this finding eligible for follow-up dispatch?
+
+    Eligible iff it is an un-dispatched ``product_bug`` that is EITHER
+    operator-confirmed OR self-confirmed by a high-confidence, alternatives-
+    falsified agent root cause (``verdict is None`` and
+    ``confidence >= FOLLOWUP_AUTOCONFIRM_CONFIDENCE``). A finding the operator
+    explicitly rejected (``verdict`` set to anything else) is never dispatched.
+    R15 idempotency: any non-null ``dispatch_state`` excludes it.
+    """
+    if finding.classification != "product_bug" or finding.dispatch_state is not None:
+        return False
+    if finding.verdict == "confirmed":
+        return True
+    return (finding.verdict is None
+            and finding.confidence is not None
+            and finding.confidence >= FOLLOWUP_AUTOCONFIRM_CONFIDENCE)
+
 
 def _select_followup_candidates(findings, *, cost_cap=FOLLOWUP_COST_CAP):
     """Pure selector for auto-dispatch. Returns (to_dispatch, capped).
 
-    §9 Decision 1 (conservative gate): only operator-CONFIRMED
-    ``product_bug`` findings are eligible. R15 idempotency: a finding with
-    any non-null ``dispatch_state`` is excluded, so a re-run never
-    re-spawns on a finding already dispatched/merged.
+    Eligibility (A60): an un-dispatched ``product_bug`` that is operator-CONFIRMED
+    or self-confirmed by high agent confidence (see ``_finding_dispatch_eligible``).
+    R15 idempotency: a finding with any non-null ``dispatch_state`` is excluded,
+    so a re-run never re-spawns on a finding already dispatched/merged.
     """
-    eligible = [
-        f for f in findings
-        if f.classification == "product_bug"
-        and f.dispatch_state is None
-        and f.verdict == "confirmed"
-    ]
+    eligible = [f for f in findings if _finding_dispatch_eligible(f)]
     to_dispatch = eligible[:cost_cap]
     capped = len(eligible) - len(to_dispatch)
     return to_dispatch, capped
@@ -1756,10 +1780,13 @@ def select_followup_finding(repo_dir: Path, feature_slug: str, finding_id: str):
         return None, ledger, "unknown"
     if finding.classification != "product_bug":
         return finding, ledger, "not_product_bug"
-    if finding.verdict != "confirmed":
-        return finding, ledger, "not_confirmed"
     if finding.dispatch_state is not None:
         return finding, ledger, "already_dispatched"   # R15
+    # A60: eligible if operator-confirmed OR self-confirmed by high agent
+    # confidence (a copy of the architect root-caused it). "not_confirmed" now
+    # means "neither operator-confirmed nor confident enough to auto-confirm".
+    if not _finding_dispatch_eligible(finding):
+        return finding, ledger, "not_confirmed"
     return finding, ledger, None
 
 
