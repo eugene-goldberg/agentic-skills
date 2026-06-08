@@ -1711,6 +1711,26 @@ surface (e.g. several call sites, an API path AND a UI render path). You must:
 """
 
 
+def _should_self_confirm(finding, merged: bool) -> bool:
+    """A62: should a just-merged follow-up fix self-record verdict=confirmed?
+
+    Closes the self-resolution -> lessons seam. A finding reaches dispatch only
+    if it is operator-CONFIRMED (``verdict == "confirmed"``) or self-confirmed by
+    the A60 high-confidence path (``verdict is None`` + confidence >= 0.90). When
+    the dispatched fix MERGES through the full doctrine+gate+merge bar, a
+    still-unverdicted finding has earned a durable ``confirmed`` verdict so the
+    ABL-0016 lessons read-path (filter: {confirmed, deferred}) surfaces it on
+    future features — the crew remembers what it autonomously fixed.
+
+    The merge bar is the trust gate: a fix that cleared every BL guard is a
+    strictly stronger signal than the classification confidence dispatch already
+    trusts. We never touch a finding whose verdict the operator already set
+    (the ``verdict is None`` guard) — operator adjudication always wins. The
+    write is advisory (feeds an advisory store); it is NOT a new R-rule (I-2
+    unaffected)."""
+    return bool(merged) and finding.verdict is None
+
+
 async def _dispatch_one_followup(
     repo_dir: Path,
     repo_name: str,
@@ -1760,6 +1780,28 @@ async def _dispatch_one_followup(
         ledger.set_dispatch_state, finding.finding_id, state,
         merged_sha=merged_sha,
     )
+    # A62: cumulative-loop closure. A self-confirmed finding whose fix merged
+    # through the full doctrine+gate+merge bar becomes a durable advisory
+    # lesson — record verdict=confirmed so ABL-0016's read-path surfaces it on
+    # future features (closing the self-resolution -> lessons seam). The note
+    # marks provenance as crew-self-confirmed (NOT operator-triaged) so it stays
+    # honest + operator-auditable; operator-set verdicts are never overwritten.
+    # Advisory telemetry: a failure here must NEVER perturb the sprint (mirrors
+    # lessons.record_injection / the priors guards).
+    if _should_self_confirm(finding, merged):
+        try:
+            await asyncio.to_thread(
+                ledger.set_verdict, finding.finding_id, "confirmed",
+                f"self-confirmed by crew: dispatched fix merged through the full "
+                f"doctrine+gate bar ({(merged_sha or '')[:8]}); not operator-triaged. "
+                f"[A62 auto-resolution cumulative-loop closure]",
+            )
+            yield _evt("acceptance.followup.self_confirmed", run_id=run_id,
+                       finding_id=finding.finding_id, bl_id=bl_id,
+                       merged_sha=merged_sha)
+        except Exception as exc:
+            yield _evt("acceptance.followup.self_confirm_error", run_id=run_id,
+                       finding_id=finding.finding_id, error=str(exc))
     yield _evt("acceptance.followup.done", run_id=run_id,
                finding_id=finding.finding_id, bl_id=bl_id,
                outcome=state, merged_sha=merged_sha)

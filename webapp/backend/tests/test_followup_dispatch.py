@@ -325,6 +325,105 @@ def test_dispatch_confirmed_finding_marks_merged(tmp_path: Path, monkeypatch) ->
     assert f.dispatch_bl_id == "BL-ACCEPT-run-X-0"
 
 
+# ─── A62: self-resolution -> lessons seam closure ──────────────────────────
+
+
+def test_should_self_confirm_helper() -> None:
+    """Pure decision: a self-confirmed (verdict=None) finding that merged earns
+    a confirmed verdict; an operator-verdicted one or a non-merge does not."""
+    assert orch._should_self_confirm(_mk_finding(verdict=None), merged=True) is True
+    assert orch._should_self_confirm(_mk_finding(verdict=None), merged=False) is False
+    # operator already adjudicated -> never overwrite (their call wins)
+    assert orch._should_self_confirm(_mk_finding(verdict="confirmed"), merged=True) is False
+    assert orch._should_self_confirm(_mk_finding(verdict="deferred"), merged=True) is False
+
+
+def _fake_merge_flow(merged: bool):
+    async def fake_engineer_flow(repo_dir, repo_name, bl_id, timeout, rkb, *,
+                                 run_id=None, feature_slug=None,
+                                 section_override=None, task_id=None):
+        if merged:
+            yield {"type": "_meta", "phase": "merge_to_target", "ok": True,
+                   "merged_sha": "def5678", "bl_id": bl_id}
+        yield {"_orchestrator_outcome": True, "role": "engineer",
+               "bl_id": bl_id, "merged": merged, "no_op": False}
+    return fake_engineer_flow
+
+
+def test_self_confirmed_finding_becomes_lesson_on_merge(tmp_path: Path, monkeypatch) -> None:
+    """A62 headline: a high-confidence self-confirmed product_bug (verdict=None)
+    whose fix MERGES gets verdict=confirmed written back — so the ABL-0016
+    lessons read-path now surfaces it. Closes the cumulative loop end-to-end."""
+    from app.services import lessons as lsn
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    ledger._ensure_parent()
+    ledger.path.write_text(
+        _mk_finding(fid="sha256:self1", verdict=None, confidence=0.97).to_jsonl() + "\n",
+        encoding="utf-8",
+    )
+    # before: no confirmed lessons (verdict is None -> filtered out)
+    assert lsn.list_lessons(tmp_path) == []
+
+    monkeypatch.setattr(orch, "_engineer_flow", _fake_merge_flow(merged=True))
+    events = _drain(orch._dispatch_followup_engineers(
+        tmp_path, "repo", "run-SC", "feat_a", lambda *a, **k: {}, timeout=60,
+    ))
+
+    # verdict written back + provenance marker present
+    f = ledger.list_all()[0]
+    assert f.verdict == "confirmed"
+    assert "self-confirmed by crew" in (f.verdict_note or "")
+    assert "def5678" in (f.verdict_note or "")
+    # observable: a self_confirmed event was emitted
+    assert any(e.get("phase") == "orchestrator.acceptance.followup.self_confirmed"
+               for e in events)
+    # END-TO-END: the lessons read-path now surfaces this as a durable lesson
+    lessons = lsn.list_lessons(tmp_path)
+    assert [l.lesson_id for l in lessons] == ["sha256:self1"]
+    assert lessons[0].classification == "product_bug"
+
+
+def test_self_confirm_not_written_when_fix_not_merged(tmp_path: Path, monkeypatch) -> None:
+    """A non-merged fix proves nothing — verdict stays None, no lesson, no event."""
+    from app.services import lessons as lsn
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    ledger._ensure_parent()
+    ledger.path.write_text(
+        _mk_finding(fid="sha256:nm", verdict=None, confidence=0.97).to_jsonl() + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orch, "_engineer_flow", _fake_merge_flow(merged=False))
+    events = _drain(orch._dispatch_followup_engineers(
+        tmp_path, "repo", "run-NM", "feat_a", lambda *a, **k: {}, timeout=60,
+    ))
+    f = ledger.list_all()[0]
+    assert f.verdict is None
+    assert f.dispatch_state == "not_merged"
+    assert lsn.list_lessons(tmp_path) == []
+    assert not any(e.get("phase") == "orchestrator.acceptance.followup.self_confirmed"
+                   for e in events)
+
+
+def test_operator_verdict_not_clobbered_by_self_confirm(tmp_path: Path, monkeypatch) -> None:
+    """An operator-confirmed finding that merges keeps the operator's verdict +
+    note untouched — no self-confirm write, no self_confirmed event."""
+    ledger = FindingsLedger(tmp_path, "feat_a")
+    ledger._ensure_parent()
+    ledger.path.write_text(
+        _mk_finding(fid="sha256:op", verdict="confirmed").to_jsonl() + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(orch, "_engineer_flow", _fake_merge_flow(merged=True))
+    events = _drain(orch._dispatch_followup_engineers(
+        tmp_path, "repo", "run-OP", "feat_a", lambda *a, **k: {}, timeout=60,
+    ))
+    f = ledger.list_all()[0]
+    assert f.verdict == "confirmed"
+    assert "self-confirmed by crew" not in (f.verdict_note or "")
+    assert not any(e.get("phase") == "orchestrator.acceptance.followup.self_confirmed"
+                   for e in events)
+
+
 def test_dispatch_is_idempotent_on_rerun(tmp_path: Path, monkeypatch) -> None:
     """R15: re-running dispatch after a finding is merged yields no second
     spawn (selector excludes non-null dispatch_state)."""
