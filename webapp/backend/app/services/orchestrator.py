@@ -41,6 +41,7 @@ from app.services import volume_reaper as volume_reaper_svc
 from app.services import findings_ledger as findings_ledger_svc
 from app.services import lessons as lessons_svc
 from app.services import lessons_index as lessons_index_svc
+from app.services import pattern_profile as pattern_profile_svc
 from app.services import doctrine_spec as doctrine_spec_svc
 from app.services import traces as traces_svc
 from app.services.brownfield import classify_target, feature_artifact_dir
@@ -2935,6 +2936,20 @@ async def run_brief(
             ui_coverage_ratio=round(coverage["ratio"], 4),
             ui_coverage_threshold=min_ui_coverage_ratio,
         )
+
+        # ABL-0019 Batch C: refresh the per-target Pattern Profile from the
+        # eng_patterns.md files this sprint's engineers wrote, so the durable
+        # conventions compound and search_patterns surfaces them on the NEXT
+        # feature. Best-effort + off-thread (embeds via Ollama); a failure NEVER
+        # perturbs the completed sprint.
+        try:
+            entries = await asyncio.to_thread(pattern_profile_svc.extract_patterns, repo_dir)
+            if entries:
+                await asyncio.to_thread(pattern_profile_svc.consolidate, repo_dir, entries=entries)
+                n = await asyncio.to_thread(pattern_profile_svc.index_patterns, repo_dir, entries=entries)
+                yield _evt("pattern_profile.refreshed", n_patterns=n, n_sources=len(entries))
+        except Exception as exc:  # noqa: BLE001 — advisory; never perturb
+            yield _evt("pattern_profile.refresh_error", error=str(exc))
 
         # ABL-0014: acceptance pass — runs AFTER sprint_complete and BEFORE
         # doctrine_meta + closure_check. Advisory only (§E.1 Q3): exceptions

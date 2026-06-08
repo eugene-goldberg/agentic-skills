@@ -371,5 +371,39 @@ def search_lessons(query: str, k: int = 5) -> dict:
     return {"ok": True, "query": query, "lessons": hits}
 
 
+@mcp.tool()
+def search_patterns(query: str, k: int = 5) -> dict:
+    """Find this codebase's already-distilled CONVENTIONS that match what you are
+    about to do — by semantic similarity, above a relevance floor.
+
+    ABL-0019. Prior engineers recorded how THIS codebase does layering, naming,
+    error handling, DI, persistence, routing, auth, and which invariants to
+    preserve. Before re-deriving conventions from scratch, describe your task
+    (e.g. "adding a new database table and a CRUD route") and this returns the
+    closest distilled pattern(s). Conventions are **advisory** — ground each
+    against the current code; follow the house style unless you have a reason
+    not to. Returns an empty list when nothing is genuinely relevant.
+
+    Args:
+        query: natural-language description of the task / area you are touching.
+        k: max patterns to return (1-10).
+    """
+    if (b := _budget("search_patterns")):
+        return b
+    repo = os.getenv("RETRIEVAL_LESSONS_REPO") or os.getenv("RETRIEVAL_TARGET_REPO")
+    if not repo:
+        return {"ok": True, "query": query, "patterns": [], "note": "no target registered"}
+    try:
+        from app.services import pattern_profile as _pp
+        k = max(1, min(int(k), 10))
+        hits = _pp.search_patterns(repo, query, k=k)
+    except Exception as exc:  # noqa: BLE001 — advisory: never fail a sprint
+        msg = f"{type(exc).__name__}: {exc}"
+        _log({"tool": "search_patterns", "query": query, "error": msg})
+        return {"ok": True, "query": query, "patterns": [], "note": f"unavailable: {msg}"}
+    _log({"tool": "search_patterns", "query": query, "n_hits": len(hits)})
+    return {"ok": True, "query": query, "patterns": hits}
+
+
 if __name__ == "__main__":
     mcp.run()

@@ -93,6 +93,8 @@ RETRIEVAL_MCP_TOOLS = [
     "mcp__retrieval__graph_summary",
     # ABL-0016 Stage 1.5: pull prior lessons by a problem statement.
     "mcp__retrieval__search_lessons",
+    # ABL-0019: pull this codebase's distilled conventions by a problem statement.
+    "mcp__retrieval__search_patterns",
 ]
 
 

@@ -220,7 +220,10 @@ def render_lessons_block(lessons: list[Lesson], *, bl_id: Optional[str] = None) 
         "> More prior lessons may exist for this codebase. When you hit a "
         "specific problem, call the **`search_lessons`** retrieval tool with a "
         "short description of that problem to pull the closest-matching prior "
-        "lesson(s) — same advisory weight as above."
+        "lesson(s). To see how THIS codebase already does what you're about to "
+        "build (layering, naming, DI, invariants), call **`search_patterns`** "
+        "with a description of your task. Both are advisory — ground against the "
+        "current code."
     )
     out.append("")
     return "\n".join(out)
