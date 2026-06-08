@@ -1,6 +1,25 @@
 # ABL-0017 — Closed-loop doctrine efficacy (cumulative learning, Stage 2)
 
-> **Status: BATCH 0 VERIFICATION COMPLETE — gate did NOT cleanly pass.**
+> **STATUS 2026-06-08: STAGE 2 STARTED. Prereqs cleared + aggregator (Batch A) shipped.**
+> - **P1 doctrine-spec registry** ✅ (ABL-0020). **P2 per-run manifest** ✅ (ABL-0020).
+> - **P3 per-rule trigger events (A13)** ✅ **COMPLETE** — every enforcement event
+>   (16 `_ptag` sites) + streaming kills (R8/Tier1.5/R13, with `rule_id`) now seal
+>   into `phase_events.jsonl`; schema header + `traces.read_phase_events`; CI-pinned
+>   by `test_phase_events_sealing.py`. "Which rule fired in which run" is now
+>   reconstructable from the sealed archive.
+> - **Aggregator (Batch A)** ✅ `app/services/doctrine_efficacy.py` — joins sealed
+>   firings × `doctrine_manifest` × `bl_outcomes` → per-rule fire-rate +
+>   `never_fired_review_candidates` vs `unobserved_rules` (HONEST split: a rule
+>   whose phase never appears is unassessable, NOT dead — caught on real pre-A13
+>   data where gate/kill firings weren't sealed). Verified on real archives.
+> - **NEXT:** wire the aggregator into the doctrine-meta-agent (consume efficacy +
+>   add the `retire` Direction) + a read endpoint; accumulate post-A13 runs so the
+>   failure-class trend becomes assessable. I-7 stays operator-gated: this
+>   MEASURES, never auto-changes doctrine.
+>
+> ---
+>
+> **Status (original 2026-06-03): BATCH 0 VERIFICATION COMPLETE — gate did NOT cleanly pass.**
 > Author: architect. Date: 2026-06-03. Branch: `cumulative_learning`.
 > Stage 2 of [`CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md`](CUMULATIVE_LEARNING_IMPLEMENTATION_PLAN.md) §4.
 >
