@@ -541,7 +541,7 @@ async def _engineer_flow(
                                                           base_ref=cfg.agent_branch, run_id=run_id)
             yield _ptag({"type": "_meta", "phase": "bl_tests",
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
-                       "engineer", bl_id)
+                       "engineer", bl_id, trace=trace)
             gate_attempt = 0
             gate_signatures.append(f"{gate.get('kind')}:{','.join(sorted((gate.get('regressions') or []) + (gate.get('new_failures') or [])))}")
             # No-abort doctrine: keep fixing until the BL's tests are GREEN.
@@ -572,7 +572,7 @@ async def _engineer_flow(
                 yield _ptag({"type": "_meta", "phase": "bl_tests",
                             "gate_attempt": gate_attempt,
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
-                           "engineer", bl_id)
+                           "engineer", bl_id, trace=trace)
             if validation["ok"] and gate.get("ok"):
                 merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
                 # If transient (lock race, etc.), one retry with a short sleep
@@ -589,7 +589,7 @@ async def _engineer_flow(
                 if not merge.get("ok") and merge.get("kind") == "non_ff":
                     yield _ptag({"type": "_meta", "phase": "merge_rebase_attempt",
                                 "branch": wt.branch, "target_ref": cfg.agent_branch},
-                               "engineer", bl_id)
+                               "engineer", bl_id, trace=trace)
                     rebase = await _rebase_in_worktree(wt.path, cfg.agent_branch)
                     if rebase.get("ok"):
                         yield _ptag({"type": "_meta", "phase": "merge_rebase_succeeded",
@@ -598,7 +598,7 @@ async def _engineer_flow(
                                                                    target_ref=cfg.agent_branch, run_id=run_id)
                         yield _ptag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
                                     **{k: gate2.get(k) for k in ("ok","kind","regressions","failing_tests","reason","post_tail")}},
-                                   "engineer", bl_id)
+                                   "engineer", bl_id, trace=trace)
                         if gate2.get("ok"):
                             merge = await fast_forward_target(repo_dir, wt.branch,
                                                               target_ref=cfg.agent_branch)
@@ -609,17 +609,17 @@ async def _engineer_flow(
                     else:
                         yield _ptag({"type": "_meta", "phase": "merge_rebase_failed",
                                     "error": rebase.get("error"), "branch": wt.branch},
-                                   "engineer", bl_id)
+                                   "engineer", bl_id, trace=trace)
                 merged = bool(merge.get("ok"))
                 yield _ptag({"type": "_meta", "phase": "merge_to_target",
                             "ok": merge.get("ok"), "merged_sha": merge.get("merged_sha"),
                             "kind": merge.get("kind"), "error": merge.get("error"),
                             "branch": wt.branch},
-                           "engineer", bl_id)
+                           "engineer", bl_id, trace=trace)
             else:
                 yield _ptag({"type": "_meta", "phase": "awaiting_review",
                             "reason": gate.get("reason") or "doctrine incomplete"},
-                           "engineer", bl_id)
+                           "engineer", bl_id, trace=trace)
         # No-abort doctrine (Option A): a not-merged engineer has exhausted its
         # deep investigate→fix→re-test loop without a green gate. This is NOT a
         # routine abort — surface a full dossier so the orchestrator escalates to
@@ -754,7 +754,7 @@ async def _qa_or_scorer_flow(
                                                           base_ref=_bl_base, run_id=run_id)
             yield _ptag({"type": "_meta", "phase": "bl_tests",
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
-                       role, bl_id)
+                       role, bl_id, trace=trace)
             gate_attempt = 0
             while not gate.get("ok") and gate.get("kind") in ("failed", "no_tests") and gate_attempt < MAX_FIX_ATTEMPTS:
                 gate_attempt += 1
@@ -778,7 +778,7 @@ async def _qa_or_scorer_flow(
                 yield _ptag({"type": "_meta", "phase": "bl_tests",
                             "gate_attempt": gate_attempt,
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
-                           role, bl_id)
+                           role, bl_id, trace=trace)
             if validation["ok"] and gate.get("ok"):
                 merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
                 if not merge.get("ok") and merge.get("kind") == "error":
@@ -791,7 +791,7 @@ async def _qa_or_scorer_flow(
                 if not merge.get("ok") and merge.get("kind") == "non_ff":
                     yield _ptag({"type": "_meta", "phase": "merge_rebase_attempt",
                                 "branch": wt.branch, "target_ref": cfg.agent_branch},
-                               role, bl_id)
+                               role, bl_id, trace=trace)
                     rebase = await _rebase_in_worktree(wt.path, cfg.agent_branch)
                     if rebase.get("ok"):
                         yield _ptag({"type": "_meta", "phase": "merge_rebase_succeeded",
@@ -800,7 +800,7 @@ async def _qa_or_scorer_flow(
                                                                    target_ref=cfg.agent_branch, run_id=run_id)
                         yield _ptag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
                                     **{k: gate2.get(k) for k in ("ok","kind","regressions","failing_tests","reason","post_tail")}},
-                                   role, bl_id)
+                                   role, bl_id, trace=trace)
                         if gate2.get("ok"):
                             merge = await fast_forward_target(repo_dir, wt.branch,
                                                               target_ref=cfg.agent_branch)
@@ -810,13 +810,13 @@ async def _qa_or_scorer_flow(
                     else:
                         yield _ptag({"type": "_meta", "phase": "merge_rebase_failed",
                                     "error": rebase.get("error"), "branch": wt.branch},
-                                   role, bl_id)
+                                   role, bl_id, trace=trace)
                 merged = bool(merge.get("ok"))
                 yield _ptag({"type": "_meta", "phase": "merge_to_target",
                             "ok": merge.get("ok"), "merged_sha": merge.get("merged_sha"),
                             "kind": merge.get("kind"), "error": merge.get("error"),
                             "branch": wt.branch},
-                           role, bl_id)
+                           role, bl_id, trace=trace)
             else:
                 yield _ptag({"type": "_meta", "phase": "awaiting_review",
                             "reason": gate.get("reason")}, role, bl_id, trace=trace)
@@ -844,7 +844,7 @@ async def _qa_or_scorer_flow(
             if not merge.get("ok") and merge.get("kind") == "non_ff":
                 yield _ptag({"type": "_meta", "phase": "merge_rebase_attempt",
                             "branch": wt.branch, "target_ref": cfg.agent_branch},
-                           role, bl_id)
+                           role, bl_id, trace=trace)
                 rebase = await _rebase_in_worktree(wt.path, cfg.agent_branch)
                 if rebase.get("ok"):
                     yield _ptag({"type": "_meta", "phase": "merge_rebase_succeeded",
@@ -853,13 +853,13 @@ async def _qa_or_scorer_flow(
                 else:
                     yield _ptag({"type": "_meta", "phase": "merge_rebase_failed",
                                 "error": rebase.get("error"), "branch": wt.branch},
-                               role, bl_id)
+                               role, bl_id, trace=trace)
             merged = bool(merge.get("ok"))
             yield _ptag({"type": "_meta", "phase": "merge_to_target",
                         "ok": merge.get("ok"), "merged_sha": merge.get("merged_sha"),
                         "kind": merge.get("kind"), "error": merge.get("error"),
                         "branch": wt.branch},
-                       role, bl_id)
+                       role, bl_id, trace=trace)
         # No-abort doctrine: an escalation dossier the per-BL loop attaches if QA
         # could not complete (doctrine give-up or merge failure) — so the run
         # escalates to the operator with the full picture, never silently aborts.

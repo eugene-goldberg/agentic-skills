@@ -545,6 +545,7 @@ async def stream_agent_task(
                         "type": "_meta",
                         "phase": "retrieval",
                         "kind": "budget_exceeded",
+                        "rule_id": "R8",  # A13: per-rule keying for Stage-2 efficacy
                         "retrieval_call_count": retrieval_call_count,
                         "max": max_retrieval_calls,
                         "reason": (
@@ -555,6 +556,9 @@ async def stream_agent_task(
                     }
                     if trace is not None:
                         trace.write_event(bud_evt)
+                        # A13: seal the enforcement kill into phase_events.jsonl so
+                        # the sealed trace records that R8 fired (Stage-2 efficacy).
+                        trace.write_phase_event(bud_evt)
                     yield bud_evt
                     return
 
@@ -564,6 +568,7 @@ async def stream_agent_task(
                         "type": "_meta",
                         "phase": "pre_grounding_violation",
                         "kind": "insufficient",
+                        "rule_id": "Tier1.5",  # A13: per-rule keying (Stage-2 efficacy)
                         "grounded_count": grounded_count,
                         "required": min_pregrounding,
                         "reason": (
@@ -574,6 +579,7 @@ async def stream_agent_task(
                     }
                     if trace is not None:
                         trace.write_event(viol_evt)
+                        trace.write_phase_event(viol_evt)  # A13: seal Tier-1.5 kill
                     yield viol_evt
                     return
 
@@ -586,6 +592,7 @@ async def stream_agent_task(
                         "type": "_meta",
                         "phase": "forbidden_git_op",
                         "kind": "killed",
+                        "rule_id": "R13",  # A13: per-rule keying (Stage-2 efficacy)
                         "command": forbidden_git_op,
                         "reason": (
                             "Agent attempted a history-rewriting git command on its "
@@ -599,6 +606,7 @@ async def stream_agent_task(
                     }
                     if trace is not None:
                         trace.write_event(git_evt)
+                        trace.write_phase_event(git_evt)  # A13: seal R13 kill
                     yield git_evt
                     return
         finally:

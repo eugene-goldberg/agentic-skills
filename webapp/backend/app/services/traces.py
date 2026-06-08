@@ -55,6 +55,10 @@ def harness_sha() -> str:
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
+# A13: bump when the phase_events.jsonl record shape changes so consumers
+# (Stage-2 efficacy aggregator, observer) can detect drift.
+PHASE_EVENTS_SCHEMA_VERSION = 1
+
 
 def _slug(s: str) -> str:
     return _SAFE.sub("-", s).strip("-") or "x"
@@ -125,7 +129,13 @@ class TraceWriter:
         rec.setdefault("_ts", datetime.now(timezone.utc).isoformat())
         path = self.dir / "phase_events.jsonl"
         try:
+            # A13 mitigation #2: schema-versioned header as the first line, so a
+            # consumer (efficacy aggregator, observer) can detect schema drift +
+            # unknown event kinds rather than silently mis-parsing.
+            write_header = not path.exists()
             with path.open("a", encoding="utf-8") as fh:
+                if write_header:
+                    fh.write(json.dumps({"_schema_version": PHASE_EVENTS_SCHEMA_VERSION}) + "\n")
                 fh.write(json.dumps(rec, default=str) + "\n")
         except (OSError, ValueError, TypeError):
             # Defensive: phase event persistence is observability, not
@@ -210,3 +220,32 @@ def list_traces(repo: str | None = None, limit: int = 100) -> list[dict]:
                 continue
     rows.sort(key=lambda r: r.get("started_at", ""), reverse=True)
     return rows[:limit]
+
+
+def read_phase_events(trace_dir: Path | str) -> list[dict]:
+    """A13: canonical reader for a trace dir's ``phase_events.jsonl``.
+
+    Returns the sealed phase-event records in order, SKIPPING the
+    ``_schema_version`` header line. Tolerant of a missing file (returns [])
+    and of malformed lines (skips them). This is the parse the Stage-2 efficacy
+    aggregator + the observer should use, so header/schema handling lives in one
+    place.
+    """
+    path = Path(trace_dir) / "phase_events.jsonl"
+    out: list[dict] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict) and "_schema_version" in rec and "phase" not in rec:
+            continue  # header line
+        out.append(rec)
+    return out
