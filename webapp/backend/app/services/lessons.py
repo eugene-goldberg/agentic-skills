@@ -59,6 +59,13 @@ class Lesson:
     last_seen_ts: str
     source_run_id: str
     report_path: str
+    # A63: the A61 verified dossier, when the finding carries one. The
+    # ``root_cause`` (causal chain) and ``fix_locus`` (the surfaces the defect
+    # touched) are the durable, actionable knowledge a future agent should
+    # learn — far richer than the thin ``evidence_summary`` (which is often a
+    # serialized status blob). Empty for pre-A61 findings.
+    root_cause: str = ""
+    fix_locus: str = ""
 
     @classmethod
     def from_finding(cls, f: Finding) -> "Lesson":
@@ -73,6 +80,9 @@ class Lesson:
             last_seen_ts=f.last_seen_ts,
             source_run_id=f.run_id,
             report_path=f.report_path,
+            # getattr keeps this tolerant of older Finding shapes in tests.
+            root_cause=(getattr(f, "root_cause", "") or ""),
+            fix_locus=(getattr(f, "fix_locus", "") or ""),
         )
 
 
@@ -147,13 +157,39 @@ def list_lessons(
     return lessons
 
 
+# A63: per-lesson body cap. The verified root_cause can be long; bound it so a
+# handful of lessons can't crowd out the agent's actual task. Generous enough to
+# carry the causal chain + fix locus, not the whole dossier.
+_LESSON_BODY_CAP = 600
+
+
+def _lesson_body(lesson: Lesson) -> str:
+    """A63: the most useful description of a lesson.
+
+    Prefer the A61 verified ``root_cause`` (the causal chain) + ``fix_locus``
+    (the surfaces the defect touched) — that is the durable, actionable
+    knowledge. Fall back to the thin ``evidence_summary`` only when no dossier
+    exists (pre-A61 findings). This connects A61's dossiers to the ABL-0016
+    read-path so the crew learns *why* and *where*, not a status code."""
+    if lesson.root_cause.strip():
+        body = lesson.root_cause.strip()
+        if lesson.fix_locus.strip():
+            body = f"{body}  (fix locus: {lesson.fix_locus.strip()})"
+    else:
+        body = (lesson.summary or "").strip()
+    if len(body) > _LESSON_BODY_CAP:
+        body = body[: _LESSON_BODY_CAP - 1].rstrip() + "…"
+    return body
+
+
 def render_lessons_block(lessons: list[Lesson], *, bl_id: Optional[str] = None) -> str:
     """Render lessons as an advisory markdown block for prompt injection.
 
     Returns the empty string when there are no lessons — silent injection,
     no prompt noise (mirrors ``_build_priors_block``). The block leads with
     the advisory framing so the agent treats lessons as falsification
-    priors, not bans.
+    priors, not bans. Each lesson renders its richest available body (A63:
+    verified root_cause + fix_locus, else the thin evidence summary).
     """
     if not lessons:
         return ""
@@ -174,7 +210,7 @@ def render_lessons_block(lessons: list[Lesson], *, bl_id: Optional[str] = None) 
     for lesson in lessons:
         out.append(
             f"- **[{lesson.classification}]** ({lesson.feature_slug}) "
-            f"{lesson.summary}"
+            f"{_lesson_body(lesson)}"
         )
     out.append("")
     return "\n".join(out)

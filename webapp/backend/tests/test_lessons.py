@@ -176,6 +176,58 @@ def test_render_starts_with_separator(tmp_path: Path) -> None:
     assert block.split("\n", 2)[1] == "---"
 
 
+# ─── A63: render the verified A61 dossier, not the thin status blob ──────────
+
+
+def _mk_dossier_finding(*, fid: str, root_cause: str = "", fix_locus: str = "",
+                        evidence: str = '{"status":"fail"}') -> Finding:
+    return Finding(
+        finding_id=fid, run_id="r1", feature_slug="feat-a", journey_id="01",
+        journey_kind="ui", classification="product_bug", evidence_summary=evidence,
+        report_path="/tmp/report.json", first_seen_ts="2026-06-08T00:00:00Z",
+        last_seen_ts="2026-06-08T00:00:00Z", seen_count=1, verdict="confirmed",
+        root_cause=root_cause, fix_locus=fix_locus,
+    )
+
+
+def test_render_prefers_root_cause_over_evidence_summary(tmp_path: Path) -> None:
+    """The live smoke gap: a finding whose evidence_summary is a status blob but
+    that carries a verified root_cause must render the root_cause, not the blob."""
+    f = _mk_dossier_finding(
+        fid="d1",
+        root_cause="rest-aware streak consumed by ONE caller (api.py:210); NO frontend module calls it",
+        fix_locus="components.py:843 (badge) and components.py:967 (echart)",
+        evidence='{"classification":"product_bug","id":"01","status":"fail"}',
+    )
+    block = lsn.render_lessons_block([lsn.Lesson.from_finding(f)])
+    assert "rest-aware streak consumed by ONE caller" in block
+    assert "fix locus: components.py:843" in block
+    # the useless status blob is NOT what gets surfaced
+    assert '{"classification":"product_bug","id":"01","status":"fail"}' not in block
+
+
+def test_render_falls_back_to_summary_without_dossier(tmp_path: Path) -> None:
+    f = _mk_dossier_finding(fid="d2", root_cause="", fix_locus="",
+                            evidence="PUT bypasses the state machine")
+    block = lsn.render_lessons_block([lsn.Lesson.from_finding(f)])
+    assert "PUT bypasses the state machine" in block
+
+
+def test_render_caps_long_root_cause(tmp_path: Path) -> None:
+    f = _mk_dossier_finding(fid="d3", root_cause="x" * 5000)
+    block = lsn.render_lessons_block([lsn.Lesson.from_finding(f)])
+    assert "…" in block
+    # the rendered body is bounded (not the full 5000 chars)
+    assert len(block) < 2000
+
+
+def test_lesson_from_finding_carries_dossier() -> None:
+    f = _mk_dossier_finding(fid="d4", root_cause="rc", fix_locus="fl")
+    lesson = lsn.Lesson.from_finding(f)
+    assert lesson.root_cause == "rc"
+    assert lesson.fix_locus == "fl"
+
+
 # ─── ABL-0016 Batch C — injection provenance ────────────────────────────────
 
 
