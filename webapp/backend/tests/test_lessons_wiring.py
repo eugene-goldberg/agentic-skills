@@ -111,6 +111,29 @@ def test_qa_and_scorer_prompts_include_lessons_when_on(tmp_path: Path) -> None:
     assert "Relevant prior lessons" in score
 
 
+def test_po_prompt_includes_lessons_when_on(tmp_path: Path) -> None:
+    """PO gains 'this target's recurring failure modes at planning time' — the
+    one role only signature-checked above. Assert the block actually lands in
+    a brownfield PO prompt so all four roles have an end-to-end injection
+    proof, not just engineer/QA/scorer."""
+    _seed_confirmed_finding(tmp_path, "feat-a", "delete cascades orphan child rows")
+    prompt = prompts_svc.build_po(
+        "brownfield", "add reporting", "proj", tmp_path,
+        feature_slug="feat-a", inject_lessons=True,
+    )
+    assert "## Relevant prior lessons (advisory)" in prompt
+    assert "delete cascades orphan child rows" in prompt
+
+
+def test_po_prompt_excludes_lessons_when_off(tmp_path: Path) -> None:
+    _seed_confirmed_finding(tmp_path, "feat-a", "delete cascades orphan child rows")
+    prompt = prompts_svc.build_po(
+        "brownfield", "add reporting", "proj", tmp_path,
+        feature_slug="feat-a", inject_lessons=False,
+    )
+    assert "Relevant prior lessons" not in prompt
+
+
 def test_lessons_silent_when_no_findings(tmp_path: Path) -> None:
     # brownfield repo with no ledger at all -> flag on but block empty
     prompt = prompts_svc.build_engineer(
