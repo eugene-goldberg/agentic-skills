@@ -15,8 +15,16 @@ metadata:
   `cumulative_learning`) are historical/archival.
 - **`followup-dispatch-ui` is GONE** — merged into `main`, deleted local+remote
   on 2026-06-07. Do not reference it as active.
-- Both `development` and `main` currently at **`78559c3`** (in sync, pushed).
+- Both `development` and `main` currently at **`b7ab0b9`** (2026-06-08; in sync).
   Mid-session `development` may be N commits ahead of `main`.
+- Since `78559c3`: Exp 1b (crew PASSED no-telegraph discovery, 6/6); A56 warm-up
+  (live); the **self-resolution arc A57–A61** (crew now resolves merge failures +
+  acceptance findings autonomously) — see [[arch_self_resolution_arc]]; and the
+  first REAL third-party brownfield (`beaverhabits`, [[arch_target_beaverhabits]])
+  delivering "Rest Days" end-to-end (99 green). Frontier now = the CUMULATIVE
+  property ([[arch_cumulative_learning]]). DOCTRINE:
+  [[feedback_improve_crew_not_accommodate]] (improve crew generally; don't
+  accommodate one target; don't abdicate; 95%=rigor-before-act).
 - Brownfield targets have their OWN repos (the current target
   `project-management-app` has NO remote — feature work stays local on its
   `integration` branch; never committed into agentic-skills).
@@ -44,9 +52,11 @@ metadata:
    substrate.
 
 ## NEXT (open threads)
-- Next probes: (a) §5-withheld discovery variant; (b) Experiment 2 = real
-  third-party brownfield repo; (c) gate differential-detection-on-quiet-output
-  hardening (checkpoint is green-by-exit-code on `-q` targets).
+- **Exp-2 substrate now ESTABLISHED** (`beaverhabits` wired + gate-green); the
+  remaining step is to brief + launch a feature on it (candidate: streak
+  freeze/backfill). Other open: gate differential-detection-on-quiet-output
+  hardening (checkpoint green-by-exit-code on `-q` targets); A56 sub-items
+  (eager retrieval / A51 containment verify).
 - Running services: harness orchestrator uvicorn on :8000 (new code); target
   pm-app backend :8002 + frontend :3002 (Kanban board live).
 
