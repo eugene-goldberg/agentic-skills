@@ -1,5 +1,12 @@
 # ABL-0016 — Lessons-as-context (cumulative learning, Stage 1)
 
+> **STATUS 2026-06-08: `inject_lessons` flipped DEFAULT ON.** The calibration
+> smoke (`run-20260608T162952Z-ed37bc`, beaverhabits) passed clean — lessons
+> rendered into all roles (7 provenance records) across 2/2 `merged_full` BLs,
+> regression checkpoint green (126 passed, 0 regressions). Stage 1.5
+> (`search_lessons` semantic pull) and ABL-0019 (`search_patterns`) also shipped.
+> Batches A–C complete; Batch C operator gate satisfied.
+
 > **Status: DRAFT plan, operator approval required before implementation.**
 > Author: architect. Date: 2026-06-02. Branch: `cumulative_learning`.
 > Implements **Stage 1** of [`CUMULATIVE_LEARNING_ROADMAP.md`](CUMULATIVE_LEARNING_ROADMAP.md).

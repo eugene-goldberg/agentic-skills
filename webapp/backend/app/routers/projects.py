@@ -1171,11 +1171,16 @@ class RunBriefRequest(BaseModel):
     # writer; engineer gets non-PO work). Flipped only after a live
     # calibration smoke per ABL-0015_AUTO_DISPATCH_DESIGN.md §11 Batch E.
     run_acceptance_followup: bool = False
-    # ABL-0016 cumulative learning (Stage 1): inject prior operator-confirmed
-    # lessons (target-scoped, from the findings ledger) into the brownfield
-    # role prompts as advisory context. Default OFF until a calibration smoke
-    # (ABL-0016 §6 Batch C); mirrors the inject_acceptance_priors discipline.
-    inject_lessons: bool = False
+    # ABL-0016 cumulative learning: inject prior operator-confirmed lessons
+    # (target-scoped findings ledger) into the brownfield role prompts as
+    # advisory context, plus the Stage 1.5 search_lessons / ABL-0019
+    # search_patterns pull tools. DEFAULT ON (2026-06-08) — flipped after the
+    # calibration smoke (run-20260608T162952Z-ed37bc, beaverhabits) passed
+    # clean: lessons injected into all roles across 2/2 merged_full BLs,
+    # regression checkpoint green (126 passed, 0 regressions). Advisory-only,
+    # so un-gating is safe (agents ground against current code). Set False to
+    # roll back. Mirrors the run_acceptance default-OFF→ON history.
+    inject_lessons: bool = True
     # A48 pre-flight disk-free check (2026-06-01). Default advisory:
     # the check ALWAYS runs and emits an SSE event with the breakdown,
     # but only refuses the run (HTTP 409) when enforce=True. This

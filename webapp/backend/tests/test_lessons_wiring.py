@@ -40,8 +40,10 @@ def _seed_confirmed_finding(repo_root: Path, feature_slug: str, evidence: str) -
 # ─── request model ─────────────────────────────────────────────────────────
 
 
-def test_request_has_inject_lessons_default_false() -> None:
-    assert RunBriefRequest(brief="x" * 25).inject_lessons is False
+def test_request_has_inject_lessons_default_true() -> None:
+    # ABL-0016 flipped default OFF→ON 2026-06-08 after the calibration smoke
+    # (run-20260608T162952Z-ed37bc) passed clean. Advisory-only, so safe un-gated.
+    assert RunBriefRequest(brief="x" * 25).inject_lessons is True
 
 
 def test_request_accepts_inject_lessons_true() -> None:
