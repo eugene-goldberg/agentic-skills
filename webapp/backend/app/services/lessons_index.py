@@ -27,6 +27,7 @@ import hashlib
 import json
 import math
 import os
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,20 +55,39 @@ def _embed_model() -> str:
     return os.getenv("EMBEDDING_MODEL", "bge-m3")
 
 
-def embed_text(text: str, *, timeout: float = 30.0) -> list[float]:
-    """Embed ``text`` via local Ollama. Raises on failure (the public
-    ``search_lessons`` boundary catches and treats failure as empty)."""
-    req = urllib.request.Request(
-        f"{_ollama_host()}/api/embeddings",
-        data=json.dumps({"model": _embed_model(), "prompt": text}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        d = json.loads(resp.read().decode("utf-8"))
-    vec = d.get("embedding") or []
-    if len(vec) != EMBED_DIM:
-        raise ValueError(f"unexpected embedding dim {len(vec)} != {EMBED_DIM}")
-    return _normalize([float(x) for x in vec])
+# Bounded retry on the embed call. During a sprint EVERY agent grounds via
+# embeddings, so Ollama is contended and a single attempt intermittently times
+# out (measured: ~1/6 failures, latency 0.1–7.5s under live load). Without retry
+# the pull tool silently returns [] exactly when the system is busy — i.e. always
+# mid-sprint. Retries make it robust while staying advisory (the public boundary
+# still never raises into a sprint).
+_EMBED_RETRIES = 3
+_EMBED_BACKOFF = (0.5, 1.0, 2.0)
+
+
+def embed_text(text: str, *, timeout: float = 30.0, retries: int = _EMBED_RETRIES) -> list[float]:
+    """Embed ``text`` via local Ollama, retrying transient failures with
+    backoff. Raises only after exhausting retries (the public ``search_lessons``
+    boundary catches and treats that as empty)."""
+    last: Exception | None = None
+    for attempt in range(max(1, retries)):
+        try:
+            req = urllib.request.Request(
+                f"{_ollama_host()}/api/embeddings",
+                data=json.dumps({"model": _embed_model(), "prompt": text}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                d = json.loads(resp.read().decode("utf-8"))
+            vec = d.get("embedding") or []
+            if len(vec) != EMBED_DIM:
+                raise ValueError(f"unexpected embedding dim {len(vec)} != {EMBED_DIM}")
+            return _normalize([float(x) for x in vec])
+        except Exception as exc:  # noqa: BLE001 — retry transient contention
+            last = exc
+            if attempt < retries - 1:
+                time.sleep(_EMBED_BACKOFF[min(attempt, len(_EMBED_BACKOFF) - 1)])
+    raise last if last else RuntimeError("embed_text failed")
 
 
 def _normalize(vec: list[float]) -> list[float]:
