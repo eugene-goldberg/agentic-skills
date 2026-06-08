@@ -132,3 +132,38 @@ def test_noncode_kinds_exclude_code_defects() -> None:
     assert "infra_fail" in orch.JANITOR_NONCODE_KINDS
     for code_defect in ("failed", "no_tests", "regressed", "inconclusive", "green"):
         assert code_defect not in orch.JANITOR_NONCODE_KINDS
+
+
+# ── A58: engineer-path merge-error must route to the Janitor ──────────────────
+
+def test_engineer_janitor_trigger_merge_error_after_green_gate() -> None:
+    """The regression that escalated Exp-2 BL-0001: the gate was GREEN but
+    merge_to_target failed (dirty target checkout). last_gate_kind is "green"
+    (NOT a JANITOR_NONCODE_KIND), so the old guard skipped the Janitor. The
+    merge_error blocker must now fire it."""
+    dossier = {"role": "engineer", "bl_id": "BL-0001",
+               "last_gate_kind": "green",
+               "last_gate_reason": "BL unit tests green (41 passed)",
+               "blocker": "merge_error",
+               "merge_kind": "error",
+               "merge_error": "main checkout has modified tracked files; not merging"}
+    assert orch._engineer_janitor_trigger(dossier, run_janitor=True) is True
+    # …and the run_janitor=False rollback flag still disables it.
+    assert orch._engineer_janitor_trigger(dossier, run_janitor=False) is False
+
+
+def test_engineer_janitor_trigger_noncode_gate_kind() -> None:
+    """A non-code GATE kind (error/infra_fail) still fires the Janitor."""
+    for kind in ("error", "infra_fail"):
+        assert orch._engineer_janitor_trigger(
+            {"last_gate_kind": kind}, run_janitor=True) is True
+
+
+def test_engineer_janitor_trigger_green_gate_no_merge_failure_does_not_fire() -> None:
+    """A clean green gate with NO merge failure must NOT spawn the Janitor —
+    the merged-OK / code-defect paths are never the Janitor's business."""
+    assert orch._engineer_janitor_trigger(
+        {"last_gate_kind": "green"}, run_janitor=True) is False
+    for code_defect in ("failed", "no_tests", "regressed", "inconclusive"):
+        assert orch._engineer_janitor_trigger(
+            {"last_gate_kind": code_defect}, run_janitor=True) is False

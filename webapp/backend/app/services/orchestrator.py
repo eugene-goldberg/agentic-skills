@@ -482,6 +482,11 @@ async def _engineer_flow(
     # No-abort doctrine: always-defined so the escalation dossier can be built
     # on any not-merged exit (doctrine never passed, gate never went green, …).
     gate: dict | None = None
+    # A58: the MERGE result is a distinct failure surface from the gate. A
+    # green gate followed by a failed merge_to_target (e.g. dirty target
+    # checkout) must still route to the Janitor and produce an honest dossier,
+    # so keep the merge outcome always-defined for the not-merged exit.
+    merge: dict | None = None
     gate_attempt = 0
     gate_signatures: list[str] = []
     try:
@@ -620,6 +625,14 @@ async def _engineer_flow(
         # blocked. (no_op returned earlier; merged falls through to plain outcome.)
         if not merged and not no_op:
             last_failing = sorted((gate.get("regressions") or []) + (gate.get("new_failures") or [])) if gate else []
+            # A58: a MERGE-step failure (the gate was green but the branch could
+            # not be integrated — e.g. a dirty target checkout) is a NON-CODE
+            # blocker the Janitor owns, NOT a code defect the engineer's own
+            # investigate→fix→re-test loop owns. Detect it so (a) the Janitor
+            # trigger fires (it keyed only off `last_gate_kind`, which is "green"
+            # here) and (b) the escalation reason names the real blocker instead
+            # of the canned "could not reach a green gate".
+            merge_failed = bool(gate and gate.get("ok")) and merge is not None and not merge.get("ok")
             dossier = {
                 "role": "engineer", "bl_id": bl_id,
                 "doctrine_ok": bool(validation.get("ok")),
@@ -631,6 +644,10 @@ async def _engineer_flow(
                 "first_failure_signature": gate_signatures[0] if gate_signatures else None,
                 "exhausted_ceiling": gate_attempt >= MAX_FIX_ATTEMPTS,
             }
+            if merge_failed:
+                dossier["blocker"] = "merge_error"
+                dossier["merge_kind"] = merge.get("kind")
+                dossier["merge_error"] = merge.get("error")
             yield {"_orchestrator_outcome": True, "role": "engineer", "bl_id": bl_id,
                    "merged": False, "no_op": False, "escalated": True, "dossier": dossier}
             return
@@ -886,6 +903,25 @@ async def _qa_or_scorer_flow(
 # no-abort loop and must NOT route here — clean separation prevents the Janitor
 # masking a real test failure (SKILLS "Why you were spawned").
 JANITOR_NONCODE_KINDS = frozenset({"error", "infra_fail"})
+
+
+def _engineer_janitor_trigger(dossier: dict, run_janitor: bool) -> bool:
+    """A58: should the engineer-path Janitor fire for this escalation dossier?
+
+    Two non-code blocker surfaces, both owned by the Janitor (NOT the engineer's
+    own investigate→fix→re-test loop, which owns code-defect gate kinds):
+
+    1. a non-code GATE kind (``error`` / ``infra_fail``); or
+    2. a MERGE-step failure that escalated AFTER a green gate
+       (``blocker == "merge_error"``) — the engineer-path analogue of the QA
+       merge-failed branch. This previously slipped through because the guard
+       inspected only ``last_gate_kind``, which is ``"green"`` when the gate
+       passed but ``merge_to_target`` failed (e.g. a dirty target checkout).
+    """
+    if not run_janitor:
+        return False
+    return (dossier.get("last_gate_kind") in JANITOR_NONCODE_KINDS
+            or dossier.get("blocker") == "merge_error")
 
 
 def _build_janitor_task(skill: str, *, run_id: str, feature_slug: str | None,
@@ -2481,13 +2517,26 @@ async def run_brief(
                 # diagnosis attach to the escalation dossier. (Auto re-run of the
                 # BL after repair is a separate, larger increment — the per-BL
                 # body must first become a retryable unit; see handoff.)
-                if run_janitor and _dossier.get("last_gate_kind") in JANITOR_NONCODE_KINDS:
+                # A58: fire on a non-code GATE kind (error/infra_fail) OR on a
+                # merge-step failure that escalated after a GREEN gate (blocker
+                # == "merge_error"). The latter previously slipped through because
+                # the guard inspected only `last_gate_kind`, which is "green" when
+                # the gate passed but merge_to_target failed (e.g. dirty target
+                # checkout) — the engineer-path analogue of the QA merge-failed
+                # branch, which already spawns the Janitor unconditionally.
+                _merge_blocked = _dossier.get("blocker") == "merge_error"
+                if _engineer_janitor_trigger(_dossier, run_janitor):
+                    _failed_kind = (_dossier.get("merge_kind") if _merge_blocked
+                                    else _dossier.get("last_gate_kind"))
+                    _blocker_reason = (
+                        str(_dossier.get("merge_error") or "merge_to_target failed") if _merge_blocked
+                        else str(_dossier.get("last_gate_reason")
+                                 or _dossier.get("last_gate_kind") or "non-code failure"))
                     try:
                         async for je in _run_janitor(
                             repo_dir, repo_name, run_id, feature_slug,
-                            failed_step=f"engineer.{_dossier.get('last_gate_kind')}",
-                            blocker_reason=str(_dossier.get("last_gate_reason")
-                                               or _dossier.get("last_gate_kind") or "non-code failure"),
+                            failed_step=f"engineer.{'merge_error' if _merge_blocked else _failed_kind}",
+                            blocker_reason=_blocker_reason,
                             failing_role="engineer", bl_id=bl_id, timeout=timeout_per_role):
                             yield je
                         _dossier["janitor"] = getattr(_run_janitor, "last_outcome", None) or {}
@@ -2496,10 +2545,20 @@ async def run_brief(
                 summary["bls"].append(per_bl)
                 bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "engineer_escalated"})
                 _checkpoint(current_bl=None)  # A7
+                # A58: an honest reason. A merge-step failure is NOT "could not
+                # reach a green gate" — the gate was green; the branch could not
+                # be integrated. Name the real blocker so the dossier and the
+                # reason agree (I-5 truthful aggregation).
+                if _dossier.get("blocker") == "merge_error":
+                    _esc_reason = (
+                        f"engineer's {bl_id} passed its gate ({_dossier.get('last_gate_reason')}) "
+                        f"but could not be merged: {_dossier.get('merge_error') or _dossier.get('merge_kind')}"
+                        + ("" if _dossier.get("janitor") else " (Janitor did not resolve it)"))
+                else:
+                    _esc_reason = (f"engineer could not reach a green gate for {bl_id} "
+                                   f"after exhaustive investigate→fix→re-test attempts")
                 yield _evt("bl.escalated", bl_id=bl_id, role="engineer",
-                           reason=f"engineer could not reach a green gate for {bl_id} "
-                                  f"after exhaustive investigate→fix→re-test attempts",
-                           dossier=_dossier)
+                           reason=_esc_reason, dossier=_dossier)
                 yield _evt("bl.done", bl_id=bl_id, outcome="engineer_escalated")
                 if stop_on_failure:
                     terminal_status = "escalated"
