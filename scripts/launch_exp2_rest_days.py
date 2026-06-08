@@ -43,18 +43,37 @@ from the actual codebase):
 6. Existing behavior must be preserved exactly for habits that use no rest days.
    All existing tests must continue to pass.
 
-Out of scope: UI styling polish, bulk import, notifications.
+Out of scope: UI styling polish, bulk import, notifications. Do NOT touch,
+extend, or "improve" the application's storage backends, persistence layer, or
+any infrastructure plumbing (file/disk storage, database session wiring, the
+FilePersistentDict/user_file machinery). This feature is ordinary web-app
+business logic over the EXISTING habit/record model and the EXISTING HTTP API —
+nothing below that line.
 
-Acceptance: the feature must be verifiable through the API. Provide tests
-demonstrating that a rest day bridges a streak across a gap; that a rest day is
-not counted as a completion; that done/rest are mutually exclusive; and that a
-normal missed day still breaks the streak.
+TESTING CONSTRAINTS (hard requirements — the regression gate depends on them):
+- Put ALL of your new tests in a brand-new, dedicated file: tests/test_rest_days.py.
+- Do NOT modify, append to, or import wholesale any of the application's
+  pre-existing test files (e.g. tests/test_storage.py, tests/test_apis.py,
+  tests/test_gui.py). Those exercise the app's storage backends and other
+  infrastructure that is OUT OF SCOPE here; editing them drags backend-storage
+  smoke tests into this feature's gate, which is wrong.
+- Your tests must target the FEATURE itself: the rest-day HTTP API endpoints and
+  the rest-aware streak/completion business logic — the substance a user cares
+  about. Test it the way you would test any typical web application: drive the
+  HTTP API and assert behavior. Do not write tests about disk files, JSON
+  serialization formats, or storage-backend internals.
+
+Acceptance: the feature must be verifiable through the API. Provide tests (in
+tests/test_rest_days.py) demonstrating that a rest day bridges a streak across a
+gap; that a rest day is not counted as a completion; that done/rest are mutually
+exclusive; and that a normal missed day still breaks the streak.
 """
 
 payload = {
     "brief": BRIEF,
     "project_name": "rest-days-streak-freeze",
     "feature_name": "rest-days-streak-freeze",
+    "skip_po": False,             # fresh PO so the new testing constraints land in each BL spec
     "stop_on_failure": True,      # halt at first escalation → capture any wall cleanly
     "run_acceptance": True,       # whole-feature API E2E + the one full-suite regression checkpoint
     "run_doctrine_meta": True,    # post-sprint self-hardening analysis

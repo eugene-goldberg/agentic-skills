@@ -648,6 +648,10 @@ async def _engineer_flow(
                 dossier["blocker"] = "merge_error"
                 dossier["merge_kind"] = merge.get("kind")
                 dossier["merge_error"] = merge.get("error")
+                # A59: the agent branch survives worktree removal — record it so
+                # the orchestrator can RE-ATTEMPT the merge after the Janitor
+                # repairs the environment (full resolution, not repair-and-escalate).
+                dossier["merge_branch"] = wt.branch
             yield {"_orchestrator_outcome": True, "role": "engineer", "bl_id": bl_id,
                    "merged": False, "no_op": False, "escalated": True, "dossier": dossier}
             return
@@ -922,6 +926,19 @@ def _engineer_janitor_trigger(dossier: dict, run_janitor: bool) -> bool:
         return False
     return (dossier.get("last_gate_kind") in JANITOR_NONCODE_KINDS
             or dossier.get("blocker") == "merge_error")
+
+
+def _should_remerge_after_janitor(dossier: dict) -> bool:
+    """A59: after the Janitor runs on a merge failure, RE-ATTEMPT the merge iff
+    it was a merge_error, the Janitor reported the environment ``repaired``, and
+    we recorded the branch to merge. This is the "agent fully resolves its own
+    issue" standard — a dirty checkout is something a competent engineer just
+    cleans and re-merges, so the Janitor must complete the resolution in-loop
+    rather than repair-and-still-escalate.
+    """
+    return (dossier.get("blocker") == "merge_error"
+            and (dossier.get("janitor") or {}).get("status") == "repaired"
+            and bool(dossier.get("merge_branch")))
 
 
 def _build_janitor_task(skill: str, *, run_id: str, feature_slug: str | None,
@@ -2525,6 +2542,7 @@ async def run_brief(
                 # checkout) — the engineer-path analogue of the QA merge-failed
                 # branch, which already spawns the Janitor unconditionally.
                 _merge_blocked = _dossier.get("blocker") == "merge_error"
+                _recovered = False
                 if _engineer_janitor_trigger(_dossier, run_janitor):
                     _failed_kind = (_dossier.get("merge_kind") if _merge_blocked
                                     else _dossier.get("last_gate_kind"))
@@ -2542,32 +2560,60 @@ async def run_brief(
                         _dossier["janitor"] = getattr(_run_janitor, "last_outcome", None) or {}
                     except Exception as exc:  # noqa: BLE001 — Janitor is advisory; never block the escalation
                         yield _evt("janitor.error", bl_id=bl_id, run_id=run_id, error=str(exc)[:300])
-                summary["bls"].append(per_bl)
-                bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "engineer_escalated"})
-                _checkpoint(current_bl=None)  # A7
-                # A58: an honest reason. A merge-step failure is NOT "could not
-                # reach a green gate" — the gate was green; the branch could not
-                # be integrated. Name the real blocker so the dossier and the
-                # reason agree (I-5 truthful aggregation).
-                if _dossier.get("blocker") == "merge_error":
-                    _esc_reason = (
-                        f"engineer's {bl_id} passed its gate ({_dossier.get('last_gate_reason')}) "
-                        f"but could not be merged: {_dossier.get('merge_error') or _dossier.get('merge_kind')}"
-                        + ("" if _dossier.get("janitor") else " (Janitor did not resolve it)"))
-                else:
-                    _esc_reason = (f"engineer could not reach a green gate for {bl_id} "
-                                   f"after exhaustive investigate→fix→re-test attempts")
-                yield _evt("bl.escalated", bl_id=bl_id, role="engineer",
-                           reason=_esc_reason, dossier=_dossier)
-                yield _evt("bl.done", bl_id=bl_id, outcome="engineer_escalated")
-                if stop_on_failure:
-                    terminal_status = "escalated"
-                    yield _evt("escalated", bl_id=bl_id, role="engineer",
-                               reason=f"engineer escalated {bl_id} for operator review "
-                                      f"(no-abort doctrine, Option A — dossier attached)",
-                               dossier=_dossier)
-                    return
-                continue
+                    # A59: the Janitor must FULLY resolve a merge failure, not
+                    # repair-and-escalate. If it repaired the environment, RE-ATTEMPT
+                    # the merge it was blocked on (the agent branch survived worktree
+                    # removal). Success → the BL is integrated and proceeds through the
+                    # normal QA/scorer continuation, exactly as a clean merge would.
+                    # This is the "agent resolves its own issue to completion" standard:
+                    # a dirty checkout is something a copy of me would just fix and
+                    # re-merge, so the system must let the Janitor do the same.
+                    if _should_remerge_after_janitor(_dossier):
+                        remerge = await fast_forward_target(
+                            repo_dir, _dossier["merge_branch"], target_ref=cfg.agent_branch)
+                        yield _evt("merge_retry_post_janitor", bl_id=bl_id, role="engineer",
+                                   ok=remerge.get("ok"), merged_sha=remerge.get("merged_sha"),
+                                   kind=remerge.get("kind"), error=remerge.get("error"),
+                                   branch=_dossier.get("merge_branch"))
+                        if remerge.get("ok"):
+                            _recovered = True
+                            if eng_outcome is not None:
+                                eng_outcome["merged"] = True
+                            yield _evt("janitor.resolved", bl_id=bl_id, role="engineer",
+                                       reason=(f"Janitor repaired the environment and the merge "
+                                               f"landed ({(remerge.get('merged_sha') or '')[:8]}); "
+                                               f"{bl_id} fully resolved in-loop — no escalation"))
+                if not _recovered:
+                    summary["bls"].append(per_bl)
+                    bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "engineer_escalated"})
+                    _checkpoint(current_bl=None)  # A7
+                    # A58: an honest reason. A merge-step failure is NOT "could not
+                    # reach a green gate" — the gate was green; the branch could not
+                    # be integrated. Name the real blocker so the dossier and the
+                    # reason agree (I-5 truthful aggregation).
+                    if _dossier.get("blocker") == "merge_error":
+                        _esc_reason = (
+                            f"engineer's {bl_id} passed its gate ({_dossier.get('last_gate_reason')}) "
+                            f"but could not be merged: {_dossier.get('merge_error') or _dossier.get('merge_kind')}"
+                            + ("" if _dossier.get("janitor") else " (Janitor did not resolve it)"))
+                    else:
+                        _esc_reason = (f"engineer could not reach a green gate for {bl_id} "
+                                       f"after exhaustive investigate→fix→re-test attempts")
+                    yield _evt("bl.escalated", bl_id=bl_id, role="engineer",
+                               reason=_esc_reason, dossier=_dossier)
+                    yield _evt("bl.done", bl_id=bl_id, outcome="engineer_escalated")
+                    if stop_on_failure:
+                        terminal_status = "escalated"
+                        yield _evt("escalated", bl_id=bl_id, role="engineer",
+                                   reason=f"engineer escalated {bl_id} for operator review "
+                                          f"(no-abort doctrine, Option A — dossier attached)",
+                                   dossier=_dossier)
+                        return
+                    continue
+                # A59: Janitor-recovered merge — reindex then fall through to the
+                # normal QA/scorer continuation (same as a clean merge).
+                async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}"):
+                    yield e
             else:
                 # Reindex post-engineer (only when engineer actually committed)
                 async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}"):

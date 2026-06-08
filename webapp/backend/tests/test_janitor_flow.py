@@ -167,3 +167,47 @@ def test_engineer_janitor_trigger_green_gate_no_merge_failure_does_not_fire() ->
     for code_defect in ("failed", "no_tests", "regressed", "inconclusive"):
         assert orch._engineer_janitor_trigger(
             {"last_gate_kind": code_defect}, run_janitor=True) is False
+
+
+# ── A59: Janitor must FULLY resolve a merge failure (re-merge after repair) ────
+
+def test_remerge_after_janitor_when_repaired() -> None:
+    """The full-resolution standard: a merge_error the Janitor REPAIRED, with a
+    known branch, must trigger a re-attempt of the merge (not escalation)."""
+    assert orch._should_remerge_after_janitor({
+        "blocker": "merge_error",
+        "merge_branch": "agent/abc123",
+        "janitor": {"status": "repaired", "retry": True},
+    }) is True
+
+
+def test_no_remerge_when_janitor_did_not_repair() -> None:
+    """If the Janitor could not repair (escalated), do NOT blindly re-merge —
+    that would be a give-up dressed as a retry. Fall through to honest escalation."""
+    assert orch._should_remerge_after_janitor({
+        "blocker": "merge_error",
+        "merge_branch": "agent/abc123",
+        "janitor": {"status": "escalated", "retry": False},
+    }) is False
+    # missing janitor outcome entirely → no re-merge
+    assert orch._should_remerge_after_janitor({
+        "blocker": "merge_error", "merge_branch": "agent/abc123",
+    }) is False
+
+
+def test_no_remerge_when_not_a_merge_error() -> None:
+    """A code-defect / non-merge blocker is owned by the engineer's own loop —
+    never re-merged by the Janitor path even if a 'repaired' verdict appears."""
+    assert orch._should_remerge_after_janitor({
+        "last_gate_kind": "error",
+        "merge_branch": "agent/abc123",
+        "janitor": {"status": "repaired"},
+    }) is False
+
+
+def test_no_remerge_without_known_branch() -> None:
+    """Can't re-merge what we can't name — missing merge_branch → no re-merge."""
+    assert orch._should_remerge_after_janitor({
+        "blocker": "merge_error",
+        "janitor": {"status": "repaired"},
+    }) is False
