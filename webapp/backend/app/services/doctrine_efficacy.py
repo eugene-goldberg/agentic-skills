@@ -74,7 +74,20 @@ _NON_RULE_PHASES = {
     "worktree_ready", "brief_persisted", "spawn", "exit", "no_op",
     "merge_to_target", "merge_rebase_attempt", "merge_rebase_succeeded",
     "merge_rebase_failed", "awaiting_review",
+    # A64: acceptance-flow lifecycle markers (sealed alongside the
+    # regression_checkpoint firing) — they're navigation, not enforcement.
+    "acceptance.start", "acceptance.attempt.start", "acceptance.attempt.error",
+    "acceptance.done", "acceptance.skipped", "acceptance.error",
+    "acceptance.followup.error", "regression_checkpoint.error",
+    "pattern_profile.refreshed", "pattern_profile.refresh_error",
 }
+
+# A64: phases that ARE enforcement firings but aren't R-rules — tracked under
+# their own phase name in the efficacy report (exactly like ``doctrine_check``).
+# ``regression_checkpoint`` is the one full-suite gate that protects PRE-EXISTING
+# behavior (the simple gating model's single integration checkpoint); a "caught"
+# here is a collateral regression the per-BL gates missed.
+_PHASE_AS_PSEUDO_RULE = {"regression_checkpoint"}
 
 
 @dataclass
@@ -113,6 +126,12 @@ def extract_firings(run_id: str, *, archive_root: Path | None = None) -> list[Ru
         role = _role_of(tdir.name)
         for ev in _traces.read_phase_events(tdir):
             phase = ev.get("phase")
+            # A64: acceptance-flow events seal via ``_evt`` which prefixes
+            # ``orchestrator.``; per-BL events seal via ``_ptag`` un-prefixed.
+            # Normalize so both conventions key the same maps below (no-op for
+            # the already-un-prefixed engineer/QA events).
+            if isinstance(phase, str) and phase.startswith("orchestrator."):
+                phase = phase[len("orchestrator."):]
             if not phase or phase in _NON_RULE_PHASES:
                 continue
             kind = ev.get("kind")
@@ -120,6 +139,10 @@ def extract_firings(run_id: str, *, archive_root: Path | None = None) -> list[Ru
             explicit = ev.get("rule_id")
             if explicit:  # streaming kills (R8 / Tier1.5 / R13) always = a catch
                 out.append(RuleFiring(explicit, phase, kind, True, bl_id, tdir.name))
+                continue
+            if phase in _PHASE_AS_PSEUDO_RULE:  # A64: e.g. regression_checkpoint
+                caught = kind in _CATCH_KINDS["gate"]
+                out.append(RuleFiring(phase, phase, kind, caught, bl_id, tdir.name))
                 continue
             if phase == "doctrine_check":
                 caught = kind in _CATCH_KINDS["doctrine_check"]

@@ -1,5 +1,23 @@
 # ABL-0017 — Closed-loop doctrine efficacy (cumulative learning, Stage 2)
 
+> **STATUS 2026-06-08 (EOD): STAGE 2 EMPIRICALLY CLOSED + A64 follow-up shipped.**
+> The FIRST post-A13 *sealed* sprint ran clean: `run-20260608T212413Z-9b397a`
+> (beaverhabits, "Habit Insights", 2/2 BLs `merged_full`, regression checkpoint
+> green 152, acceptance 0 findings, closure 0 violations). The
+> `doctrine_meta.efficacy` event + `traces_archive/<run>/doctrine_efficacy.json`
+> confirm the loop works **honestly**: gate firings now seal+read (`R10` moved
+> `unobserved → never_fired`, runs_present 0→1 — the single transition proving
+> A13 made the per-BL gate visible); 10 guardrails correctly held `unobserved`
+> (not dead); **zero false retirement signals**; the meta-agent proposed `retire`
+> on nothing (R10 n=1 ≪ the ≥5 bar) and instead self-filed a TIGHTEN proposal.
+> That proposal → **A64** (shipped same day): A13's scope excluded the acceptance
+> flow, so the integration `regression_checkpoint` was invisible to the
+> aggregator. Now sealed + counted as a pseudo-rule (`green→clean`,
+> `regressed→caught`); `tests/test_acceptance_checkpoint_sealing.py` (+6); full
+> suite 406 passed. End-to-end live proof of A64 awaits the next sealed sprint
+> (restart the harness to activate). The self-hardening loop diagnosing its own
+> blind spot from sealed evidence = I-7 working.
+>
 > **STATUS 2026-06-08: STAGE 2 STARTED. Prereqs cleared + aggregator (Batch A) shipped.**
 > - **P1 doctrine-spec registry** ✅ (ABL-0020). **P2 per-run manifest** ✅ (ABL-0020).
 > - **P3 per-rule trigger events (A13)** ✅ **COMPLETE** — every enforcement event

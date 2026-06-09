@@ -1887,6 +1887,11 @@ async def _acceptance_flow(
     inject_acceptance_priors: bool = False,
     retrieval_kwargs_builder=None,  # ABL-0015 Batch B: needed to spawn followup engineer
     run_acceptance_followup: bool = False,  # ABL-0015: auto-dispatch; OFF until calibrated
+    trace=None,  # A13-followup (A64): caller-supplied TraceWriter so the acceptance
+                 # flow seals its enforcement phase events (regression_checkpoint +
+                 # lifecycle) into the SAME co-located phase_events.jsonl the
+                 # ABL-0017 efficacy aggregator reads. None → create our own (the
+                 # standalone /run-acceptance path).
 ) -> AsyncIterator[dict]:
     """ABL-0014 Acceptance Agent.
 
@@ -1979,7 +1984,25 @@ async def _acceptance_flow(
             api_route_globs=cfg.effective_api_route_globs(),
         )
 
-    yield _evt(
+    # A13-followup (A64): resolve the trace BEFORE the first phase event so the
+    # acceptance flow's enforcement/lifecycle events seal into a co-located
+    # phase_events.jsonl. The caller (sprint runner) supplies one shared with the
+    # regression_checkpoint seal; standalone /run-acceptance creates its own.
+    if trace is None:
+        trace = TraceWriter(repo=repo_name, role="acceptance", task_id=run_id)
+
+    def _seal(evt: dict) -> dict:
+        """Seal an orchestrator-built acceptance phase event into the trace's
+        phase_events.jsonl, then return it for yielding. Defensive: sealing is
+        observability, never a sprint blocker (write_phase_event is itself
+        try/excepted)."""
+        try:
+            trace.write_phase_event(evt)
+        except Exception:  # noqa: BLE001
+            pass
+        return evt
+
+    yield _seal(_evt(
         "acceptance.start",
         run_id=run_id,
         feature_slug=feature_slug,
@@ -1993,10 +2016,9 @@ async def _acceptance_flow(
         backend_bls_source=(
             "override" if backend_bls_override is not None else "computed"
         ),
-    )
+    ))
 
     skill = prompts_brownfield_svc._load_skill("acceptance")
-    trace = TraceWriter(repo=repo_name, role="acceptance", task_id=run_id)
     acceptance_dir_wt = wt.path / acceptance_rel  # validator reads the worktree copy
     validation: dict = {"ok": False, "missing": [], "empty": [], "summary": "no attempts"}
     last_attempt = 0
@@ -2022,12 +2044,12 @@ async def _acceptance_flow(
                 repo_dir=repo_dir,
                 inject_acceptance_priors=inject_acceptance_priors,
             )
-            yield _evt(
+            yield _seal(_evt(
                 "acceptance.attempt.start",
                 run_id=run_id,
                 attempt=attempt,
                 max_attempts=1 + ACCEPTANCE_MAX_RETRIES,
-            )
+            ))
             try:
                 async for event in stream_agent_task(
                     task,
@@ -2167,7 +2189,7 @@ async def _acceptance_flow(
         except Exception as exc:  # noqa: BLE001 — advisory: never abort sprint
             yield _evt("acceptance.followup.error", run_id=run_id, error=str(exc))
 
-    yield _evt(
+    yield _seal(_evt(
         "acceptance.done",
         run_id=run_id,
         feature_slug=feature_slug,
@@ -2177,7 +2199,7 @@ async def _acceptance_flow(
         backend_bls=backend_bls,
         findings_persisted=findings_persisted,
         batch="B",
-    )
+    ))
 
 
 # ─── doctrine-meta flow (B-3 / I-7 self-hardening) ─────────────────────────
@@ -3002,6 +3024,15 @@ async def run_brief(
         # are surfaced as acceptance.error and never abort the sprint.
         # Default off until §E.1 Q6 calibration (3 smoke runs) flips it on.
         if run_acceptance:
+            # A13-followup (A64): one TraceWriter shared by the regression
+            # checkpoint AND the acceptance flow, so both seal their enforcement
+            # phase events into a single co-located phase_events.jsonl that the
+            # ABL-0017 efficacy aggregator joins against. Before A64 the
+            # integration checkpoint — the one gate that protects PRE-EXISTING
+            # behavior — was invisible to the self-hardening loop (its own crew
+            # surfaced this gap from sealed evidence).
+            acceptance_trace = TraceWriter(
+                repo=repo_name, role="acceptance", task_id=run_id)
             # Simple gating model (2026-06-06) — the ONE full-suite regression
             # checkpoint: run the entire pre-existing suite of the assembled
             # feature against the sprint-start baseline to catch collateral
@@ -3015,11 +3046,16 @@ async def run_brief(
                     rc = await regression_gate_svc.run_gate(
                         repo_dir, agent_branch=_accfg.agent_branch,
                         target_ref=run_base_sha, run_id=run_id)
-                    yield _evt("regression_checkpoint",
-                               ok=rc.get("ok"), kind=rc.get("kind"),
-                               reason=rc.get("reason"),
-                               regressions=(rc.get("regressions") or [])[:50],
-                               failing_tests=(rc.get("failing_tests") or [])[:50])
+                    rc_evt = _evt("regression_checkpoint",
+                                  ok=rc.get("ok"), kind=rc.get("kind"),
+                                  reason=rc.get("reason"),
+                                  regressions=(rc.get("regressions") or [])[:50],
+                                  failing_tests=(rc.get("failing_tests") or [])[:50])
+                    try:  # A64: seal — defensive, observability never blocks
+                        acceptance_trace.write_phase_event(rc_evt)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    yield rc_evt
                 except Exception as exc:  # noqa: BLE001
                     yield _evt("regression_checkpoint.error", error=str(exc))
             try:
@@ -3032,6 +3068,7 @@ async def run_brief(
                     inject_acceptance_priors=inject_acceptance_priors,
                     retrieval_kwargs_builder=retrieval_kwargs_builder,
                     run_acceptance_followup=run_acceptance_followup,
+                    trace=acceptance_trace,  # A64: share the checkpoint's trace
                 ):
                     yield evt
             except Exception as exc:
