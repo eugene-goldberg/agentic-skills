@@ -1768,6 +1768,7 @@ async def _dispatch_one_followup(
     )
     merged = False
     merged_sha = None
+    eng_outcome = None
     async for ev in _engineer_flow(
         repo_dir, repo_name, bl_id, timeout, retrieval_kwargs_builder,
         run_id=run_id, feature_slug=feature_slug, section_override=section,
@@ -1777,7 +1778,50 @@ async def _dispatch_one_followup(
             merged_sha = ev.get("merged_sha")
         if ev.get("_orchestrator_outcome"):
             merged = bool(ev.get("merged"))
+            eng_outcome = ev
         yield ev
+
+    # A66: the follow-up engineer is a FULL engineer — it must self-resolve a
+    # repairable merge failure (e.g. a dirty target checkout) via the Janitor +
+    # remerge, EXACTLY as the per-BL engineer path does (A58/A59). That chain
+    # lived only in run_brief's per-BL loop; the follow-up runs `_engineer_flow`
+    # directly through here, so it bypassed the Janitor entirely and a correct,
+    # green-tested fix was silently abandoned as `not_merged`
+    # (run-20260609T133620Z-fb16cc: badge-clipping fix passed its gate but
+    # merge_to_target failed on a dirty tree, no Janitor fired). Mirror the
+    # per-BL block: on a merge_error, repair the environment and re-attempt.
+    if not merged and eng_outcome is not None:
+        _dossier = eng_outcome.get("dossier") or {}
+        if _engineer_janitor_trigger(_dossier, True) and _dossier.get("blocker") == "merge_error":
+            _cfg = repo_config_svc.load(repo_dir)
+            try:
+                async for je in _run_janitor(
+                    repo_dir, repo_name, run_id, feature_slug,
+                    failed_step="acceptance_followup.merge_error",
+                    blocker_reason=str(_dossier.get("merge_error") or "merge_to_target failed"),
+                    failing_role="engineer", bl_id=bl_id, timeout=timeout,
+                ):
+                    yield je
+                _dossier["janitor"] = getattr(_run_janitor, "last_outcome", None) or {}
+            except Exception as exc:  # noqa: BLE001 — Janitor is advisory; never block
+                yield _evt("janitor.error", bl_id=bl_id, run_id=run_id, error=str(exc)[:300])
+            if _should_remerge_after_janitor(_dossier):
+                remerge = await fast_forward_target(
+                    repo_dir, _dossier["merge_branch"], target_ref=_cfg.agent_branch)
+                yield _evt("merge_retry_post_janitor", bl_id=bl_id,
+                           role="acceptance_followup",
+                           ok=remerge.get("ok"), merged_sha=remerge.get("merged_sha"),
+                           kind=remerge.get("kind"), error=remerge.get("error"),
+                           branch=_dossier.get("merge_branch"))
+                if remerge.get("ok"):
+                    merged = True
+                    merged_sha = remerge.get("merged_sha") or merged_sha
+                    yield _evt("janitor.resolved", bl_id=bl_id,
+                               role="acceptance_followup",
+                               reason=(f"Janitor repaired the environment and the "
+                                       f"follow-up merge landed "
+                                       f"({(remerge.get('merged_sha') or '')[:8]}); "
+                                       f"{bl_id} fully resolved in-loop — no escalation"))
     state = "merged" if merged else "not_merged"
     await asyncio.to_thread(
         ledger.set_dispatch_state, finding.finding_id, state,

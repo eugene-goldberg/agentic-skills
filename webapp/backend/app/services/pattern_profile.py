@@ -152,6 +152,24 @@ def consolidate(repo_root: Path | str, *, entries: Optional[list[PatternEntry]] 
     try:
         p = profile_path(repo_root)
         p.parent.mkdir(parents=True, exist_ok=True)
+        # A65: PATTERN_PROFILE.md is a per-sprint RUNTIME artifact — it must NEVER
+        # dirty the target's tracked working tree. A modified tracked file fails
+        # the merge precondition ("main checkout has modified tracked files; not
+        # merging") and silently blocks any merge that follows the refresh (it
+        # blocked the acceptance-followup merge in run-20260609T133620Z-fb16cc).
+        # Drop a .gitignore so the dir's contents are never tracked on ANY target
+        # — generalizing A58's events.jsonl/graphify-out fix to the standing rule
+        # "no harness runtime artifact leaves the target's tracked tree dirty".
+        # (The Milvus index is the functional read path; the .md is an operator
+        # bonus that does not need version control.)
+        gi = p.parent / ".gitignore"
+        if not gi.exists():
+            gi.write_text(
+                "# A65: harness runtime artifact (ABL-0019 pattern profile) —\n"
+                "# regenerated every sprint; never track it (a modified tracked\n"
+                "# file dirties the tree and blocks subsequent merges).\n*\n",
+                encoding="utf-8",
+            )
         p.write_text(text, encoding="utf-8")
     except Exception:
         pass  # the vector index is the functional read path; the .md is a bonus
