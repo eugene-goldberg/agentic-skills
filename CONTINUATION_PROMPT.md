@@ -1,26 +1,65 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-08 (EOD — Stage-2 empirical-close + A64 session).
+> Hand-off written 2026-06-09 (EOD — A64 live-proof + first complex-feature test + A65/A66).
 > Supersedes all prior hand-offs. Every fact below was verified against the live
 > repo/processes at write time.
 >
-> **THIS SESSION (delta on top of everything below):** Ran the FIRST post-A13
-> *sealed* sprint — `run-20260608T212413Z-9b397a` (beaverhabits "Habit Insights",
-> 2/2 `merged_full`, regression checkpoint green 152, acceptance 0 findings,
-> closure 0 violations). It **empirically closed Stage 2**: the efficacy report
-> is honest (`R10` moved `unobserved→never_fired`, runs_present 0→1; 10 guardrails
-> held `unobserved`; **zero false retirement signals**). The run's doctrine-meta
-> agent then **self-filed a verified TIGHTEN proposal** → shipped as **A64**:
-> A13 sealing excluded the acceptance flow, so the integration
-> `regression_checkpoint` was invisible to the efficacy aggregator. Fixed in
-> `orchestrator.py` (shared `acceptance_trace` seals checkpoint + acceptance
-> lifecycle) + `doctrine_efficacy.py` (strip `orchestrator.` prefix; track
-> `regression_checkpoint` as a pseudo-rule green→clean/regressed→caught).
-> `tests/test_acceptance_checkpoint_sealing.py` +6; full suite **406 passed**.
-> **Committed `96a5b17`, dev≡main, harness restarted on it (PID 14484).** A64's
-> end-to-end live proof = the NEXT sealed sprint (it now seals the checkpoint).
-> **NEW Frontier #1:** run one more sealed sprint, then confirm
-> `regression_checkpoint` appears as a row in `doctrine_efficacy.json` `by_rule`.
+> **THIS SESSION (delta on top of everything below). Four things happened:**
+>
+> 1. **A64 is now LIVE-PROVEN.** A second sealed sprint
+>    `run-20260609T004544Z-346c4d` (beaverhabits "Habit History", 1 BL, clean)
+>    confirmed the regression checkpoint now seals AND rows in the efficacy report:
+>    `traces_archive/<run>/doctrine_efficacy.json` `by_rule` carries
+>    `regression_checkpoint: {caught:0, clean:1}` (first run ever to count the
+>    integration checkpoint). Stage 2 fully closed end-to-end.
+>
+> 2. **FIRST complex-feature test — "Periodic Habit Goals" (`run-20260609T133620Z-fb16cc`).**
+>    Deliberately harder: 5-BL **dependency DAG** (model → API/progress →
+>    streak/UI), two subtle-correctness BLs (period-window math, goal-streak), a
+>    UI BL → **Playwright** acceptance. RESULT: **5/5 BLs merged, all gates green,
+>    regression checkpoint green (267 passed, 0 regressions), 0 per-BL
+>    escalations.** The crew handled it cleanly. The layered model worked: the
+>    Playwright acceptance found a real UI integration bug (goal badge clipped
+>    inside a truncating box) the green unit tests structurally couldn't see, and
+>    the auto-followup engineer FIXED it (gate green). Ran ~8.9h — almost entirely
+>    HOST-SATURATION overhead (load avg 13, Docker VM + Defender + Spotlight; the
+>    harness rode out intermittent ~13-min Ollama-contention retrieval stalls by
+>    NOT idle-killing in-flight tools — vindicated). NOT a crew-speed problem.
+>
+> 3. **The complex run exposed two REAL, GENERAL gaps → shipped A65 + A66.**
+>    The followup fix passed its gate but `merge_to_target` failed ("main checkout
+>    has modified tracked files") and was abandoned `not_merged`.
+>    - **A65 (FIXED):** the ABL-0019 pattern-profile refresh wrote a TRACKED file
+>      (`_brownfield/_pattern_profile/PATTERN_PROFILE.md`) into the target,
+>      dirtying the tree. `pattern_profile.consolidate` now drops a `.gitignore`
+>      (`*`) so the runtime artifact is never tracked on a FRESH target
+>      (generalizes A58). Already-tracked targets (beaverhabits) need a one-time
+>      `git rm --cached` OR rely on A66.
+>    - **A66 (IMPLEMENTED, UNIT-TESTED, LIVE-PROOF PENDING):** the A58/A59
+>      Janitor+remerge lived ONLY in `run_brief`'s per-BL loop; the
+>      acceptance-followup runs `_engineer_flow` via `_dispatch_one_followup`
+>      OUTSIDE that loop, so it bypassed the Janitor. Now wired in (same
+>      `_engineer_janitor_trigger → _run_janitor → _should_remerge_after_janitor →
+>      fast_forward_target` chain). `tests/test_followup_merge_resolution.py` (+5).
+>      Both the architect AND the doctrine-meta agent independently filed this gap.
+>
+> 4. **A TRUST LESSON (binding, see doctrine point 5+6 below).** Last session I
+>    asserted "the Janitor fully resolves merge failures in-loop / every crew agent
+>    resolves its own issues" — TRUE for the engineer+QA paths (A58/A59, proven
+>    live) but I let the GENERAL framing imply the followup path was covered when
+>    it was NOT. The operator rightly flagged it. Lesson: **never assert a
+>    capability's SCOPE beyond what you've traced.** "Reuses `_engineer_flow`" ≠
+>    "inherits the merge-retry" (the chain wraps `_engineer_flow`, isn't inside it).
+>    A66 is now marked `[~]` (implemented, live-proof PENDING) — NOT `[x]` — until a
+>    live followup recovers from a real merge failure.
+>
+> **Frontier #1 for the next session (the A66 live-proof):** restart the harness
+> on `35fc42b` (current one is stale — see below), then re-dispatch the pending
+> `periodic-habit-goals` UI-badge finding (it's `dispatch_state=not_merged` in the
+> beaverhabits ledger). It will hit the SAME dirty-tree merge and should now
+> self-resolve via the Janitor+remerge. THAT is the live proof A66 needs before it
+> can be called `[x]`. (Re-dispatch endpoint: `POST /dispatch-followup`, ABL-0021;
+> or a fresh small sprint that triggers a followup.)
 
 ---PROMPT START---
 
@@ -72,37 +111,56 @@ mistakes:
    Hypothesis. Only agentic-skills is committed here; brownfield targets +
    their `_brownfield/` are never committed to this repo.
 
+6. **Never claim a capability's SCOPE beyond what you've traced (2026-06-09,
+   hard-won, the operator caught it).** It is not enough for "X works" to be true
+   on the path you tested — do NOT let general framing ("every agent resolves its
+   own issues", "fully wired in") imply coverage of paths you did NOT verify. A
+   capability is only as broad as the code paths you actually traced to it.
+   Worked failure: A58/A59 wired the Janitor merge-retry into the per-BL
+   engineer+QA paths (real, live-proven) — but the sweeping claim implied the
+   acceptance-followup path too, which bypassed it (A66). "Reuses `_engineer_flow`"
+   did NOT mean "inherits the merge-retry" (that chain WRAPS `_engineer_flow` in
+   `run_brief`'s loop; it isn't inside the function). Before asserting "the crew
+   does Y," enumerate the entry points to Y and confirm each. And distinguish
+   `[x]` SHIPPED-AND-LIVE-PROVEN from `[~]` IMPLEMENTED-BUT-UNIT-TESTED-ONLY — a
+   mocked test proves wiring, not behavior under a real run.
+
 ## Branch model (BINDING)
 Work on **`development`**, fast-forward into **`main`** when verified. Only live
-branches. **Both at `96a5b17`** (verified IN SYNC, 2026-06-08 EOD; was `015f12c`).
-Tree clean
-(runtime `webapp/backend/logs/` + stray `agentic_harness.png` now gitignored).
-Remote: `origin` (github.com/eugene-goldberg/agentic-skills) — note this session
-did NOT push (operator pushes when ready; `git push origin main development` if
-asked). Harness tests:
-`cd webapp/backend && .venv/bin/python -m pytest tests/ -q` → **~399 passed, 1
-skipped**. ONE known flake: `test_findings_ledger.py::test_concurrent_append_no_torn_lines`
-(load-induced; passes in isolation; deselect it or re-run alone — NOT a
-regression; do not "fix" it without reproducing deterministically).
+branches. **Both at `35fc42b`** (verified IN SYNC, 2026-06-09 EOD; was `96a5b17`).
+Tree clean.
+Remote: `origin` (github.com/eugene-goldberg/agentic-skills) — **`35fc42b` (A65/A66)
+is UNPUSHED** (origin/main at `ab04f62`). Operator pushes when ready:
+`git push origin main development`. Harness tests:
+`cd webapp/backend && .venv/bin/python -m pytest tests/ -q --deselect tests/test_findings_ledger.py::test_concurrent_append_no_torn_lines`
+→ **410 passed**. TWO known load-flakes (pass in isolation, NOT regressions, do
+not "fix" without deterministic repro): `test_findings_ledger.py::test_concurrent_append_no_torn_lines`
+and `test_compute_ui_coverage.py::test_unmerged_bls_ignored`.
 
 ## Verified running processes (re-verify with `lsof -nP -iTCP:8000`)
-- **Harness orchestrator: PID 14484**, uvicorn `127.0.0.1:8000`, running the
-  CURRENT code — restarted 2026-06-08 EOD (19:36Z) on `96a5b17` so A64 is live
-  (the acceptance flow now seals `regression_checkpoint` + lifecycle; A13 sealing
-  + Stage-2 efficacy + inject_lessons ON + search_lessons + search_patterns all
-  live). Re-verify: `RunBriefRequest(brief='x'*25).inject_lessons` is `True` and
-  `doctrine_efficacy._PHASE_AS_PSEUDO_RULE == {'regression_checkpoint'}`. Start cmd:
-  `cd webapp/backend && .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`.
-  (PIDs drift across restarts — always re-verify.)
-- Target dev servers: backend **PID 67691** `:8002`, frontend **69699**
-  `localhost:3002` (beaverhabits, on `integration`). Separate from the harness.
+- **Harness orchestrator: PID 14484**, uvicorn `127.0.0.1:8000` — **STALE.** It
+  was started on `96a5b17` (A64-era) and ran BOTH the Habit-History and
+  Periodic-Goals sprints, but it does **NOT** have A65/A66 (committed later at
+  `35fc42b`). **The next session MUST restart it to activate A65/A66** before the
+  A66 live-proof. Restart (SIGTERM, not kill -9 — reaps Docker stacks):
+  `kill -TERM 14484` then wait for `:8000` free, then
+  `cd webapp/backend && .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`
+  (nohup to a log to detach). After restart, re-verify A66 is live in the RUNNING
+  process: `RunBriefRequest(brief='x'*25).inject_lessons` is `True` and
+  `inspect.getsource(orchestrator._dispatch_one_followup)` contains
+  `merge_retry_post_janitor`. (PIDs drift — always re-verify with `lsof`.)
+- Target dev servers (if up): beaverhabits backend/frontend, separate from the
+  harness — re-verify; they may have been killed. Not needed for the A66
+  live-proof (the followup runs against the harness, not the dev servers).
 - Milvus stack up (`milvus-minio` "unhealthy" = known false healthcheck). Ollama
   `bge-m3` (1024-dim) up. ALL retrieval is LOCAL — a "connecting"/"unavailable"
   is never a network issue, it's local boot/contention latency.
 
-## What shipped THIS session — the within-target cumulative loop is COMPLETE + self-hardening is CLOSED-LOOP
-11 commits, `bb0d3f9..015f12c`. All GENERAL crew gains, tested, effectiveness-
-confirmed on real bge-m3. Two arcs:
+## Prior-session context (Stage-2 / A64, 2026-06-08) — the cumulative loop + self-hardening
+*(Background for the current session's work above. The within-target cumulative
+loop is COMPLETE + self-hardening is CLOSED-LOOP + live-proven.)*
+11 commits, `bb0d3f9..015f12c` (Stage-2 arc) then `96a5b17` (A64). All GENERAL
+crew gains, tested, effectiveness-confirmed on real bge-m3. Two arcs:
 
 **Arc 1 — cumulative learning (findings→lessons, eng_patterns→patterns):**
 - **A62** (`75b1592`) — self-resolved fixes self-record `verdict=confirmed` on
@@ -146,47 +204,63 @@ So self-hardening is now **closed-loop in code**: seal firings → aggregate
 efficacy honestly → meta-agent consumes it → can propose `retire` (gated).
 
 ## THE FRONTIER — what the new session should take on (decide + build, don't ask)
-The within-target cumulative loop and the self-hardening loop are now built. The
-honest gaps, in priority order:
+Stage 2 is closed + live-proven; the within-target cumulative loop is built; the
+crew just handled a 5-BL complex feature cleanly. Priority order:
 
-1. **PRIMARY — accumulate SEALED efficacy data (run a real sprint), then assess.**
-   The Stage-2 machinery is built but the efficacy report is only meaningful over
-   POST-A13 *sealed* runs — we have ZERO so far (all archived runs predate the
-   A13 sealing). **Run a brownfield sprint on beaverhabits** (or a 2nd target),
-   let it seal fully, then read `traces_archive/<run>/doctrine_efficacy.json` and
-   the `doctrine_meta.efficacy` event to confirm gate/kill firings now appear and
-   the report is honest. This is the empirical close of Stage 2. (A small
-   additive feature is fine; the point is sealed instrumentation, not the
-   feature.) The harness is already restarted, so the next run seals.
+1. **PRIMARY — the A66 live-proof (close the trust gap honestly).** A66 is
+   implemented + unit-tested but NOT live-validated (`[~]` in the ledger).
+   Sequence: (a) **restart the harness on `35fc42b`** (PID 14484 is stale — see
+   "Verified running processes"); (b) re-verify A66 is in the RUNNING process;
+   (c) **re-dispatch the pending `periodic-habit-goals` badge-clip finding**
+   (`dispatch_state=not_merged` in
+   `~/dev/ai-projects/brownfield-targets/beaverhabits/_brownfield/features/periodic-habit-goals/acceptance/findings_log.jsonl`)
+   via `POST /api/projects/beaverhabits/dispatch-followup` (ABL-0021). It will hit
+   the SAME dirty-tree merge; confirm the events `merge_retry_post_janitor (ok=true)`
+   + `janitor.resolved` fire and the finding flips to `merged`. THAT promotes A66
+   to `[x]`. **Caveat:** A65 made fresh targets clean, but beaverhabits's
+   `PATTERN_PROFILE.md` is ALREADY tracked — so the dirty tree IS still present
+   there (good: it's the exact condition to prove A66). If you'd rather remove the
+   condition, `git rm --cached _brownfield/_pattern_profile/PATTERN_PROFILE.md` on
+   the target — but then you lose the live-proof trigger, so prove A66 FIRST.
 
-2. **Stage 3 — cross-target / "community" memory.** The substrate exists (the
-   `scope` field in `lessons_index`; same vector machinery). This is the literal
-   "carries forward across targets" mission property. Best done once there are
-   **≥2 real targets** (today: beaverhabits n=1). Needs: a global collection +
-   operator-gated graduation (per-target → global) + provenance + the relevance
-   floor. Higher poisoning risk → operator-gated promotion.
+2. **Stage 3 — cross-target / "community" memory.** Still the literal mission
+   property ("carries forward across targets"). Substrate exists (`scope` field in
+   `lessons_index`; same vectors). Needs a **2nd real target** (beaverhabits is a
+   rich n=1 now — 5 features merged — but still one repo). Global collection +
+   operator-gated per-target→global graduation + provenance + relevance floor.
 
-3. **Optional — operator-facing efficacy read endpoint.** Surface
-   `doctrine_efficacy.efficacy_report` via a `GET` so the operator can see
-   fire-rates / review-candidates without opening the archive JSON.
+3. **Optional — operator-facing efficacy read endpoint** (`GET` over
+   `doctrine_efficacy.efficacy_report`).
 
 Smaller standing crew-hardening candidates (bounded wins; all GENERAL):
-- **A56 warm-up non-adaptive on cold targets** — every fresh-target run logs
-  `retrieval_warmup.timeout` (3×25s); PO still grounds (failed probes warm the
-  stack) but telemetry lies and a slow host could race. Adaptive/longer cold
-  probe.
+- **Host-contention resilience (NEW, observed live).** The Periodic-Goals run took
+  ~8.9h, almost all of it host-saturation overhead: load avg 13, Docker VM +
+  Microsoft Defender (AV) + Spotlight competing with Ollama → intermittent
+  ~13-min retrieval stalls. The harness rode them out correctly (doesn't idle-kill
+  in-flight tools). NOT a crew bug, but a real throughput drag. Candidates: a
+  longer/adaptive retrieval timeout telemetry; or document "lighten the host
+  (pause Defender scan) before a long sprint" in PREFLIGHT. Lowest urgency.
+- **A56 warm-up non-adaptive on cold targets** — `retrieval_warmup.timeout`
+  (3×25s) on every fresh-target run; PO still grounds but telemetry lies.
 - **`_extract_evidence_summary` prose fallback (A63 follow-up)** — dossier-less
-  findings still store a `{"status":"fail"}` blob as their summary; give them a
-  readable prose summary at the write path so even non-A61 lessons are useful.
-- **Gate diff-on-quiet output** — the regression checkpoint goes green-by-exit-
-  code (not by-diff) on `-q` suites; doctrine-meta already proposed a
-  `collected N` assertion.
+  findings store a `{"status":"fail"}` blob; give them readable prose at write.
+- **Gate diff-on-quiet output** — regression checkpoint is green-by-exit-code on
+  `-q`; doctrine-meta proposed a `collected N` assertion.
 
 Whatever you pick: it must be a GENERAL crew capability. If you're patching
 beaverhabits specifically, stop and ask "what class does this represent, and what
 general capability closes it?"
 
 ## Honest caveats / open (do not pretend these are closed)
+- **A66 is NOT live-proven.** Implemented + 5 unit tests (mocked). The mocks prove
+  the wiring (dossier captured → janitor → remerge → outcome flips to merged); they
+  do NOT prove behavior under a real run. Until a live followup recovers from a
+  real merge failure, A66 stays `[~]`. Do not tell the operator "the followup
+  self-resolves merge failures" as done — say "wired + unit-tested, live-proof
+  pending." (This is the exact overclaim that triggered the 2026-06-09 trust note.)
+- **A65 doesn't retro-untrack.** On targets where `PATTERN_PROFILE.md` is already
+  tracked (beaverhabits), the `.gitignore` doesn't untrack it; the dirty tree
+  persists there until a one-time `git rm --cached` (or A66 cleans it at runtime).
 - **Stage-2 efficacy is n-bound.** Fire-rate + retirement signals need many
   SEALED runs; failure-class causal attribution additionally needs enforcement
   variation (the manifest is static today). The aggregator is honest about this
@@ -203,12 +277,18 @@ general capability closes it?"
 
 ## Where to start the new session (concrete first moves)
 1. Read `CLAUDE.md`, `THESIS.md`, `ARCHITECTURE_INVARIANTS.md`, then this file.
-2. Re-verify state: `git log --oneline -1` (expect `015f12c`), dev≡main, harness
-   PID on :8000, `inject_lessons` True, full suite green (deselect the known
-   flake). Skim `arch_cumulative_loop_closed.md` memory + `ABL-0017_DOCTRINE_EFFICACY.md`
-   status header.
-3. Take on **Frontier #1**: run a sealed beaverhabits sprint, then verify the
-   efficacy report is populated + honest. That empirically closes Stage 2 and
-   produces the first real cumulative-efficacy data.
+2. Re-verify state: `git log --oneline -1` (expect `35fc42b`), dev≡main, **note
+   `35fc42b` is UNPUSHED**. Full suite green per the Branch-model command (410
+   passed, deselect the 2 load-flakes). Skim memory `arch_complex_feature_a65_a66.md`
+   + the A65/A66/A64 ledger entries in `DESIGN_SHORTCOMINGS.md`.
+3. **Run pre-flight** (`PREFLIGHT.md`) — Milvus standalone has died twice this
+   session (exit-1 startup race; `docker restart milvus-standalone`), and the host
+   is heavily loaded. Verify :19530 open + Ollama embed + indexer.
+4. Take on **Frontier #1 (the A66 live-proof)**: restart the harness on `35fc42b`,
+   re-verify A66 is in the running process, then re-dispatch the pending
+   `periodic-habit-goals` badge-clip finding and confirm `merge_retry_post_janitor
+   (ok=true)` + `janitor.resolved` fire and the finding flips to `merged`. Promote
+   A66 to `[x]` ONLY after that. This both closes the trust gap and proves the
+   "every crew agent resolves its own merge failures" claim end-to-end.
 
 ---PROMPT END---
