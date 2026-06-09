@@ -1,8 +1,26 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-08 (end of the cumulative-learning + Stage-2 session).
+> Hand-off written 2026-06-08 (EOD — Stage-2 empirical-close + A64 session).
 > Supersedes all prior hand-offs. Every fact below was verified against the live
 > repo/processes at write time.
+>
+> **THIS SESSION (delta on top of everything below):** Ran the FIRST post-A13
+> *sealed* sprint — `run-20260608T212413Z-9b397a` (beaverhabits "Habit Insights",
+> 2/2 `merged_full`, regression checkpoint green 152, acceptance 0 findings,
+> closure 0 violations). It **empirically closed Stage 2**: the efficacy report
+> is honest (`R10` moved `unobserved→never_fired`, runs_present 0→1; 10 guardrails
+> held `unobserved`; **zero false retirement signals**). The run's doctrine-meta
+> agent then **self-filed a verified TIGHTEN proposal** → shipped as **A64**:
+> A13 sealing excluded the acceptance flow, so the integration
+> `regression_checkpoint` was invisible to the efficacy aggregator. Fixed in
+> `orchestrator.py` (shared `acceptance_trace` seals checkpoint + acceptance
+> lifecycle) + `doctrine_efficacy.py` (strip `orchestrator.` prefix; track
+> `regression_checkpoint` as a pseudo-rule green→clean/regressed→caught).
+> `tests/test_acceptance_checkpoint_sealing.py` +6; full suite **406 passed**.
+> **Committed `96a5b17`, dev≡main, harness restarted on it (PID 14484).** A64's
+> end-to-end live proof = the NEXT sealed sprint (it now seals the checkpoint).
+> **NEW Frontier #1:** run one more sealed sprint, then confirm
+> `regression_checkpoint` appears as a row in `doctrine_efficacy.json` `by_rule`.
 
 ---PROMPT START---
 
@@ -56,7 +74,8 @@ mistakes:
 
 ## Branch model (BINDING)
 Work on **`development`**, fast-forward into **`main`** when verified. Only live
-branches. **Both at `015f12c`** (verified IN SYNC, 2026-06-08). Tree clean
+branches. **Both at `96a5b17`** (verified IN SYNC, 2026-06-08 EOD; was `015f12c`).
+Tree clean
 (runtime `webapp/backend/logs/` + stray `agentic_harness.png` now gitignored).
 Remote: `origin` (github.com/eugene-goldberg/agentic-skills) — note this session
 did NOT push (operator pushes when ready; `git push origin main development` if
@@ -67,11 +86,12 @@ skipped**. ONE known flake: `test_findings_ledger.py::test_concurrent_append_no_
 regression; do not "fix" it without reproducing deterministically).
 
 ## Verified running processes (re-verify with `lsof -nP -iTCP:8000`)
-- **Harness orchestrator: PID 26167**, uvicorn `127.0.0.1:8000`, running the
-  CURRENT code — restarted 2026-06-08 20:57Z so ALL of this session's work is
-  live (A13 sealing + Stage-2 efficacy + inject_lessons ON + search_lessons +
-  search_patterns). Re-verify live: `RunBriefRequest(brief='x'*25).inject_lessons`
-  is `True`. Start cmd:
+- **Harness orchestrator: PID 14484**, uvicorn `127.0.0.1:8000`, running the
+  CURRENT code — restarted 2026-06-08 EOD (19:36Z) on `96a5b17` so A64 is live
+  (the acceptance flow now seals `regression_checkpoint` + lifecycle; A13 sealing
+  + Stage-2 efficacy + inject_lessons ON + search_lessons + search_patterns all
+  live). Re-verify: `RunBriefRequest(brief='x'*25).inject_lessons` is `True` and
+  `doctrine_efficacy._PHASE_AS_PSEUDO_RULE == {'regression_checkpoint'}`. Start cmd:
   `cd webapp/backend && .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`.
   (PIDs drift across restarts — always re-verify.)
 - Target dev servers: backend **PID 67691** `:8002`, frontend **69699**
