@@ -1104,6 +1104,192 @@ async def _run_janitor(repo_dir: Path, repo_name: str, run_id: str,
     _run_janitor.last_outcome = outcome  # type: ignore[attr-defined]
 
 
+# ─── onboarding flow (the Janitor/Ops-Steward in ONBOARDING MODE) ─────────────
+# Prepares a brand-new target repo for autonomous brownfield work BEFORE the
+# first sprint: fulfils ENVIRONMENT prerequisites a `git clone` doesn't bring
+# (deps, runtime/toolchain, services/DB, gitignored config, missing migrations),
+# wires the gate config + harness hygiene + integration branch, and verifies the
+# target builds/boots and the test command EXECUTES. It PROVISIONS THE
+# ENVIRONMENT; it never edits the target's committed source to fix defects (those
+# are flagged, not rectified). Operator-invoked (no auto-trigger yet); the
+# orchestrator independently verifies the postconditions rather than trusting the
+# agent's self-report.
+
+
+def _build_onboarding_task(skill: str, *, run_id: str, repo_name: str,
+                           main_ref: str, report_rel: str, report_json_rel: str,
+                           brief: str | None) -> str:
+    """Per-dispatch task prompt for the Onboarder. Mirrors _build_janitor_task."""
+    if brief and brief.strip():
+        brief_block = ("## What the crew will build next (CONTEXT ONLY — do NOT "
+                       f"build it; only prepare the environment)\n{brief.strip()}\n\n")
+    else:
+        brief_block = ("## No specific brief yet — prepare the repo for general "
+                       "brownfield work.\n\n")
+    return (
+        f"{skill}\n\n---\n\n"
+        f"# Onboarding dispatch — prepare a brand-new target repo\n\n"
+        f"You are spawned in ONBOARDING MODE in the REAL checkout of a target "
+        f"repo the crew has never worked on. Fulfil its ENVIRONMENT prerequisites "
+        f"so the crew can begin: install/restore dependencies, provision services "
+        f"it needs (e.g. a database container), materialise gitignored config from "
+        f"a committed template, generate required-but-absent artifacts "
+        f"(migrations/schema), derive the gate config, add harness `.gitignore` "
+        f"hygiene, write `.agentic-skills.json`, fork the integration branch, and "
+        f"verify it builds, boots (if it has a runtime), and that `test_cmd` "
+        f"EXECUTES. You PROVISION THE ENVIRONMENT; you NEVER edit the target's "
+        f"committed source or tests to fix a pre-existing defect — a red baseline "
+        f"caused by a SOURCE defect is FLAGGED in your verdict, not rectified.\n\n"
+        f"## Run context\n"
+        f"- run_id: `{run_id}`\n"
+        f"- repo: `{repo_name}`\n"
+        f"- detect the real default branch; keep it pristine. Suggested main_ref: "
+        f"`{main_ref}`\n\n"
+        f"{brief_block}"
+        f"## Deliverables (BOTH required)\n"
+        f"1. Onboarding report → `{report_rel}`\n"
+        f"2. Machine-readable verdict JSON → `{report_json_rel}` (exact schema in "
+        f"your SKILLS 'Deliverables'). Set `status:\"onboarded\"` + `retry:true` "
+        f"ONLY when every environment postcondition is verified; otherwise "
+        f"`status:\"escalated\"` with the precise missing prerequisite.\n"
+    )
+
+
+def _verify_onboarding_postconditions(repo_dir: Path) -> dict:
+    """Independent (orchestrator-side) check of the onboarding contract — the
+    trust gate. Do NOT rely on the agent's self-reported verdict alone. Cheap,
+    deterministic structural checks. Returns {ok, checks:{...}, missing:[...]}.
+
+    Note: running `test_cmd` to prove it executes is deferred to the first gate
+    invocation; here we assert the structural prerequisites the gate depends on.
+    """
+    checks: dict = {}
+    missing: list[str] = []
+
+    cfg_path = repo_dir / repo_config_svc.CONFIG_FILENAME
+    cfg_ok = False
+    try:
+        if cfg_path.exists():
+            data = json.loads(cfg_path.read_text(encoding="utf-8"))
+            cfg_ok = bool(data.get("test_cmd"))
+    except Exception:  # noqa: BLE001
+        cfg_ok = False
+    checks["agentic_skills_json"] = cfg_ok
+    if not cfg_ok:
+        missing.append(".agentic-skills.json missing/invalid or has no test_cmd")
+
+    cfg = repo_config_svc.load(repo_dir)
+    agent_branch = getattr(cfg, "agent_branch", "integration")
+    branch_ok = repo_config_svc._git_branch_exists(repo_dir, agent_branch)
+    checks["integration_branch"] = branch_ok
+    if not branch_ok:
+        missing.append(f"agent branch '{agent_branch}' does not exist")
+
+    gi = repo_dir / ".gitignore"
+    gi_ok = False
+    try:
+        text = gi.read_text(encoding="utf-8") if gi.exists() else ""
+        gi_ok = ("graphify-out" in text) and ("_brownfield" in text)
+    except Exception:  # noqa: BLE001
+        gi_ok = False
+    checks["gitignore_hygiene"] = gi_ok
+    if not gi_ok:
+        missing.append("harness .gitignore rules (graphify-out / _brownfield) absent")
+
+    return {"ok": all(checks.values()), "checks": checks, "missing": missing}
+
+
+async def _onboarding_flow(
+    repo_dir: Path,
+    repo_name: str,
+    run_id: str,
+    *,
+    brief: str | None = None,
+    timeout: int = 3600,
+) -> AsyncIterator[dict]:
+    """Spawn the Onboarder (Janitor in onboarding mode) to fulfil a new repo's
+    environment prerequisites. Yields the agent stream, then an independent
+    postcondition verification, then a terminal ``_orchestrator_outcome`` with
+    ``{role:"onboarder", status, agent_status, verify, verdict}``.
+
+    The final ``status`` is ``onboarded`` only when BOTH the agent reported
+    ``onboarded`` AND the orchestrator's own structural verification passes —
+    catching an over-claimed verdict (no-overclaim doctrine in code)."""
+    cfg = repo_config_svc.load(repo_dir)
+    onb_dir = repo_dir / "_brownfield" / "_onboarding"
+    report_rel = f"_brownfield/_onboarding/ONBOARDING_REPORT-{run_id}.md"
+    report_json_rel = f"_brownfield/_onboarding/ONBOARDING-{run_id}.json"
+    try:
+        onb_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+    yield _evt("onboarding.start", run_id=run_id, repo=repo_name, report=report_rel)
+
+    trace = None
+    verdict: dict = {}
+    try:
+        skill = prompts_brownfield_svc._load_skill("onboarder")
+        task = _build_onboarding_task(
+            skill, run_id=run_id, repo_name=repo_name,
+            main_ref=getattr(cfg, "main_ref", "main"),
+            report_rel=report_rel, report_json_rel=report_json_rel, brief=brief)
+        trace = TraceWriter(repo=repo_name, role="onboarder", bl_id=run_id, task_id=run_id)
+        async for event in stream_agent_task(
+            task, repo_dir, timeout_seconds=timeout, idle_timeout=900,
+            allowed_tools="Bash,Read,Write,Edit", trace=trace,
+        ):
+            event.setdefault("orchestrator_step", "onboarding")
+            yield event
+    except Exception as exc:  # noqa: BLE001 — onboarding failure escalates, never crashes the caller
+        yield _evt("onboarding.error", run_id=run_id, error=str(exc)[:500])
+    finally:
+        if trace is not None:
+            try:
+                trace.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    report_json_abs = repo_dir / report_json_rel
+    if report_json_abs.exists():
+        try:
+            verdict = json.loads(report_json_abs.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            yield _evt("onboarding.verdict.error", run_id=run_id,
+                       error=str(exc)[:300], path=report_json_rel)
+            verdict = {}
+
+    agent_status = verdict.get("status") if isinstance(verdict, dict) else None
+
+    # Independent verification — the trust gate (don't believe a self-report).
+    verify = _verify_onboarding_postconditions(repo_dir)
+    yield _evt("onboarding.verify", run_id=run_id, ok=verify["ok"],
+               checks=verify["checks"], missing=verify["missing"])
+
+    onboarded = (agent_status == "onboarded") and verify["ok"]
+    status = "onboarded" if onboarded else "escalated"
+    yield _evt("onboarding.done" if onboarded else "onboarding.escalated",
+               run_id=run_id, status=status, agent_status=agent_status,
+               verify_ok=verify["ok"], missing=verify["missing"],
+               gaps=(verdict.get("gaps") if isinstance(verdict, dict) else None),
+               report=report_rel)
+    yield {"_orchestrator_outcome": True, "role": "onboarder", "run_id": run_id,
+           "status": status, "agent_status": agent_status, "verify": verify,
+           "verdict": verdict}
+
+
+async def run_onboarding(
+    repo_dir: Path, repo_name: str, run_id: str, *,
+    brief: str | None = None, timeout: int = 3600,
+) -> AsyncIterator[dict]:
+    """Public entry point used by the ``/onboard`` endpoint and the
+    ``scripts/onboard_target.py`` launcher. Streams the onboarding events; the
+    terminal ``_orchestrator_outcome`` carries the final status."""
+    async for e in _onboarding_flow(repo_dir, repo_name, run_id,
+                                    brief=brief, timeout=timeout):
+        yield e
+
+
 # ─── acceptance flow (ABL-0014 — Batch B: agent spawn + R10.1 retry) ──────
 
 

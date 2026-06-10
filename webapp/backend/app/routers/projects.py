@@ -1206,6 +1206,49 @@ class RunBriefRequest(BaseModel):
     warm_retrieval: bool = True
 
 
+class OnboardRequest(BaseModel):
+    # Optional: the upcoming feature brief, passed as CONTEXT so the onboarder
+    # can anticipate what services/deps the work will need. The onboarder never
+    # builds the feature — it only prepares the environment.
+    brief: str | None = Field(None, max_length=20000)
+    # Per-agent wall-clock budget (onboarding can install deps + boot a DB).
+    timeout: int = Field(3600, ge=300, le=14400)
+
+
+@router.post("/{repo}/onboard")
+async def onboard(repo: str, req: OnboardRequest):
+    """Onboard a brand-new target repo (the Janitor/Ops-Steward in ONBOARDING
+    MODE). Fulfils the environment prerequisites a `git clone` doesn't bring —
+    dependencies, runtime/toolchain, services/DB, gitignored config, missing
+    migrations — then wires the gate config + harness hygiene + integration
+    branch and verifies the target builds/boots and `test_cmd` executes. It
+    PROVISIONS THE ENVIRONMENT and never edits the target's committed source.
+
+    Operator-invoked (no auto-trigger). Single SSE stream; the orchestrator
+    independently verifies the onboarding postconditions before reporting
+    `onboarding.done` (vs `onboarding.escalated`)."""
+    repo_dir = _repo_dir(repo)
+    run_id = f"onboard-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
+
+    async def _gen():
+        yield _sse({"type": "_meta", "phase": "onboard.accepted", "run_id": run_id, "repo": repo})
+        try:
+            async for event in orchestrator_svc.run_onboarding(
+                repo_dir, repo, run_id, brief=req.brief, timeout=req.timeout,
+            ):
+                if "_orchestrator_outcome" in event:
+                    yield _sse({"type": "_meta", "phase": "onboard.outcome",
+                                "status": event.get("status"),
+                                "agent_status": event.get("agent_status"),
+                                "verify": event.get("verify")})
+                    continue
+                yield _sse(event)
+        except Exception as exc:  # noqa: BLE001
+            yield _sse({"type": "_error", "error": f"onboard: {exc}"})
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
 @router.post("/{repo}/run-brief")
 async def run_brief(repo: str, req: RunBriefRequest):
     """ABL-0001 Orchestrator entry point.
