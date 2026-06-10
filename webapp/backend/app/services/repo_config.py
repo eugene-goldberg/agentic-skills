@@ -75,6 +75,7 @@ class RepoConfig:
     source: str                 # "file" | "default"
     api_route_globs: list[str] | None = None  # None = use DEFAULT_API_ROUTE_GLOBS
     ui_globs: list[str] | None = None          # None = use DEFAULT_UI_GLOBS
+    test_file_globs: list[str] | None = None   # None = built-in per-language conventions (run_bl_tests)
 
     def effective_api_route_globs(self) -> list[str]:
         return self.api_route_globs or list(DEFAULT_API_ROUTE_GLOBS)
@@ -90,6 +91,7 @@ class RepoConfig:
             "test_env": self.test_env,
             "doctrine": self.doctrine,
             "api_route_globs": self.api_route_globs,
+            "test_file_globs": self.test_file_globs,
             "source": self.source,
         }
 
@@ -128,6 +130,7 @@ def load(repo_root: Path) -> RepoConfig:
             doctrine = data.get("doctrine")
             api_route_globs = data.get("api_route_globs")
             ui_globs = data.get("ui_globs")
+            test_file_globs = data.get("test_file_globs")
             return RepoConfig(
                 repo_root=repo_root,
                 agent_branch=agent_branch,
@@ -147,6 +150,11 @@ def load(repo_root: Path) -> RepoConfig:
                 ui_globs=(
                     list(ui_globs)
                     if isinstance(ui_globs, list) and ui_globs
+                    else None
+                ),
+                test_file_globs=(
+                    list(test_file_globs)
+                    if isinstance(test_file_globs, list) and test_file_globs
                     else None
                 ),
                 source="file",

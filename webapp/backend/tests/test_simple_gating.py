@@ -131,3 +131,107 @@ def test_run_bl_tests_multitoken_cmd_and_env(monkeypatch, tmp_path) -> None:
     # Per-target env reached the subprocess.
     assert captured["env"] == {"DATABASE_URL": "sqlite+aiosqlite:///:memory:",
                                "HABITS_STORAGE": "USER_DISK"}
+
+
+# --- D9: language-agnostic per-BL test scoping ------------------------------
+
+def test_bl_test_files_cross_language() -> None:
+    """The per-BL gate must recognize a BL's unit tests whatever the stack is —
+    not just Python. .NET *Tests.cs, go *_test.go, JUnit *Test.java, vitest
+    *.test.ts all count; Playwright/e2e specs and non-test sources do not."""
+    changed = [
+        "backend/tests/api/test_comments.py",                       # py  ✓
+        "backend/Ecommerce.Tests/src/Service/OrderServiceTests.cs",  # .NET ✓
+        "backend/Ecommerce.Service/src/OrderService/OrderManagement.cs",  # .cs prod ✗
+        "pkg/store/store_test.go",                                  # go  ✓
+        "src/main/java/com/x/FooTest.java",                         # java ✓
+        "frontend/src/utils/format.test.ts",                       # vitest unit ✓
+        "frontend/e2e/checkout.spec.ts",                           # playwright .spec ✗
+        "frontend/tests/comments.spec.ts",                         # .spec (Cypress/PW) ✗
+        "README.md",                                               # ✗
+    ]
+    got = g._bl_test_files(changed)
+    assert "backend/tests/api/test_comments.py" in got
+    assert "backend/Ecommerce.Tests/src/Service/OrderServiceTests.cs" in got
+    assert "pkg/store/store_test.go" in got
+    assert "src/main/java/com/x/FooTest.java" in got
+    assert "frontend/src/utils/format.test.ts" in got
+    # production .cs and docs are not tests
+    assert "backend/Ecommerce.Service/src/OrderService/OrderManagement.cs" not in got
+    assert "README.md" not in got
+    # `.spec.*` is excluded everywhere (Playwright/Cypress convention → acceptance phase)
+    assert "frontend/e2e/checkout.spec.ts" not in got
+    assert "frontend/tests/comments.spec.ts" not in got
+
+
+def test_bl_test_files_globs_override() -> None:
+    """An explicit test_file_globs in .agentic-skills.json overrides the
+    built-in conventions entirely (fnmatch on full path or bare filename)."""
+    changed = [
+        "backend/Ecommerce.Tests/src/Service/OrderServiceTests.cs",
+        "backend/Ecommerce.Service/src/OrderService/OrderManagement.cs",
+        "weird/CustomChecks.verify",
+    ]
+    got = g._bl_test_files(changed, ["*.verify", "*Tests.cs"])
+    assert got == [
+        "backend/Ecommerce.Tests/src/Service/OrderServiceTests.cs",
+        "weird/CustomChecks.verify",
+    ]
+
+
+def _patch_cfg_dotnet(monkeypatch) -> None:
+    monkeypatch.setattr(g.repo_config_svc, "load",
+                        lambda *a, **k: types.SimpleNamespace(
+                            agent_branch="integration",
+                            test_cmd=["dotnet", "test", "backend/Ecommerce.sln", "--nologo"],
+                            test_env=None, doctrine="brownfield",
+                            test_file_globs=None))
+
+
+def test_run_bl_tests_dotnet_runs_suite_as_is(monkeypatch, tmp_path) -> None:
+    """A non-pytest runner (dotnet test) must NOT have changed source-file paths
+    appended (the runner would reject `.cs` paths) and must NOT get a `-v`
+    pytest flag. The BL still gated on its tests' presence; verdict from exit
+    code (dotnet output isn't pytest-parseable)."""
+    _patch_cfg_dotnet(monkeypatch)
+    captured: dict = {}
+
+    async def _git(args, cwd):
+        if args[:2] == ["diff", "--name-only"]:
+            return (0, "backend/Ecommerce.Tests/src/Service/OrderServiceTests.cs\n")
+        return (0, "")
+    monkeypatch.setattr(g, "_git", _git)
+
+    async def _run_capture(cmd, cwd, timeout=1800, env=None):
+        captured["cmd"] = cmd
+        return (0, "Passed!  - Failed: 0, Passed: 75, Total: 75\n", "")
+    monkeypatch.setattr(g, "_run_capture", _run_capture)
+
+    res = asyncio.run(g.run_bl_tests(tmp_path, "agent/x", "integration", run_id="r"))
+    assert res["kind"] == "green"
+    assert res["ok"] is True
+    # configured command run verbatim — no -v, no appended .cs path
+    assert captured["cmd"] == ["dotnet", "test", "backend/Ecommerce.sln", "--nologo"]
+    assert "-v" not in captured["cmd"]
+    assert not any(c.endswith(".cs") for c in captured["cmd"])
+
+
+def test_run_bl_tests_dotnet_failed_names_bl_files(monkeypatch, tmp_path) -> None:
+    """On a non-pytest failure (exit!=0, unparseable output) the verdict is
+    failed and the BL's changed test files are named for the retry prompt."""
+    _patch_cfg_dotnet(monkeypatch)
+
+    async def _git(args, cwd):
+        if args[:2] == ["diff", "--name-only"]:
+            return (0, "backend/Ecommerce.Tests/src/Service/OrderServiceTests.cs\n")
+        return (0, "")
+    monkeypatch.setattr(g, "_git", _git)
+
+    async def _run_capture(cmd, cwd, timeout=1800, env=None):
+        return (1, "Failed!  - Failed: 2, Passed: 73, Total: 75\n", "")
+    monkeypatch.setattr(g, "_run_capture", _run_capture)
+
+    res = asyncio.run(g.run_bl_tests(tmp_path, "agent/x", "integration", run_id="r"))
+    assert res["kind"] == "failed"
+    assert res["ok"] is False
+    assert any("OrderServiceTests.cs" in r for r in res["regressions"])

@@ -17,6 +17,7 @@ and returns `{ok: True, kind: "skipped", reason: "greenfield"}`.
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import os
 import re
@@ -394,18 +395,54 @@ async def _git(args: list[str], cwd: Path) -> tuple[int, str]:
 # diff-blind full-suite-per-BL gate that manufactured false reds on correctly-
 # scoped backend BLs (see DESIGN_SHORTCOMINGS A55; supersedes per-BL A28–A31).
 
-def _bl_test_files(changed: list[str]) -> list[str]:
-    """The unit-test files a BL touched: python test files under a tests/ dir
-    whose filename is test_*.py or *_test.py. (Playwright e2e specs under
-    frontend are deliberately excluded — E2E is an acceptance-phase concern.)"""
+# Built-in per-language unit-test-file conventions. A changed file counts as a
+# BL's own unit test if it matches one of these. This is language-agnostic by
+# design: the per-BL gate must recognize a BL's tests whatever the target's
+# stack is (pytest, xUnit/.NET, go test, JUnit, vitest/jest), not just Python.
+# Playwright / e2e specs are deliberately excluded everywhere — E2E is an
+# acceptance-phase concern. A target may override all of this with an explicit
+# `test_file_globs` list in .agentic-skills.json.
+_TEST_FILE_CONVENTIONS = (
+    # (extension, predicate(filename, full_path) -> bool)
+    (".py",   lambda n, p: "tests/" in p and (n.startswith("test_") or n.endswith("_test.py"))),
+    (".cs",   lambda n, p: n.endswith("Tests.cs") or n.endswith("Test.cs")),
+    (".go",   lambda n, p: n.endswith("_test.go")),
+    (".java", lambda n, p: (n.endswith("Test.java") or n.endswith("Tests.java"))),
+    (".kt",   lambda n, p: (n.endswith("Test.kt") or n.endswith("Tests.kt"))),
+    (".rb",   lambda n, p: n.endswith("_test.rb")),
+    # JS/TS: only `*.test.*` (clearly unit). `*.spec.*` is deliberately NOT
+    # matched — Playwright/Cypress conventionally use `.spec.`, and frontend
+    # e2e is an acceptance-phase concern, never a per-BL unit gate.
+    (".ts",   lambda n, p: n.endswith(".test.ts") and "e2e" not in p and "playwright" not in p),
+    (".tsx",  lambda n, p: n.endswith(".test.tsx") and "e2e" not in p and "playwright" not in p),
+    (".js",   lambda n, p: n.endswith(".test.js") and "e2e" not in p and "playwright" not in p),
+    (".jsx",  lambda n, p: n.endswith(".test.jsx") and "e2e" not in p and "playwright" not in p),
+)
+
+
+def _bl_test_files(changed: list[str], globs: list[str] | None = None) -> list[str]:
+    """The unit-test files a BL touched, recognized across languages.
+
+    Default behavior matches a changed file against `_TEST_FILE_CONVENTIONS`
+    (Python test_*.py/*_test.py under tests/, .NET *Tests.cs, go *_test.go,
+    JUnit *Test.java, vitest/jest *.test.ts — Playwright/e2e excluded). A
+    target with an unusual layout can override entirely via
+    `.agentic-skills.json` `test_file_globs` (fnmatch against both the full
+    path and the bare filename)."""
     out: list[str] = []
     for f in changed:
         f = f.strip()
-        if not f or not f.endswith(".py"):
+        if not f:
             continue
         name = f.rsplit("/", 1)[-1]
-        if "tests/" in f and (name.startswith("test_") or name.endswith("_test.py")):
-            out.append(f)
+        if globs:
+            if any(fnmatch.fnmatch(f, g) or fnmatch.fnmatch(name, g) for g in globs):
+                out.append(f)
+            continue
+        for ext, pred in _TEST_FILE_CONVENTIONS:
+            if f.endswith(ext) and pred(name, f):
+                out.append(f)
+                break
     return out
 
 
@@ -432,7 +469,8 @@ async def run_bl_tests(repo_root: Path, agent_branch: str, base_ref: str,
         return {"ok": False, "kind": "error", "reason": f"git diff failed: {out.strip()[:200]}",
                 "failing_tests": [], "regressions": [], "new_failures": [], "post_tail": ""}
 
-    bl_tests = _bl_test_files([l for l in out.splitlines() if l.strip()])
+    bl_tests = _bl_test_files([l for l in out.splitlines() if l.strip()],
+                              getattr(cfg, "test_file_globs", None))
     if not bl_tests:
         return {"ok": False, "kind": "no_tests",
                 "reason": ("this BL added/changed no unit tests — doctrine requires "
@@ -471,23 +509,42 @@ async def run_bl_tests(repo_root: Path, agent_branch: str, base_ref: str,
         else:
             # Use the FULL configured command, not just its binary — a target's
             # test_cmd may be multi-token (e.g. `uv run pytest`, `python -m
-            # pytest`). Append `-v` (for parseable per-test lines) and the BL's
-            # own test files. `test_env` (e.g. DATABASE_URL/HABITS_STORAGE) is
-            # merged into the subprocess env so natively-run suites that need it
-            # can open their DB.
+            # pytest`, `dotnet test backend/Ecommerce.sln`). `test_env` (e.g.
+            # DATABASE_URL/HABITS_STORAGE) is merged into the subprocess env so
+            # natively-run suites that need it can open their DB.
             base = list(cfg.test_cmd or detect_test_command(repo_root) or ["pytest"])
-            vflag = ["-v"] if ("pytest" in base and "-v" not in base and "--verbose" not in base) else []
-            cmd = [*base, *vflag, *bl_tests]
+            if "pytest" in base:
+                # pytest accepts file paths as test selectors: scope to exactly
+                # the BL's own changed test files and add -v for parseable lines.
+                vflag = ["-v"] if ("-v" not in base and "--verbose" not in base) else []
+                cmd = [*base, *vflag, *bl_tests]
+            else:
+                # Non-pytest runner (dotnet test, go test, mvn/gradle test,
+                # vitest, …): these don't take source-file paths as test
+                # selectors the way pytest does, so we run the configured suite
+                # as-is rather than appending `.cs`/`.go` paths that the runner
+                # would reject. The BL is still GATED on its own tests' presence
+                # (bl_tests is non-empty above — a BL that shipped no unit tests
+                # already returned no_tests). These suites are fast, isolated
+                # unit tests (no Playwright/lint), so running the whole project
+                # is the per-BL scope; the verdict is taken from the runner's
+                # exit code, which is authoritative across runners. (A future
+                # refinement could scope via `dotnet test --filter` etc.)
+                cmd = [*base]
             exit_code, stdout, stderr = await _run_capture(cmd, wt, timeout=timeout, env=cfg.test_env)
 
         passed, failed = _parse_pytest(stdout, stderr)
         tail = "\n".join((stdout + "\n" + stderr).splitlines()[-300:])
-        # Exit code is authoritative for pytest (0 = all passed). The parsed
-        # node-ids are for NAMING failures in the retry prompt; when they don't
-        # parse (e.g. a path prefix the parser doesn't anchor), fall back to the
-        # BL test files so the engineer still gets actionable detail.
+        # Exit code is authoritative across runners (0 = all passed) — pytest,
+        # dotnet test, go test, etc. all honor this. The parsed pytest node-ids
+        # are only for NAMING failures in the retry prompt; when they don't
+        # parse (a non-pytest runner, or a path prefix the parser doesn't
+        # anchor), fall back to the BL test files so the engineer still gets
+        # actionable detail.
         if exit_code == 0:
-            kind, ok, reason = "green", True, f"BL unit tests green ({len(passed)} passed)"
+            kind, ok = "green", True
+            reason = (f"BL unit tests green ({len(passed)} passed)" if passed
+                      else "BL unit tests green (exit=0)")
         else:
             kind, ok = "failed", False
             reason = (f"{len(failed)} BL unit-test failure(s)" if failed
