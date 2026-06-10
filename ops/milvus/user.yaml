@@ -1,0 +1,15 @@
+# A68-followup (2026-06-10): harden Milvus standalone against etcd session-lease
+# loss under host resource contention on a 16 GB Mac (Milvus + Ollama + claude
+# subprocesses + dotnet builds run concurrently). Root cause verified in
+# run-20260610T122223Z-27d128: keepalive RPCs hit DeadlineExceeded ->
+# "etcdserver: requested lease not found" -> "Root Coord disconnected from etcd,
+# process will exit". A longer session TTL + more keepalive retries + a longer
+# etcd request timeout let Milvus ride out transient scheduling stalls instead of
+# self-terminating. Safe for a single-node standalone deployment (no multi-replica
+# failover-latency concern). Mounted at /milvus/configs/user.yaml (overrides milvus.yaml).
+etcd:
+  requestTimeout: 30000   # ms (default 10000)
+common:
+  session:
+    ttl: 180              # s (default 30) — lease survives long keepalive stalls
+    retryTimes: 60        # (default 30)

@@ -82,8 +82,17 @@ class RetrievalUnavailable(RuntimeError):
 # A3: Milvus auto-restart cooldown so we don't loop on a permanently-broken
 # container. Module-local; resets when uvicorn restarts.
 _MILVUS_LAST_RESTART_AT: float = 0.0
-_MILVUS_RESTART_COOLDOWN_S = 60.0
 _MILVUS_CONTAINER = os.environ.get("MILVUS_CONTAINER_NAME", "milvus-standalone")
+# A68: Milvus standalone reloads ALL accumulated segments on boot (every
+# per-target lessons_/patterns_/code-context collection), which routinely takes
+# MINUTES, not seconds — observed ~3.5 min cold-start in run-20260610T040613Z.
+# The old fixed 30s poll + 60s cooldown escalated mid-reload (the run gave up at
+# T+~165s; Milvus served at ~T+210s), spuriously failing a BL on a HARNESS infra
+# blip rather than waiting it out. Wait generously (poll until it serves), and
+# size the cooldown to SPAN the reload window so concurrent/retry calls poll the
+# in-progress reload instead of re-issuing `docker restart` and thrashing it.
+_MILVUS_RESTART_WAIT_S = float(os.environ.get("MILVUS_RESTART_WAIT_S", "300"))
+_MILVUS_RESTART_COOLDOWN_S = _MILVUS_RESTART_WAIT_S
 
 
 def _milvus_port_reachable(timeout: float = 1.0) -> bool:
@@ -100,33 +109,47 @@ def _milvus_port_reachable(timeout: float = 1.0) -> bool:
 
 
 def _try_milvus_restart() -> tuple[bool, str]:
-    """A3: best-effort `docker start <container>` + poll up to 30s for the
-    port to come back. Returns (ok, message). Respects a 60s cooldown so
-    repeated preflight failures don't restart-loop a broken container.
+    """A3/A68: best-effort recovery of a down/hung Milvus + poll until it serves.
+
+    Uses ``docker restart`` (not ``start``) so a hung-but-running container is
+    actually cycled, then polls :19530 for up to ``_MILVUS_RESTART_WAIT_S``
+    (default 300s) because Milvus standalone's segment reload scales with
+    accumulated data and routinely takes minutes. The cooldown spans the same
+    window: a call arriving while a prior restart is still reloading does NOT
+    re-issue ``docker restart`` (which would thrash the reload) — it polls the
+    in-progress reload for the time remaining. Returns (ok, message).
     """
     global _MILVUS_LAST_RESTART_AT
     now = time.time()
-    if now - _MILVUS_LAST_RESTART_AT < _MILVUS_RESTART_COOLDOWN_S:
-        elapsed = now - _MILVUS_LAST_RESTART_AT
-        return False, f"cooldown active ({elapsed:.0f}s of {_MILVUS_RESTART_COOLDOWN_S:.0f}s)"
+    elapsed = now - _MILVUS_LAST_RESTART_AT
+    if elapsed < _MILVUS_RESTART_COOLDOWN_S:
+        # A restart was issued recently; Milvus may still be reloading segments.
+        # Don't re-restart — wait out the rest of the reload window.
+        remaining = max(0.0, _MILVUS_RESTART_WAIT_S - elapsed)
+        deadline = time.time() + remaining
+        while time.time() < deadline:
+            if _milvus_port_reachable(timeout=0.5):
+                return True, f"{_MILVUS_CONTAINER} reachable (reload finished ~{time.time() - _MILVUS_LAST_RESTART_AT:.0f}s after restart)"
+            time.sleep(2.0)
+        return False, f"{_MILVUS_CONTAINER} still unreachable ~{time.time() - _MILVUS_LAST_RESTART_AT:.0f}s after restart"
     _MILVUS_LAST_RESTART_AT = now
     import subprocess as _sp
     try:
         proc = _sp.run(
-            ["docker", "start", _MILVUS_CONTAINER],
-            capture_output=True, text=True, timeout=15.0, check=False,
+            ["docker", "restart", _MILVUS_CONTAINER],
+            capture_output=True, text=True, timeout=90.0, check=False,
         )
     except (_sp.SubprocessError, OSError) as exc:
-        return False, f"docker start failed: {type(exc).__name__}: {exc}"
+        return False, f"docker restart failed: {type(exc).__name__}: {exc}"
     if proc.returncode != 0:
-        return False, f"docker start exit={proc.returncode}: {(proc.stderr or '').strip()[:200]}"
-    # Poll port for up to 30s
-    deadline = time.time() + 30.0
+        return False, f"docker restart exit={proc.returncode}: {(proc.stderr or '').strip()[:200]}"
+    # Poll the port until Milvus finishes reloading its segments (generous — see A68).
+    deadline = time.time() + _MILVUS_RESTART_WAIT_S
     while time.time() < deadline:
         if _milvus_port_reachable(timeout=0.5):
-            return True, f"restarted {_MILVUS_CONTAINER} (port healthy)"
-        time.sleep(1.0)
-    return False, f"restarted {_MILVUS_CONTAINER} but port still unreachable after 30s"
+            return True, f"restarted {_MILVUS_CONTAINER} (port healthy after {time.time() - _MILVUS_LAST_RESTART_AT:.0f}s)"
+        time.sleep(2.0)
+    return False, f"restarted {_MILVUS_CONTAINER} but port still unreachable after {_MILVUS_RESTART_WAIT_S:.0f}s"
 
 
 def _preflight_retrieval() -> tuple[bool, str]:
@@ -135,8 +158,10 @@ def _preflight_retrieval() -> tuple[bool, str]:
     Returns (ok, reason). Reason is empty on success, human-readable on failure.
     Best-effort: a Milvus ping that times out in <1s counts as failure.
 
-    A3: if Milvus is unreachable, try ONE `docker start <container>` + 30s
-    wait before giving up. Cooldown 60s prevents restart-loops.
+    A3/A68: if Milvus is unreachable, `docker restart` it and poll :19530 until
+    it serves (up to _MILVUS_RESTART_WAIT_S, default 300s — standalone segment
+    reload takes minutes). A cooldown spanning that window makes concurrent/retry
+    calls poll the in-progress reload instead of re-restarting it.
     """
     if not RETRIEVAL_REFERENCE_REPO.exists():
         return False, f"RETRIEVAL_REFERENCE_REPO missing: {RETRIEVAL_REFERENCE_REPO}"

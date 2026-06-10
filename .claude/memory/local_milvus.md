@@ -31,14 +31,41 @@ SIGNO: 11; SIGNAME: Segmentation fault; SI_CODE: 1; SI_ADDR: 0x18
 
 If a memory or prior session suggests bringing up Milvus that way, prefer the 3-container compose path.
 
-## How to bring it back up (verified 2026-06-02)
+## A68 hardening (2026-06-10) — survives etcd-lease loss + Docker memory rebalance
 
+Milvus standalone **self-terminated mid-sprint** twice (run-…-27d128, C# sprint):
+keepalive RPCs hit `DeadlineExceeded` → `etcdserver: requested lease not found` →
+"Root Coord disconnected from etcd, process will exit". Root cause = host resource
+contention on this **16 GB** Mac (Docker was given **12 GB**, leaving ~4 GB for
+harness + claude subprocesses + Ollama + dotnet builds → hard swap → Milvus
+goroutines starve → keepalive misses). Fixes shipped:
+- **Persistent, hardened deploy now lives in the repo: `ops/milvus/`** (compose +
+  `user.yaml` + README) — `/tmp/milvus` is volatile (its compose .yml vanished once).
+- `user.yaml` overlay (mounted `/milvus/configs/user.yaml`): `common.session.ttl
+  30→180`, `retryTimes 30→60`, `etcd.requestTimeout 10000→30000` — Milvus rides out
+  transient stalls instead of exiting.
+- `restart: unless-stopped` on all 3 services (Docker auto-revives; complements the
+  harness A68 restart in `projects.py`, now `docker restart` + 300s poll).
+- **Docker Desktop memory 12 GB → 8 GB** (`settings.json` `memoryMiB`) — frees ~4 GB
+  to the host. On a 16 GB Mac, RAISING Docker RAM is counterproductive; the Milvus
+  stack fits in 8 GB. See `DESIGN_SHORTCOMINGS.md` A68.
+
+## How to bring it back up (hardened, from the repo copy — 2026-06-10)
+
+```bash
+mkdir -p /tmp/milvus
+cp ops/milvus/docker-compose.yml ops/milvus/user.yaml /tmp/milvus/
+cd /tmp/milvus && DOCKER_VOLUME_DIRECTORY=/tmp/milvus docker compose -p milvus up -d --pull never
+# Wait ~20 seconds for standalone to become healthy. --pull never: hub has been
+# unreachable here; images are local (milvusdb/milvus:v2.5.26, etcd, minio).
+```
+
+Older (pre-hardening) bring-up — only if the repo copy is unavailable:
 ```bash
 mkdir -p /tmp/milvus
 curl -sL https://raw.githubusercontent.com/milvus-io/milvus/v2.5.27/deployments/docker/standalone/docker-compose.yml \
   -o /tmp/milvus/docker-compose.yml
 cd /tmp/milvus && docker compose -p milvus up -d
-# Wait ~20 seconds for standalone to become healthy
 ```
 
 Verify:
