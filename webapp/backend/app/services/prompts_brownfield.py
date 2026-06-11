@@ -38,6 +38,7 @@ SKILL_PATHS = {
     "acceptance":    SKILLS_DIR / "brownfield-acceptance-agent" / "SKILLS.md",
     "janitor":       SKILLS_DIR / "brownfield-production-incremental-janitor" / "SKILLS.md",
     "onboarder":     SKILLS_DIR / "brownfield-production-incremental-onboarder" / "SKILLS.md",
+    "architect":     SKILLS_DIR / "brownfield-production-incremental-architect" / "SKILLS.md",
 }
 
 
