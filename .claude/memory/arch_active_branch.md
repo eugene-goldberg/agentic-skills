@@ -1,6 +1,6 @@
 ---
 name: arch-active-branch
-description: "Branch model (2026-06-07): work on `development`, fast-forward into `main` when verified; these are the ONLY live branches. `followup-dispatch-ui` was merged into main and DELETED (local+remote). Tip @ 78559c3. This session shipped scorer scorecard persistence, the Janitor/Ops role (R16), the item #1 gate fix (pytest parse anchor + run_gate exit-code fallback), and ran the Kanban stress experiment (crew PASSED, all 4 failure predictions falsified)."
+description: "Branch model (BINDING): work on `development`, FF into `main` when verified; these two ≡ `origin` are the ONLY live branches. Tip @ `0328918` (2026-06-11, dev≡main≡origin, clean, pushed). Latest: C# crew loop PROVEN end-to-end (first non-Python sprint, ecommerce-wishlist); A68 Milvus etcd-lease resilience; native-boot acceptance SHIPPED+LIVE-PROVEN."
 metadata:
   node_type: memory
   type: project
@@ -15,8 +15,15 @@ metadata:
   `cumulative_learning`) are historical/archival.
 - **`followup-dispatch-ui` is GONE** — merged into `main`, deleted local+remote
   on 2026-06-07. Do not reference it as active.
-- Both `development` and `main` currently at **`b7ab0b9`** (2026-06-08; in sync).
-  Mid-session `development` may be N commits ahead of `main`.
+- Both `development` and `main` ≡ `origin` at **`0328918`** (2026-06-11; in sync,
+  clean, pushed). Mid-session `development` may be N commits ahead of `main`.
+- **Latest session (2026-06-11):** C# crew loop PROVEN end-to-end — first feature on a
+  NON-Python target (ecommerce-wishlist, `run-…-05f865`: 4/4 BLs, regression green,
+  acceptance 7/7). ecommerce = 2nd sprint-proven real target (Stage-3 substrate ready).
+  Shipped **A68** (Milvus etcd-lease resilience: harness `docker restart`+300s poll +
+  `ops/milvus/` hardened deploy + Docker 12→8 GB) and **native-boot acceptance**
+  SHIPPED+LIVE-PROVEN ([[arch_native_boot_acceptance]], [[arch_target_ecommerce]],
+  [[local-milvus]]). Harness pid 57284 is CURRENT (no restart needed).
 - Since `78559c3`: Exp 1b (crew PASSED no-telegraph discovery, 6/6); A56 warm-up
   (live); the **self-resolution arc A57–A61** (crew now resolves merge failures +
   acceptance findings autonomously) — see [[arch_self_resolution_arc]]; and the
