@@ -198,6 +198,20 @@ target-unique mode does not) **+** Batch-E read-path live smoke (a sprint pulls 
 delete the `lessons_global` collection + `global_lessons.jsonl` to fully reset.
 Per-target Stages 1/1.5/4 are untouched and independent.
 
+## 5b. DORMANT BY DEFAULT (operator directive, 2026-06-11)
+
+> **Cross-target transfer is OFF and must not be used in any run** until explicitly
+> re-enabled. A single master switch — `global_lessons.enabled()` reading
+> **`STAGE3_CROSS_TARGET=1`** (default unset) — gates ALL THREE consumption paths:
+> the push block (`prompts._lessons_block`), the merged `search_lessons` pull
+> (`retrieval_server`, which falls back to per-target-only when off), and the
+> `sprint_complete` graduation write (`orchestrator`). With the switch unset:
+> nothing is pushed, the pull returns only this target's lessons, and graduation
+> does not even write. The on-disk global store + curated seed are left intact
+> (just not consumed). **Reversible:** `export STAGE3_CROSS_TARGET=1` + restart the
+> harness to reactivate. Tests:
+> `test_global_lessons_wiring.test_global_dormant_by_default_even_with_flag_and_store`.
+
 ## 6. SHIPPED — status / no-overclaim ledger (2026-06-11)
 
 Implemented across `global_lessons.py` (model + jsonl store + graduation + merged

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,19 @@ from typing import Optional
 from app.services import lessons as _lessons
 from app.services import lessons_index as _li
 from app.services.lessons import Lesson
+
+
+# ─── master kill-switch (DORMANT BY DEFAULT) ────────────────────────────────
+# Operator directive 2026-06-11: cross-target (Stage 3) transfer must stay
+# DORMANT and not be used in any run. This single switch gates ALL three
+# CONSUMPTION paths — the push block, the merged search_lessons pull, AND the
+# sprint_complete graduation write — so none of them fire unless explicitly
+# re-enabled. Default OFF. Reversible: set STAGE3_CROSS_TARGET=1 to reactivate.
+# The curated/global store on disk is left intact (it just isn't consumed).
+def enabled() -> bool:
+    """True only when cross-target transfer has been explicitly re-enabled via
+    the STAGE3_CROSS_TARGET=1 environment switch. Default OFF → fully dormant."""
+    return os.getenv("STAGE3_CROSS_TARGET") == "1"
 
 # Graduation is a STRONGER claim ("these are the same failure mode") than the
 # search-relevance floor ("relevant to my problem"), so it sits above

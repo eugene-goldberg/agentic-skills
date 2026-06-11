@@ -3401,16 +3401,17 @@ async def run_brief(
         # registered targets — a failure mode independently confirmed on ≥2
         # targets graduates into the shared global store, so the NEXT sprint on
         # ANY target inherits it (the mission's "carries forward across targets").
-        # Best-effort + off-thread (embeds via Ollama); a failure NEVER perturbs
-        # the completed sprint. Consumed only when inject_global_lessons / the
-        # merged search_lessons pull surface it — this is a pure write.
-        try:
-            graduated = await asyncio.to_thread(global_lessons_svc.graduate_all)
-            if graduated:
-                yield _evt("global_lessons.graduated", n=len(graduated),
-                           targets=sorted({t for g in graduated for t in g.origin_targets}))
-        except Exception as exc:  # noqa: BLE001 — advisory; never perturb
-            yield _evt("global_lessons.graduation_error", error=str(exc))
+        # DORMANT BY DEFAULT (operator 2026-06-11): cross-target transfer must not
+        # be used in any run, so the graduation write does not even fire unless
+        # STAGE3_CROSS_TARGET=1 re-enables it. Best-effort + off-thread when on.
+        if global_lessons_svc.enabled():
+            try:
+                graduated = await asyncio.to_thread(global_lessons_svc.graduate_all)
+                if graduated:
+                    yield _evt("global_lessons.graduated", n=len(graduated),
+                               targets=sorted({t for g in graduated for t in g.origin_targets}))
+            except Exception as exc:  # noqa: BLE001 — advisory; never perturb
+                yield _evt("global_lessons.graduation_error", error=str(exc))
 
         # ABL-0014: acceptance pass — runs AFTER sprint_complete and BEFORE
         # doctrine_meta + closure_check. Advisory only (§E.1 Q3): exceptions

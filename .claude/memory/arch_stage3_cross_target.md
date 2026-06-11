@@ -12,6 +12,15 @@ SHIPPED 2026-06-11 (commit `b627d32` on `development`). Doc:
 `ABL-0018_CROSS_TARGET_TRANSFER.md`. Builds on [[arch_cumulative_learning]] Stages
 1/1.5/4 (which were per-target only).
 
+**DORMANT BY DEFAULT (operator directive 2026-06-11, after the first live render):**
+cross-target transfer must NOT be used in any run. A master switch
+`global_lessons.enabled()` (`STAGE3_CROSS_TARGET=1`, default unset) gates ALL three
+consumption paths — push (`_lessons_block`), merged pull (`retrieval_server`
+falls back to per-target-only), and the `sprint_complete` graduation write. Default
+unset → fully dormant; the on-disk global store + curated seed stay intact but
+unconsumed. Reversible: set the env + restart harness. Test:
+`test_global_dormant_by_default_even_with_flag_and_store`.
+
 **Mechanism (operator chose §3 option C = auto recurrence + curated seed):** a
 failure mode independently confirmed on ≥N **distinct targets** — or an
 operator/architect-curated obviously-general lesson — **graduates** into a shared

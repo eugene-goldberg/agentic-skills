@@ -358,7 +358,10 @@ def _lessons_block(repo_root: _Path, feature_slug: str | None, inject_lessons: b
         parts.append(_lessons.render_lessons_block(
             _lessons.list_lessons(repo_root, feature_slug, cap=_lessons.DEFAULT_LESSON_CAP)
         ))
-    if inject_global_lessons:
+    # ABL-0018 push — gated by the request flag AND the Stage-3 master switch
+    # (operator 2026-06-11: dormant by default; even an explicit flag does not
+    # surface global lessons unless STAGE3_CROSS_TARGET=1 re-enables transfer).
+    if inject_global_lessons and _global_lessons.enabled():
         parts.append(_global_lessons.render_global_lessons_block(
             _global_lessons.list_global_lessons(cap=_global_lessons.GLOBAL_PUSH_CAP)
         ))

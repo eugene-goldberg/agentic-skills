@@ -4,13 +4,10 @@ the FIRST API+UI feature on the C#/.NET target (the wishlist was backend-only).
 Proposal: PROPOSAL_FEATURE_ecommerce_reviews.md. Brief: briefs/ecommerce_reviews_brief.md.
 
 Notable flag choices (architect, 2026-06-11):
-  - inject_global_lessons=True — the Stage-3 (ABL-0018) cross-target push. This is
-    the deliberate Batch-E smoke: the global "layer-divergence" lesson (new
-    computation added at one layer while old callers read stale data) is DIRECTLY
-    relevant — the brief's A.3 requires the average rating be computed server-side
-    once and read by BOTH the product page and the product-card badge. First real
-    live crew consumption of a cross-target lesson. Watch for the "Cross-target
-    lessons (advisory...)" block in the role traces + no regression → flip default ON.
+  - inject_global_lessons=False — cross-target (Stage 3 / ABL-0018) transfer is
+    DORMANT per operator directive (2026-06-11): the master STAGE3_CROSS_TARGET
+    switch is OFF, so the global push/pull/graduation do not fire in any run. This
+    flag is a no-op while dormant; left False.
   - inject_lessons=True — per-target lessons (default).
   - run_acceptance=True — carries the app-boot-free regression_checkpoint
     (baseline-vs-merged `dotnet test`) AND the native-boot API journeys (proven on
@@ -44,7 +41,9 @@ payload = {
     "run_doctrine_meta": True,
     "run_acceptance_followup": False,
     "inject_lessons": True,
-    "inject_global_lessons": True,   # Stage-3 Batch-E smoke + directly-relevant global lesson
+    # Cross-target (Stage 3) transfer is DORMANT (operator 2026-06-11) — the master
+    # STAGE3_CROSS_TARGET switch is OFF, so this flag is a no-op. Left False.
+    "inject_global_lessons": False,
     "warm_retrieval": True,
     "timeout_per_role": 3000,        # 50 min/role
     "acceptance_timeout": 3000,      # 50 min

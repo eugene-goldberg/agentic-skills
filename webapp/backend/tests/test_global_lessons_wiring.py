@@ -29,7 +29,10 @@ from app.routers.projects import RunBriefRequest  # noqa: E402
 @pytest.fixture()
 def seeded_global(monkeypatch, tmp_path: Path):
     """Point the global store at a tmp jsonl + seed one curated cross-target
-    lesson. Never indexes (index=False), so no Ollama dependency."""
+    lesson, and ENABLE the Stage-3 master switch for the render-path tests
+    (cross-target transfer is dormant by default — operator 2026-06-11). Never
+    indexes (index=False), so no Ollama dependency."""
+    monkeypatch.setenv("STAGE3_CROSS_TARGET", "1")
     p = tmp_path / "global_lessons.jsonl"
     monkeypatch.setattr(gl, "global_lessons_path", lambda: p)
     gl.seed_global_lesson(
@@ -117,6 +120,25 @@ def test_po_and_qa_and_scorer_include_global_when_on(seeded_global, tmp_path: Pa
                                     feature_slug="feat-a", inject_global_lessons=True)
     for p in (po, qa, score):
         assert "Cross-target lessons" in p
+
+
+def test_global_dormant_by_default_even_with_flag_and_store(monkeypatch, tmp_path: Path) -> None:
+    """Operator directive 2026-06-11: cross-target transfer is DORMANT. With the
+    STAGE3_CROSS_TARGET master switch UNSET (default), the global block must NOT
+    render even when inject_global_lessons=True AND the store has lessons."""
+    monkeypatch.delenv("STAGE3_CROSS_TARGET", raising=False)
+    p = tmp_path / "global_lessons.jsonl"
+    monkeypatch.setattr(gl, "global_lessons_path", lambda: p)
+    gl.seed_global_lesson(classification="product_bug", body="layer divergence",
+                          origin_targets=["a", "b"], note="x", path=p, index=False)
+    assert gl.list_global_lessons(path=p)              # store is non-empty
+    assert gl.enabled() is False                        # switch off by default
+    repo = tmp_path / "repo"; repo.mkdir()
+    prompt = prompts_svc.build_engineer(
+        "brownfield", "BL-0001", "do the thing", repo,
+        feature_slug="feat-a", inject_lessons=True, inject_global_lessons=True,
+    )
+    assert "Cross-target lessons" not in prompt          # dormant → not surfaced
 
 
 def test_global_silent_when_store_empty(monkeypatch, tmp_path: Path) -> None:

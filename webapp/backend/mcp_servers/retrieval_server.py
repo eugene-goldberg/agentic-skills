@@ -362,12 +362,17 @@ def search_lessons(query: str, k: int = 5) -> dict:
         return {"ok": True, "query": query, "lessons": [], "note": "no target registered"}
     try:
         # Imported lazily: keeps the heavy app import off the hot path for
-        # sessions that never call search_lessons. ABL-0018: the merged read-path
-        # unions the per-target pull (Stage 1.5) with the cross-target global
-        # store, scope-tagged — so even a fresh target inherits the global layer.
-        from app.services import global_lessons as _gl
+        # sessions that never call search_lessons. ABL-0018 cross-target transfer
+        # is DORMANT BY DEFAULT (operator 2026-06-11): the pull returns ONLY this
+        # target's lessons unless STAGE3_CROSS_TARGET=1 re-enables the merge with
+        # the global store.
         k = max(1, min(int(k), 10))
-        hits = _gl.search_lessons_merged(repo, query, k=k)
+        if os.getenv("STAGE3_CROSS_TARGET") == "1":
+            from app.services import global_lessons as _gl
+            hits = _gl.search_lessons_merged(repo, query, k=k)
+        else:
+            from app.services import lessons_index as _li
+            hits = _li.search_lessons(repo, query, k=k)  # per-target only (dormant)
     except Exception as exc:  # noqa: BLE001 — advisory: never fail a sprint
         msg = f"{type(exc).__name__}: {exc}"
         _log({"tool": "search_lessons", "query": query, "error": msg})
