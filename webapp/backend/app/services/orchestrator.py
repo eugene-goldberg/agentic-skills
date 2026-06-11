@@ -1621,6 +1621,78 @@ def _build_priors_block(repo_dir: Path, feature_slug: str) -> str:
     return "\n".join(lines)
 
 
+def _alloc_free_port() -> int:
+    """Reserve an ephemeral free TCP port (PROPOSAL_NATIVE_BOOT_ACCEPTANCE, locked
+    decision: free-port injection kills the stale-build port-collision class)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
+def _resolve_app_boot_port(app_boot: dict, port: int) -> dict:
+    """Return a copy of the app_boot contract with ``${PORT}`` substituted in
+    cmd / ready_url / pre_cmd, and the chosen port recorded under ``_port``."""
+    def _sub(s: str) -> str:
+        return s.replace("${PORT}", str(port))
+    out = dict(app_boot)
+    out["cmd"] = [_sub(x) for x in app_boot.get("cmd", [])]
+    if app_boot.get("ready_url"):
+        out["ready_url"] = _sub(app_boot["ready_url"])
+    if app_boot.get("pre_cmd"):
+        out["pre_cmd"] = [[_sub(tok) for tok in step] for step in app_boot["pre_cmd"]]
+    out["_port"] = port
+    return out
+
+
+def _materialize_app_boot(app_boot: dict, wt_path: Path) -> list[dict]:
+    """Copy app_boot.materialize templates into the acceptance worktree.
+
+    SECURITY (locked decision A, PROPOSAL_NATIVE_BOOT_ACCEPTANCE §7): each
+    ``from`` MUST be a committed ``*.example.*`` template and resolve inside the
+    worktree; ``to`` MUST resolve inside the worktree. The source is committed so
+    it is already present in the worktree — this is a single-tree copy that fills
+    in the gitignored runtime config the agent otherwise can't get. Returns
+    per-entry results for telemetry; never raises (advisory).
+    """
+    import shutil as _sh
+    results: list[dict] = []
+    wt_root = wt_path.resolve()
+    for m in app_boot.get("materialize", []):
+        frm, to = m.get("from", ""), m.get("to", "")
+        res = {"from": frm, "to": to, "ok": False, "reason": ""}
+        try:
+            if ".example." not in Path(frm).name:
+                res["reason"] = "rejected: source is not a *.example.* template"
+                results.append(res)
+                continue
+            src = (wt_path / frm).resolve()
+            dst = (wt_path / to).resolve()
+            if not str(src).startswith(str(wt_root) + "/"):
+                res["reason"] = "rejected: source escapes worktree"
+                results.append(res)
+                continue
+            if not str(dst).startswith(str(wt_root) + "/"):
+                res["reason"] = "rejected: dest escapes worktree"
+                results.append(res)
+                continue
+            if not src.is_file():
+                res["reason"] = f"source template not found: {frm}"
+                results.append(res)
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            _sh.copyfile(src, dst)
+            res["ok"] = True
+            res["reason"] = "materialized"
+        except Exception as exc:  # noqa: BLE001 — advisory: never abort
+            res["reason"] = f"error: {type(exc).__name__}: {exc}"
+        results.append(res)
+    return results
+
+
 def _build_acceptance_task(
     skill: str,
     *,
@@ -1636,6 +1708,7 @@ def _build_acceptance_task(
     backend_bl_evidence: dict[str, list[str]] | None = None,
     repo_dir: Path | None = None,
     inject_acceptance_priors: bool = False,
+    app_boot: dict | None = None,
 ) -> str:
     """Construct the per-attempt task prompt for the acceptance agent.
 
@@ -1709,6 +1782,47 @@ def _build_acceptance_task(
     if inject_acceptance_priors and repo_dir is not None:
         priors_block = _build_priors_block(repo_dir, feature_slug)
 
+    # PROPOSAL_NATIVE_BOOT_ACCEPTANCE: native-boot contract when the target has
+    # no compose stack. The harness has already reserved the port + materialized
+    # the gitignored config; the AGENT drives the boot against this explicit
+    # contract (decision: agent-driven), with a Level-3 feature-route check.
+    if app_boot:
+        port = app_boot.get("_port")
+        env = app_boot.get("env") or {}
+        env_str = " ".join(f"{k}={v}" for k, v in env.items())
+        cmd_str = " ".join(app_boot.get("cmd", []))
+        ready_url = app_boot.get("ready_url") or "(no ready_url configured — pick one)"
+        ready_to = app_boot.get("ready_timeout_s", 150)
+        pre_lines = ""
+        if app_boot.get("pre_cmd"):
+            steps = "\n".join("    " + " ".join(s) for s in app_boot["pre_cmd"])
+            pre_lines = (
+                f"  First run these setup step(s) (e.g. DB migrations) from the "
+                f"worktree root:\n{steps}\n"
+            )
+        boot_block = (
+            f"- BOOT THE APP NATIVELY — this target has NO docker-compose stack. "
+            f"The harness has reserved **port {port}** and materialized the "
+            f"gitignored runtime config into your worktree. Drive the boot "
+            f"yourself from the worktree root:\n"
+            f"{pre_lines}"
+            f"  Then start the app (background it) and wait for it to serve:\n"
+            f"    {env_str + ' ' if env_str else ''}{cmd_str}\n"
+            f"  Poll `{ready_url}` until it returns 2xx (up to {ready_to}s).\n"
+            f"- LEVEL-3 READINESS (REQUIRED before any journey): confirm the app "
+            f"serves THIS sprint's feature — request at least one NEW-feature "
+            f"route and verify it is NOT 404. A stale baseline build can answer "
+            f"200 on old routes while 404ing the new ones; if that happens you "
+            f"booted the wrong build/port — fix it before proceeding. Drive all "
+            f"journeys over HTTP against `http://localhost:{port}`.\n"
+        )
+    else:
+        boot_block = (
+            f"- When you boot any docker compose stack for the seed/run, "
+            f"export `COMPOSE_PROJECT_NAME={compose_project}` so "
+            f"`closure_check` can enumerate any leaks tied to this run.\n"
+        )
+
     return (
         f"{skill}\n\n"
         f"---\n\n"
@@ -1725,9 +1839,7 @@ def _build_acceptance_task(
         f"actor ones and list the rest as `journeys_deferred` in the "
         f"report. The validator rejects > 8.\n"
         f"- MAXIMUM 15 steps per journey. The validator rejects > 15.\n"
-        f"- When you boot any docker compose stack for the seed/run, "
-        f"export `COMPOSE_PROJECT_NAME={compose_project}` so "
-        f"`closure_check` can enumerate any leaks tied to this run.\n"
+        f"{boot_block}"
         f"- One honest pass: do NOT retry failed journeys yourself. "
         f"Classify each failure into one of "
         f"`product_bug | test_bug | data_bug | infra_bug | uncertain` "
@@ -2253,6 +2365,27 @@ async def _acceptance_flow(
     validation: dict = {"ok": False, "missing": [], "empty": [], "summary": "no attempts"}
     last_attempt = 0
 
+    # PROPOSAL_NATIVE_BOOT_ACCEPTANCE: prepare the native-boot contract when the
+    # target configures `app_boot` (no compose stack). Harness-owned steps only:
+    # reserve a free port (kills the stale-build port-collision class) + materialize
+    # the gitignored runtime config from committed *.example.* templates (locked
+    # decision A). The agent then drives the boot against this explicit contract.
+    resolved_app_boot = None
+    _app_boot_cfg = getattr(cfg, "app_boot", None)  # getattr: tolerate test-double cfgs (A67 pattern)
+    if _app_boot_cfg:
+        _port = _alloc_free_port()
+        resolved_app_boot = _resolve_app_boot_port(_app_boot_cfg, _port)
+        mat_results = _materialize_app_boot(resolved_app_boot, wt.path)
+        yield _seal(_evt(
+            "acceptance.app_boot.prepared",
+            run_id=run_id,
+            port=_port,
+            cmd=resolved_app_boot.get("cmd"),
+            ready_url=resolved_app_boot.get("ready_url"),
+            materialized=[m for m in mat_results if m["ok"]],
+            rejected=[m for m in mat_results if not m["ok"]],
+        ))
+
     try:
         for attempt in range(1, ACCEPTANCE_MAX_RETRIES + 2):  # 1, 2, 3 = 1 + 2 retries
             last_attempt = attempt
@@ -2273,6 +2406,7 @@ async def _acceptance_flow(
                 backend_bl_evidence=backend_bl_evidence,
                 repo_dir=repo_dir,
                 inject_acceptance_priors=inject_acceptance_priors,
+                app_boot=resolved_app_boot,
             )
             yield _seal(_evt(
                 "acceptance.attempt.start",

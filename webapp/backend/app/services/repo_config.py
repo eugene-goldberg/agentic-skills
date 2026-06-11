@@ -13,6 +13,13 @@ root that tells the webapp:
 - `doctrine`      — optional explicit override ("brownfield"/"greenfield").
   Normally derived from target_status() at run time; this lets you force a
   family.
+- `app_boot`      — optional native-boot contract for the acceptance phase on
+  NON-compose targets (PROPOSAL_NATIVE_BOOT_ACCEPTANCE, 2026-06-11). A dict:
+  `cmd` (list[str], may contain `${PORT}`), `env` (dict[str,str]), `ready_url`
+  (str, may contain `${PORT}`), `ready_timeout_s` (int), `materialize`
+  (list of {from,to} — `from` MUST be a committed `*.example.*` template,
+  enforced at use), `pre_cmd` (list[list[str]] — e.g. migrations). When absent,
+  acceptance uses the existing compose path.
 
 Greenfield repos that lack the file get sensible defaults: branch="main",
 no doctrine override.
@@ -64,6 +71,50 @@ DEFAULT_UI_GLOBS: list[str] = [
 ]
 
 
+def _normalize_app_boot(raw: object) -> dict | None:
+    """Validate/normalize the optional `app_boot` block from .agentic-skills.json.
+
+    Returns a clean dict or None. Enforces TYPES only (a trustworthy shape for
+    use sites); the security policy that `materialize[].from` must be a committed
+    `*.example.*` template and resolve inside the repo is enforced at the
+    materialize use-site (orchestrator), where it can emit telemetry on rejection.
+    """
+    if not isinstance(raw, dict):
+        return None
+    cmd = raw.get("cmd")
+    if not (isinstance(cmd, list) and cmd and all(isinstance(x, str) for x in cmd)):
+        return None  # cmd is the one required field; without it app_boot is meaningless
+    out: dict = {"cmd": [str(x) for x in cmd]}
+    env = raw.get("env")
+    if isinstance(env, dict) and env:
+        out["env"] = {str(k): str(v) for k, v in env.items()}
+    ready_url = raw.get("ready_url")
+    if isinstance(ready_url, str) and ready_url:
+        out["ready_url"] = ready_url
+    rt = raw.get("ready_timeout_s")
+    if isinstance(rt, (int, float)) and rt > 0:
+        out["ready_timeout_s"] = int(rt)
+    mat = raw.get("materialize")
+    if isinstance(mat, list) and mat:
+        clean_mat = [
+            {"from": str(m["from"]), "to": str(m["to"])}
+            for m in mat
+            if isinstance(m, dict) and isinstance(m.get("from"), str) and isinstance(m.get("to"), str)
+        ]
+        if clean_mat:
+            out["materialize"] = clean_mat
+    pre = raw.get("pre_cmd")
+    if isinstance(pre, list) and pre:
+        clean_pre = [
+            [str(tok) for tok in step]
+            for step in pre
+            if isinstance(step, list) and step and all(isinstance(tok, str) for tok in step)
+        ]
+        if clean_pre:
+            out["pre_cmd"] = clean_pre
+    return out
+
+
 @dataclass
 class RepoConfig:
     repo_root: Path
@@ -76,6 +127,7 @@ class RepoConfig:
     api_route_globs: list[str] | None = None  # None = use DEFAULT_API_ROUTE_GLOBS
     ui_globs: list[str] | None = None          # None = use DEFAULT_UI_GLOBS
     test_file_globs: list[str] | None = None   # None = built-in per-language conventions (run_bl_tests)
+    app_boot: dict | None = None               # None = compose path; native-boot contract for acceptance (PROPOSAL_NATIVE_BOOT_ACCEPTANCE)
 
     def effective_api_route_globs(self) -> list[str]:
         return self.api_route_globs or list(DEFAULT_API_ROUTE_GLOBS)
@@ -92,6 +144,7 @@ class RepoConfig:
             "doctrine": self.doctrine,
             "api_route_globs": self.api_route_globs,
             "test_file_globs": self.test_file_globs,
+            "app_boot": self.app_boot,
             "source": self.source,
         }
 
@@ -131,6 +184,7 @@ def load(repo_root: Path) -> RepoConfig:
             api_route_globs = data.get("api_route_globs")
             ui_globs = data.get("ui_globs")
             test_file_globs = data.get("test_file_globs")
+            app_boot = _normalize_app_boot(data.get("app_boot"))
             return RepoConfig(
                 repo_root=repo_root,
                 agent_branch=agent_branch,
@@ -157,6 +211,7 @@ def load(repo_root: Path) -> RepoConfig:
                     if isinstance(test_file_globs, list) and test_file_globs
                     else None
                 ),
+                app_boot=app_boot,
                 source="file",
             )
         except (OSError, json.JSONDecodeError):

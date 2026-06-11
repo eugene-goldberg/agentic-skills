@@ -96,9 +96,18 @@ You will receive a `run_id` and access to:
    selectors and fixtures that already work, then write new acceptance
    journeys that compose them into multi-step flows. **Do NOT modify or run
    the existing suite.**
-5. **The gate stack contract** — `<target>/compose.gate.yml` and
-   `<target>/scripts/regression_gate.sh`. You use the same stack convention
-   so seeded data lives where playwright can hit it.
+5. **The boot contract — compose OR native.** Targets come in two shapes:
+   - **Compose targets:** `<target>/compose.gate.yml` + `<target>/scripts/regression_gate.sh`.
+     Bring up that stack (same convention the gate uses) so seeded data lives
+     where playwright/curl can hit it.
+   - **Native (non-compose) targets:** there is NO compose stack. Your **Run
+     context** below will carry an explicit **native-boot contract** — the exact
+     boot command, env, a reserved port, and a `ready_url` to poll. The harness
+     has already materialized the gitignored runtime config for you. Drive that
+     boot yourself and, before any journey, do the **Level-3 readiness check**:
+     confirm the app serves a route of THIS sprint's feature (not 404) so you
+     never test a stale baseline build. Always prefer the run-context boot
+     contract when present; it overrides the compose assumption.
 6. **The brownfield rubric** —
    `<agentic-skills>/rubrics/production_grade_scorecard_brownfield.md`. Used
    as a secondary lens: every journey should exercise at least one of the
@@ -166,9 +175,12 @@ Before you emit `done`:
    `test.describe.serial`. Each step's last action MUST be a
    `page.screenshot({ path: "screenshots/.../step_<N>_<name>.png",
    fullPage: true })`.
-6. **Run the journeys** against a fresh gate stack (the same compose
-   overlay the regression gate uses, with your seed step run as a
-   beforeAll). Capture playwright's output verbatim.
+6. **Run the journeys** against a freshly-booted app: either the gate compose
+   stack (compose targets) OR the native-boot contract from your Run context
+   (non-compose targets — boot it, poll `ready_url`, do the Level-3 feature-route
+   check), with your seed step run as a beforeAll. API journeys are always
+   required; Playwright UI journeys only when the feature has UI. Capture the
+   tool output (playwright and/or the `*.jsonl` request/response logs) verbatim.
 7. **Investigate every failure to its verified root cause.** A failure
    observation is the *start* of your work, not the end. For every failed
    step and every passed-with-caveat, run the **Root-Cause Investigation
