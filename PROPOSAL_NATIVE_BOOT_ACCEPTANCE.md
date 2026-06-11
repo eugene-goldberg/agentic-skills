@@ -1,9 +1,25 @@
 # Proposal — Codify native-boot acceptance for non-compose targets
 
-> Authored 2026-06-11 (architect). Status: **PROPOSED — awaiting operator approval.**
-> Grounded in `run-20260610T215031Z-05f865` (first C# sprint) — see
-> `EXPERIMENT_ecommerce_wishlist.md` §9. Calibrated per `CLAUDE.md` architect
+> Authored 2026-06-11 (architect). Status: **SHIPPED + LIVE-PROVEN `[x]` (2026-06-11).**
+> Decisions locked (§7), implemented (commit `3d0845b`), and live-proven by the
+> named-proof run (§8). Grounded in `run-20260610T215031Z-05f865` (first C# sprint)
+> — see `EXPERIMENT_ecommerce_wishlist.md` §9. Calibrated per `CLAUDE.md` architect
 > responsibility #6 (explicit risk · named proof · named rollback).
+>
+> **LIVE PROOF — `run-acceptance` `nativeboot-proof-20260611T013351Z` (ecommerce-wishlist):**
+> harness fired `acceptance.app_boot.prepared` (reserved **port 53700** + materialized
+> `appsettings.json` from the committed `*.example.*` template, `rejected: []`); the
+> agent booted via the contract (`dotnet ef database update → "already up to date"`,
+> then `Now listening on: http://localhost:53700`), ran the **Level-3 feature-route
+> check** (`GET /api/v1/Nonsenses → 404`, then confirmed the wishlist routes serve),
+> and **passed 7/7 API journeys** (`validator_ok=true, attempts=1`). It booted on the
+> harness-RESERVED port — no improvisation, unlike the original run that guessed `:5097`.
+>
+> **Follow-up (minor, filed):** native boot leaves the agent-backgrounded app process
+> running after the worktree is reaped (observed: a `dotnet` listener on `:53700`
+> survived; reaped manually). The compose path has the volume/stack reapers; native
+> boot needs an equivalent **process reaper** (kill the boot PID / port on acceptance
+> teardown). Harmless per-run, but a leak class to close before heavy use.
 
 ## 1. What the crew gains
 
