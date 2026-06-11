@@ -42,6 +42,7 @@ from app.services import findings_ledger as findings_ledger_svc
 from app.services import lessons as lessons_svc
 from app.services import lessons_index as lessons_index_svc
 from app.services import pattern_profile as pattern_profile_svc
+from app.services import global_lessons as global_lessons_svc
 from app.services import doctrine_efficacy as doctrine_efficacy_svc
 from app.services import doctrine_spec as doctrine_spec_svc
 from app.services import traces as traces_svc
@@ -327,11 +328,13 @@ async def _po_flow(
     brief_hash: str | None = None,
     feature_slug: str | None = None,
     inject_lessons: bool = False,
+    inject_global_lessons: bool = False,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
     prompt = prompts_svc.build_po(family, brief, project_name, repo_dir, feature_slug=feature_slug,
-                                  inject_lessons=inject_lessons)
+                                  inject_lessons=inject_lessons,
+                                  inject_global_lessons=inject_global_lessons)
     if inject_lessons and run_id:
         lessons_svc.record_injection(
             run_id, "po",
@@ -465,12 +468,14 @@ async def _engineer_flow(
     section_override: str | None = None,
     task_id: str | None = None,
     inject_lessons: bool = False,
+    inject_global_lessons: bool = False,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
     section = _resolve_engineer_section(repo_dir, bl_id, feature_slug, section_override)
     prompt = prompts_svc.build_engineer(family, bl_id, section, repo_dir, feature_slug=feature_slug,
-                                        inject_lessons=inject_lessons)
+                                        inject_lessons=inject_lessons,
+                                        inject_global_lessons=inject_global_lessons)
     if inject_lessons and run_id:
         lessons_svc.record_injection(
             run_id, "engineer",
@@ -681,6 +686,7 @@ async def _qa_or_scorer_flow(
     run_id: str | None = None,
     feature_slug: str | None = None,
     inject_lessons: bool = False,
+    inject_global_lessons: bool = False,
     bl_base_ref: str | None = None,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
@@ -689,10 +695,12 @@ async def _qa_or_scorer_flow(
     section = backlog_svc.extract_section(bf.read_text(encoding="utf-8"), bl_id)
     if role == "qa":
         prompt = prompts_svc.build_qa(family, bl_id, section, repo_dir, feature_slug=feature_slug,
-                                      inject_lessons=inject_lessons)
+                                      inject_lessons=inject_lessons,
+                                      inject_global_lessons=inject_global_lessons)
     else:
         prompt = prompts_svc.build_score(family, bl_id, section, repo_dir, feature_slug=feature_slug,
-                                         inject_lessons=inject_lessons)
+                                         inject_lessons=inject_lessons,
+                                         inject_global_lessons=inject_global_lessons)
     if inject_lessons and run_id:
         lessons_svc.record_injection(
             run_id, role,
@@ -2819,6 +2827,7 @@ async def run_brief(
     inject_acceptance_priors: bool = False,  # ABL-0014 §I.3 Batch E; OFF until 3-smoke calibration
     run_acceptance_followup: bool = False,  # ABL-0015 auto-dispatch; OFF until calibrated
     inject_lessons: bool = False,  # ABL-0016 cumulative learning; OFF until calibrated
+    inject_global_lessons: bool = False,  # ABL-0018 Stage 3 cross-target push; OFF until calibrated
     run_janitor: bool = True,  # Janitor/Ops role (operator 2026-06-07): spawn the
                                # environment-repair agent on non-code failures.
                                # Flag = named rollback (set False to disable wiring).
@@ -2913,7 +2922,8 @@ async def run_brief(
             async for e in _po_flow(repo_dir, repo_name, brief, project_name,
                                     timeout_per_role, retrieval_kwargs_builder,
                                     run_id=run_id, brief_hash=brief_hash,
-                                    feature_slug=feature_slug, inject_lessons=inject_lessons):
+                                    feature_slug=feature_slug, inject_lessons=inject_lessons,
+                                    inject_global_lessons=inject_global_lessons):
                 if "_orchestrator_outcome" in e:
                     summary["po"] = e
                     po_ok = e.get("doctrine_ok", False)
@@ -3002,7 +3012,8 @@ async def run_brief(
                 async for e in _engineer_flow(repo_dir, repo_name, bl_id,
                                                timeout_per_role, retrieval_kwargs_builder,
                                                run_id=run_id, feature_slug=feature_slug,
-                                               inject_lessons=inject_lessons):
+                                               inject_lessons=inject_lessons,
+                                               inject_global_lessons=inject_global_lessons):
                     if "_orchestrator_outcome" in e:
                         eng_outcome = e
                         continue
@@ -3171,6 +3182,7 @@ async def run_brief(
                                                 timeout_per_role, retrieval_kwargs_builder,
                                                 run_id=run_id, feature_slug=feature_slug,
                                                 inject_lessons=inject_lessons,
+                                                inject_global_lessons=inject_global_lessons,
                                                 bl_base_ref=pre_bl_sha):
                 if "_orchestrator_outcome" in e:
                     qa_outcome = e
@@ -3294,7 +3306,8 @@ async def run_brief(
             async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "scorer",
                                                 timeout_per_role, retrieval_kwargs_builder,
                                                 run_id=run_id, feature_slug=feature_slug,
-                                                inject_lessons=inject_lessons):
+                                                inject_lessons=inject_lessons,
+                                                inject_global_lessons=inject_global_lessons):
                 if "_orchestrator_outcome" in e:
                     score_outcome = e
                     continue
@@ -3382,6 +3395,22 @@ async def run_brief(
                 yield _evt("pattern_profile.refreshed", n_patterns=n, n_sources=len(entries))
         except Exception as exc:  # noqa: BLE001 — advisory; never perturb
             yield _evt("pattern_profile.refresh_error", error=str(exc))
+
+        # ABL-0018 Stage 3: cross-target ("community") graduation. Now that this
+        # sprint's lessons are sealed, re-run the recurrence pass across ALL
+        # registered targets — a failure mode independently confirmed on ≥2
+        # targets graduates into the shared global store, so the NEXT sprint on
+        # ANY target inherits it (the mission's "carries forward across targets").
+        # Best-effort + off-thread (embeds via Ollama); a failure NEVER perturbs
+        # the completed sprint. Consumed only when inject_global_lessons / the
+        # merged search_lessons pull surface it — this is a pure write.
+        try:
+            graduated = await asyncio.to_thread(global_lessons_svc.graduate_all)
+            if graduated:
+                yield _evt("global_lessons.graduated", n=len(graduated),
+                           targets=sorted({t for g in graduated for t in g.origin_targets}))
+        except Exception as exc:  # noqa: BLE001 — advisory; never perturb
+            yield _evt("global_lessons.graduation_error", error=str(exc))
 
         # ABL-0014: acceptance pass — runs AFTER sprint_complete and BEFORE
         # doctrine_meta + closure_check. Advisory only (§E.1 Q3): exceptions

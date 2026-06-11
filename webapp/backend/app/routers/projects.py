@@ -1206,6 +1206,10 @@ class RunBriefRequest(BaseModel):
     # so un-gating is safe (agents ground against current code). Set False to
     # roll back. Mirrors the run_acceptance default-OFF→ON history.
     inject_lessons: bool = True
+    # ABL-0018 Stage 3 cross-target ("community") push. Independent flag (higher
+    # blast radius than per-target lessons → separate rollout). DEFAULT OFF until
+    # the read-path smoke confirms global lessons render + no regression.
+    inject_global_lessons: bool = False
     # A48 pre-flight disk-free check (2026-06-01). Default advisory:
     # the check ALWAYS runs and emits an SSE event with the breakdown,
     # but only refuses the run (HTTP 409) when enforce=True. This
@@ -1459,6 +1463,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 inject_acceptance_priors=req.inject_acceptance_priors,
                 run_acceptance_followup=req.run_acceptance_followup,
                 inject_lessons=req.inject_lessons,
+                inject_global_lessons=req.inject_global_lessons,
                 warm_retrieval=req.warm_retrieval,
                 acceptance_timeout=req.acceptance_timeout,
                 min_ui_coverage_ratio=req.min_ui_coverage_ratio,

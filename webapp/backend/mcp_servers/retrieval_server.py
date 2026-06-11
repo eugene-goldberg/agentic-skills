@@ -337,16 +337,19 @@ def graph_summary(path: str, source: str = "reference") -> dict:
 
 @mcp.tool()
 def search_lessons(query: str, k: int = 5) -> dict:
-    """Find prior CONFIRMED lessons from past work on THIS codebase that match
-    the problem you are facing — by semantic similarity, above a relevance floor.
+    """Find prior CONFIRMED lessons that match the problem you are facing — from
+    past work on THIS codebase AND cross-target lessons learned across multiple
+    codebases — by semantic similarity, above a relevance floor.
 
-    ABL-0016 Stage 1.5. Unlike a file lookup, this matches your *problem*: write
-    a short natural-language description of what you are about to do or the
-    hazard you are reasoning about (e.g. "adding a rest-aware field that the
-    frontend streak badge must also respect") and this returns the nearest prior
-    lesson(s). Lessons are **advisory falsification priors** — evidence to weigh,
-    not rules; ground each against the current code. Returns an empty list when
-    nothing is genuinely relevant (a deliberate floor, not an error).
+    ABL-0016 Stage 1.5 + ABL-0018 Stage 3. Unlike a file lookup, this matches your
+    *problem*: write a short natural-language description of what you are about to
+    do or the hazard you are reasoning about (e.g. "adding a rest-aware field that
+    the frontend streak badge must also respect") and this returns the nearest
+    prior lesson(s). Each hit is tagged ``scope`` = ``target`` (this codebase) or
+    ``global`` (a failure mode confirmed across multiple independent codebases).
+    Lessons are **advisory falsification priors** — evidence to weigh, not rules;
+    ground each against the current code. Returns an empty list when nothing is
+    genuinely relevant (a deliberate floor, not an error).
 
     Args:
         query: natural-language description of your current problem / change.
@@ -359,15 +362,18 @@ def search_lessons(query: str, k: int = 5) -> dict:
         return {"ok": True, "query": query, "lessons": [], "note": "no target registered"}
     try:
         # Imported lazily: keeps the heavy app import off the hot path for
-        # sessions that never call search_lessons.
-        from app.services import lessons_index as _li
+        # sessions that never call search_lessons. ABL-0018: the merged read-path
+        # unions the per-target pull (Stage 1.5) with the cross-target global
+        # store, scope-tagged — so even a fresh target inherits the global layer.
+        from app.services import global_lessons as _gl
         k = max(1, min(int(k), 10))
-        hits = _li.search_lessons(repo, query, k=k)
+        hits = _gl.search_lessons_merged(repo, query, k=k)
     except Exception as exc:  # noqa: BLE001 — advisory: never fail a sprint
         msg = f"{type(exc).__name__}: {exc}"
         _log({"tool": "search_lessons", "query": query, "error": msg})
         return {"ok": True, "query": query, "lessons": [], "note": f"unavailable: {msg}"}
-    _log({"tool": "search_lessons", "query": query, "n_hits": len(hits)})
+    _log({"tool": "search_lessons", "query": query,
+          "n_hits": len(hits), "n_global": sum(1 for h in hits if h.get("scope") == "global")})
     return {"ok": True, "query": query, "lessons": hits}
 
 
