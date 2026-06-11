@@ -15,9 +15,16 @@ metadata:
   `cumulative_learning`) are historical/archival.
 - **`followup-dispatch-ui` is GONE** — merged into `main`, deleted local+remote
   on 2026-06-07. Do not reference it as active.
-- Both `development` and `main` ≡ `origin` at **`0328918`** (2026-06-11; in sync,
-  clean, pushed). Mid-session `development` may be N commits ahead of `main`.
-- **Latest session (2026-06-11):** C# crew loop PROVEN end-to-end — first feature on a
+- Both `development` and `main` ≡ `origin` (2026-06-11; in sync, clean, pushed).
+  Mid-session `development` may be N commits ahead of `main`.
+- **Latest (2026-06-11, Stage 3):** SHIPPED **ABL-0018 cross-target cumulative
+  learning** — the mission's "carries forward ACROSS targets" pillar. `global_lessons.py`:
+  recurrence graduation (≥2 targets, real-bge-m3 floor 0.62) + curated seed → shared
+  global store; merged `search_lessons` + independent `inject_global_lessons` push
+  (DEFAULT OFF). Read-path push+pull LIVE-PROVEN on ecommerce; recurrence write-path
+  `[~]` (awaits cross-target data). 467 passed. See [[arch_stage3_cross_target]].
+  Commit `b627d32` + docs.
+- **Prior session (2026-06-11):** C# crew loop PROVEN end-to-end — first feature on a
   NON-Python target (ecommerce-wishlist, `run-…-05f865`: 4/4 BLs, regression green,
   acceptance 7/7). ecommerce = 2nd sprint-proven real target (Stage-3 substrate ready).
   Shipped **A68** (Milvus etcd-lease resilience: harness `docker restart`+300s poll +

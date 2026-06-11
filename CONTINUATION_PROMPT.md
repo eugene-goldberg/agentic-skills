@@ -97,12 +97,22 @@ load-flakes (pass isolated, NOT regressions — do not "fix" without determinist
 - **beaverhabits** (Python) — @ `174a30a`. 1st sprint-proven target.
 
 ## THE FRONTIER — decide + build, don't ask (priority order)
-1. **Stage 3 — cross-target ("community") cumulative learning** — the literal mission
-   pillar "cumulative across targets", now UNBLOCKED (2 sprint-proven targets, 2
-   languages). Build the global lessons-graduation layer (a lesson confirmed on ≥N
-   targets graduates to cross-target), surfaced to PO/engineer alongside the per-target
-   pull. See `CUMULATIVE_LEARNING_ROADMAP.md` Stage 3. The biggest mission play.
-2. **Native-boot acceptance — process reaper (small, filed).** Native boot leaks the
+0. **Stage 3 — cross-target cumulative learning — SHIPPED 2026-06-11 (`b627d32`).**
+   `global_lessons.py`: recurrence graduation (≥2 targets, real-bge-m3 floor 0.62) +
+   curated seed → shared global store (`.crew-memory/global_lessons.jsonl` + Milvus
+   `lessons_global`); merged `search_lessons` (scope-tagged) + independent
+   `inject_global_lessons` push (DEFAULT OFF). Read-path push+pull **LIVE-PROVEN** on
+   ecommerce; recurrence write-path **`[~]`** (proven on real embeddings; never
+   organically fired — fleet has 1 confirmed lesson, 0 cross-target recurrence). 467
+   passed. Doc `ABL-0018_CROSS_TARGET_TRANSFER.md`; memory `arch_stage3_cross_target`.
+   **Remaining Stage-3 work:** (a) **Batch-E smoke + flag-flip** — one sprint with
+   `inject_global_lessons=true`, confirm the global block renders + no regression, then
+   flip default ON. (b) **Organic graduation live-proof** — accumulate ≥2 targets sharing
+   a confirmed failure mode so recurrence fires for real (data, not code). (c) Consider a
+   separately-calibrated, slightly-lower **global-pull floor** (cross-domain matches sit
+   ~0.48–0.51 < 0.55) — but only with enough cross-target data to calibrate without
+   false-surfacing; do NOT lower blind.
+1. **Native-boot acceptance — process reaper (small, filed).** Native boot leaks the
    agent-backgrounded app process past worktree reaping (a `dotnet` listener survived on
    :53700; reaped manually). Add a process/port reaper on acceptance teardown, analogous
    to the compose volume reaper. Close before heavy native-boot use. (`PROPOSAL_NATIVE_BOOT_ACCEPTANCE.md` header.)
