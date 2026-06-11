@@ -45,10 +45,23 @@ Boot anytime: `./dev-setup.sh --run` (needs `~/.dotnet/tools` on PATH for
 (`_bl_test_files` spans .cs/.go/.java/etc.; non-pytest runners run `test_cmd`
 as-is). graphify already grounds C# (915 C# nodes, 747 symbol-level).
 
-**OPEN (honest, not done):** the harness **acceptance phase** boots the app for
-API testing — for THIS target that needs Postgres + a materialized
-`appsettings.json` in the agent worktree (worktrees only carry tracked files, so
-the gitignored appsettings won't be there). How our acceptance flow boots a
-**non-Python** app is **UNTRACED** — that's the E12 shakedown's job. Per-BL gate
-needs none of this (Moq). See [[feedback_no_scope_overclaim]] — don't claim the
-full crew loop works on C# until a live shakedown proves it.
+**SPRINT-PROVEN 2026-06-11 — the full C# crew loop works end-to-end.** First feature
+sprint (Wishlist, backend-only) `run-20260610T215031Z-05f865`: **4/4 BLs `merged_full`,
+0 escalations, regression_checkpoint green, acceptance PASS (7/7 API journeys),
+closure 0 violations.** Scorecards 92-95 Pass. See `EXPERIMENT_ecommerce_wishlist.md`
+§9. This makes ecommerce the **2nd sprint-proven real target** (beaverhabits=Python n=1)
+→ the **Stage-3 cross-target cumulative-learning substrate is now in place.**
+- **Acceptance native-boot RESOLVED (exceeded):** the prior OPEN "how does acceptance
+  boot a non-Python app" — the acceptance agent **improvised** it: `dotnet run` on
+  `:5097` (avoided the stale baseline build holding `:5096`) against `ecommerce-pg`
+  Postgres + a self-materialized gitignored `appsettings.json`, ran 7 real HTTP
+  journeys, even surfaced a pre-existing cart-DI 500 (FIND-01). **Caveat ([[feedback_no_scope_overclaim]]):**
+  this was AGENT improvisation, NOT a codified harness path — the acceptance skill is
+  still compose-centric. Codifying native-boot acceptance is the logical follow-up.
+- **Two infra blockers surfaced + fixed by the architect (it took 3 launches):** A68
+  (Milvus auto-restart wait 30s ≪ ~3.5-min segment reload → `docker restart` + 300s
+  poll) and Milvus etcd-lease loss under host contention (16 GB Mac, Docker was 12 GB
+  → host swap → keepalive miss → self-exit; fixed via `ops/milvus/` hardened deploy:
+  session.ttl 30→180, retryTimes 30→60, requestTimeout 10000→30000, restart:
+  unless-stopped + Docker memory 12→8 GB). Run #3 had Milvus `RestartCount: 0` across
+  the whole sprint. See `DESIGN_SHORTCOMINGS.md` A68 + [[local-milvus]].

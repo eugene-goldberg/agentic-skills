@@ -214,8 +214,59 @@ spawns, suite delta (start 75 → end N). Then the manual probes:
    `regression_checkpoint` green = TIER 1/2; `acceptance.error`/compose-flail =
    the expected TIER-3 gap (NOT a crew defect) → feeds the native-boot follow-up.
 
-## 9. RESULTS
-_(to be filled after the run)_
+## 9. RESULTS — `run-20260610T215031Z-05f865` (2026-06-10/11)
+
+**Verdict: the C# crew loop is PROVEN end-to-end (TIER-1/2/3 all achieved).** First
+sprint ever on a non-Python target ran clean: **4/4 BLs `merged_full`, 0 escalations,
+0 janitor spawns, 0 Milvus deaths**, ~2h40m (21:50→00:31Z). `integration` @ `3e98fe1`
+(13 commits ahead of baseline); `main` of agentic-skills untouched.
+
+Scorecards (all Pass W/R): BL-0001 **93** · BL-0002 **94** · BL-0003 **92** ·
+BL-0004 **95**. Each BL: engineer (C# + xUnit) → A67 `dotnet test` gate →
+QA `PASS-W/R, 0 regressions` → scorer → auto-merge to `integration`.
+
+| Tier | Result |
+|---|---|
+| **TIER-1** (loop proven) | ✅ all 4 BLs merged via the A67 `dotnet test` gate + `regression_checkpoint` **green** (exit-code-authoritative, A55 fallback — dotnet output isn't pytest-parseable). **Promotes the C# crew loop `[~]`→`[x]`.** |
+| **TIER-2** (full per-BL + correctness) | ✅ all BLs merged; both correctness reqs verified by live acceptance journeys — uniqueness (api_02 duplicate-add → no dup) and move-to-cart atomicity (api_05 before/move/after, product in cart AND gone from wishlist). |
+| **TIER-3** (acceptance on C#) | ✅ **EXCEEDED the prediction.** The acceptance agent **booted the C# app natively** — `dotnet run … --urls http://localhost:5097` against PostgreSQL 16 (`ecommerce-pg`) with the `AddWishlist` migration + seed — and ran **7/7 API journeys PASS**. It even detected that the stale baseline build held `:5096` (404s for `/Wishlists`) and booted *its* build on `:5097`, verifying the routes serve 200 so journeys hit *this sprint's* code. It also surfaced a **real pre-existing defect (FIND-01):** `POST /api/v1/Carts` → 500 (`ICartManagement` DI unregistered), correctly attributed to pre-existing cart code, not the wishlist feature. |
+
+`doctrine_meta`: 0 proposals (clean run); efficacy `run_count=10, never_fired=[]` (no
+false retirements — Stage-2 healthy). `closure_check`: **0 violations**.
+
+**It took THREE launches — two infra failures, both architect-owned, both fixed:**
+1. **run-…-21a088** (BL-0001 merged, then escalated): A68 — the harness Milvus
+   auto-restart waited only 30s, far short of Milvus standalone's ~3.5-min segment
+   reload → premature escalation. **Fixed (A68):** `docker restart` + poll-until-serving
+   (300s) + cooldown spanning the reload window. +4 tests.
+2. **run-…-27d128** (killed mid-BL-0002): Milvus standalone **self-terminated on etcd
+   session-lease loss** under host contention (16 GB Mac, Docker over-allocated at
+   12 GB → host swap → goroutine starvation → keepalive miss). **Fixed:** `ops/milvus/`
+   hardened deploy — `common.session.ttl 30→180`, `retryTimes 30→60`,
+   `etcd.requestTimeout 10000→30000` + `restart: unless-stopped`; Docker memory 12→8 GB.
+3. **run-…-05f865** (this one): clean 4/4. Milvus `RestartCount: 0` across the whole
+   sprint — the root-cause fix held, not just the recovery path.
+
+**Honest caveats (no-overclaim):**
+1. **`regression_checkpoint` was exit-code-green, not a parsed differential** — `run_gate`
+   can't parse `dotnet test` per-test output, so it trusts exit 0 (documented A67/A55
+   behavior). It proves the merged suite passes, not a name-level pre-vs-post diff.
+2. **Acceptance native-boot was AGENT-IMPROVISED, not a codified harness path.** The
+   acceptance *skill* is still compose-centric; the agent (a full Claude Code) figured
+   out `dotnet run` + Postgres + a materialized gitignored `appsettings.json` on its
+   own. So this proves native-boot acceptance is *achievable on C#* (the agent is
+   capable) — NOT that a hardened harness native-boot path exists. Codifying it is the
+   logical follow-up; the agent cleared the bar I expected it to trip on.
+3. **n=2 sprint-proven real targets now** (beaverhabits Python + ecommerce C#) — the
+   Stage-3 cross-target cumulative-learning substrate is finally in place.
+4. FIND-01 (pre-existing cart DI bug) was flagged, not dispatched (`findings_persisted=0`)
+   — correct: it's pre-existing, outside the feature scope.
+
+**Net:** the crew delivers complex features on a non-Python (C#/.NET) brownfield target
+end-to-end — PO grounding, engineering, A67 gating, QA, scoring, auto-merge, full
+regression checkpoint, AND live API acceptance — with the architect resolving the two
+infra blockers (A68 + Milvus stability) that the run surfaced. The language-agnostic
+crew loop is real.
 
 ## 10. Relationship to the experiment program
 
