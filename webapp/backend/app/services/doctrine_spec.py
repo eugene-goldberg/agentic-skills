@@ -151,6 +151,16 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
         docs=("CLAUDE.md", "PROPOSAL_OPS_STEWARD_ROLE.md"),
     ),
     DoctrineRule(
+        "R17", "acceptance runs real (non-mock) E2E over every auth-gated write "
+               "path; a failed/unshippable journey blocks 'clean' and yields a "
+               "classified product_bug finding that auto-dispatches the no-abort "
+               "fix loop",
+        "orchestrator", True,
+        "app.services.orchestrator:_acceptance_flow",
+        has_test=True, targeted_failure_class="silent-failure",
+        docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_ACCEPTANCE_REAL_TEST_MANDATE.md"),
+    ),
+    DoctrineRule(
         "Tier1.5", "pre-modification kill: <min grounded calls before Write/Edit",
         "streaming", True,
         "app.services.claude_agent:stream_agent_task",
@@ -164,7 +174,7 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
 # not yet registered — its enforcement point is to be confirmed first.
 CANONICAL_RULE_IDS = frozenset({
     "R5", "R5b", "R7", "R8", "R9", "R10", "R10.1", "R10.2",
-    "R11", "R12", "R13", "R15", "R16", "Tier1.5",
+    "R11", "R12", "R13", "R15", "R16", "R17", "Tier1.5",
 })
 
 

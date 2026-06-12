@@ -2606,14 +2606,44 @@ async def _acceptance_flow(
         except Exception:
             pass
 
-    # ABL-0015 Batch C: auto-dispatch a follow-up engineer on confirmed
-    # product_bug findings. Runs AFTER the finally (acceptance worktree +
-    # volumes already reaped) and BEFORE acceptance.done — so the follow-up
-    # worktree is created AND reaped (by _engineer_flow's own finally)
-    # before run_brief's closure_check.scan_all fires. Gated OFF by default
-    # and requires the retrieval builder (Batch B). Advisory: a dispatch
-    # failure must not abort the sprint.
-    if run_acceptance_followup and retrieval_kwargs_builder is not None and feature_slug:
+    # ABL-0015 Batch C + R17 (operator directive 2026-06-12): auto-dispatch the
+    # no-abort fix loop on confirmed product_bug findings. Runs AFTER the finally
+    # (acceptance worktree + volumes already reaped) and BEFORE acceptance.done — so
+    # the follow-up worktree is created AND reaped (by _engineer_flow's own finally)
+    # before run_brief's closure_check.scan_all fires. Requires the retrieval builder
+    # (Batch B). Advisory: a dispatch failure must not abort the sprint.
+    #
+    # R17 — acceptance is the BINDING real-test owner. A failed real journey is the
+    # strongest possible signal: the assembled product broke end-to-end. So dispatch
+    # fires whenever there is an eligible observed-failure finding, INDEPENDENT of the
+    # calibration-gated ``run_acceptance_followup`` flag — an observed real failure is
+    # never left un-actioned (no-abort). All acceptance findings are, by construction,
+    # observed failures (the ledger extracts a Finding only from a failed/caveat journey
+    # that carries a classification). Every safety rail is preserved:
+    # ``_select_followup_candidates`` still requires product_bug + confidence>=0.90
+    # (or operator-confirmed) + cost_cap + R15 idempotency, and the dispatched fix must
+    # itself clear the full doctrine+gate+merge bar (a broken fix never merges) — so the
+    # zero-false-merge guarantee holds. ``run_acceptance_followup`` still force-enables
+    # the path even when nothing is eligible yet (calibration-campaign smoke).
+    eligible_now: list = []
+    if feature_slug:
+        try:
+            eligible_now, _capped_now = _select_followup_candidates(
+                findings_ledger_svc.FindingsLedger(repo_dir, feature_slug).list_all()
+            )
+        except Exception:  # noqa: BLE001 — selection is advisory; never abort
+            eligible_now = []
+    should_dispatch = bool(eligible_now) or run_acceptance_followup
+    if should_dispatch and retrieval_kwargs_builder is not None and feature_slug:
+        if eligible_now and not run_acceptance_followup:
+            yield _evt(
+                "acceptance.followup.auto_triggered",
+                run_id=run_id,
+                feature_slug=feature_slug,
+                eligible=len(eligible_now),
+                reason="R17: observed real-journey-failure product_bug finding(s) "
+                       "auto-dispatched independent of the calibration flag",
+            )
         try:
             async for evt in _dispatch_followup_engineers(
                 repo_dir, repo_name, run_id, feature_slug,

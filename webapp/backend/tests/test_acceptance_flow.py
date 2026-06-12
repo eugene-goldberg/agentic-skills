@@ -254,6 +254,83 @@ def test_ledger_persists_failed_journey_finding(tmp_path: Path, monkeypatch) -> 
     assert parsed["journey_id"] == "api_99"
 
 
+def _fake_stream_that_writes_eligible_failed_report(wt_path: Path):
+    """Like the failed-report fixture, but the failed journey carries a HIGH
+    confidence (>= FOLLOWUP_AUTOCONFIRM_CONFIDENCE) so the resulting finding is
+    dispatch-eligible — the R17 observed-real-journey-failure auto-dispatch class."""
+    from tests.test_acceptance_validator import _build_valid_acceptance_dir
+
+    async def _g():
+        feature_dir = wt_path / "_brownfield" / "features" / "demo"
+        _build_valid_acceptance_dir(feature_dir)
+        import json as _json
+        report_path = feature_dir / "acceptance" / "report.json"
+        report = _json.loads(report_path.read_text(encoding="utf-8"))
+        report.setdefault("api_journeys", []).append({
+            "id": "api_99",
+            "status": "fail",
+            "classification": "product_bug",
+            "evidence": "UI review submit returned 401 — token not attached",
+            "root_cause": "frontend/src/services/reviewService.ts never calls "
+                          "setupAuthHeader → POST /api/reviews lacks the JWT → 401",
+            "fix_locus": "product source — fixer = engineer",
+            "confidence": 0.95,
+            "hypothesis": "reviewService omits the auth header",
+        })
+        report_path.write_text(_json.dumps(report), encoding="utf-8")
+        yield {"type": "assistant", "message": "I reported a product bug."}
+    return _g
+
+
+def test_r17_failed_journey_blocks_clean_and_auto_dispatches(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """R17 — operator directive 2026-06-12. An observed real-journey failure
+    (a) is surfaced as ``acceptance.anomaly`` with ``acceptance_clean=False``, and
+    (b) auto-dispatches the no-abort fix loop EVEN WITH
+    ``run_acceptance_followup=False`` (the calibration flag), because an observed
+    real failure is the strongest possible signal and is never left un-actioned."""
+    repo = _setup_happy_path(tmp_path, monkeypatch)
+    wt_path = tmp_path / "wt"
+
+    def stream_side_effect(*_args, **_kwargs):
+        return _fake_stream_that_writes_eligible_failed_report(wt_path)()
+
+    monkeypatch.setattr(orch, "stream_agent_task", stream_side_effect)
+    monkeypatch.setattr(orch, "TraceWriter", MagicMock())
+
+    # Spy the dispatcher so we observe the trigger without spawning an engineer.
+    dispatched: list = []
+
+    async def _spy_dispatch(repo_dir, repo_name, run_id, feature_slug,
+                            builder, *, timeout):
+        dispatched.append(feature_slug)
+        yield orch._evt("acceptance.followup.start", run_id=run_id,
+                        feature_slug=feature_slug)
+
+    monkeypatch.setattr(orch, "_dispatch_followup_engineers", _spy_dispatch)
+
+    events = asyncio.run(_collect(
+        orch._acceptance_flow(
+            repo, "demo", "run-x", "demo",
+            retrieval_kwargs_builder=lambda **_k: {},   # non-None → dispatch can fire
+            run_acceptance_followup=False,               # calibration flag OFF
+        )
+    ))
+    phases = [e.get("phase") for e in events if e.get("phase")]
+
+    # (a) anomaly surfaced + non-clean verdict on done
+    assert "orchestrator.acceptance.anomaly" in phases
+    done = events[-1]
+    assert done["phase"] == "orchestrator.acceptance.done"
+    assert done["acceptance_clean"] is False
+    assert done["anomaly_count"] >= 1
+
+    # (b) R17 auto-dispatch fired despite the flag being OFF
+    assert "orchestrator.acceptance.followup.auto_triggered" in phases
+    assert dispatched == ["demo"]
+
+
 # ─── ledger error path: corrupt report.json must not abort the flow ───────
 
 
