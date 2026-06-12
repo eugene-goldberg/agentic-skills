@@ -123,7 +123,8 @@ def _check(repo_root: Path, rel: str, accumulator: dict) -> None:
 
 
 def _finalize(role: str, acc: dict) -> dict:
-    acc["ok"] = not (acc["missing"] or acc["empty"])
+    thin = acc.get("thin_criteria") or {}
+    acc["ok"] = not (acc["missing"] or acc["empty"] or thin)
     if acc["ok"]:
         acc["summary"] = f"{role}: doctrine artifacts complete"
     else:
@@ -134,13 +135,15 @@ def _finalize(role: str, acc: dict) -> dict:
             parts.append(f"empty={len(acc['empty'])}")
         if acc.get("dangling_refs"):
             parts.append(f"dangling_refs={len(acc['dangling_refs'])}")
+        if thin:
+            parts.append(f"thin_criteria={len(thin)}")
         acc["summary"] = f"{role}: doctrine incomplete — " + ", ".join(parts)
     return acc
 
 
 def validate_po(repo_root: Path, feature_slug: str | None = None) -> dict:
     art = feature_artifact_dir(repo_root, feature_slug)
-    acc = {"missing": [], "empty": [], "dangling_refs": []}
+    acc = {"missing": [], "empty": [], "dangling_refs": [], "thin_criteria": {}}
 
     # A18: when feature_slug is set, BACKLOG.md lives inside the feature dir
     # alongside CODEBASE_CONTEXT.md and SPRINT_PLAN.md. Pre-A18 sprints used
@@ -183,6 +186,14 @@ def validate_po(repo_root: Path, feature_slug: str | None = None) -> dict:
                 acc["dangling_refs"].append(rel)
             else:
                 _check(repo_root, rel, acc)
+
+        # R18 (operator directive 2026-06-12): every BL MUST carry comprehensive,
+        # specific, testable acceptance criteria — they are the unit of truth the
+        # engineer's tests and the acceptance agent's live journeys must each cover.
+        # A BL with missing/thin criteria fails the PO gate and drives the existing
+        # doctrine retry loop (the PO re-writes the criteria), so no BL escapes
+        # decomposition without a verifiable contract.
+        acc["thin_criteria"] = backlog_svc.thin_criteria_report(items)
     return _finalize("po", acc)
 
 
@@ -713,8 +724,48 @@ def validate_scorer(
 # ─────────────────────── Fix-prompt builder ────────────────────────
 
 
+def build_criteria_fix_prompt(thin_criteria: dict) -> str:
+    """R18 delta prompt: the PO's BACKLOG.md has BLs with missing/thin acceptance
+    criteria. Unlike the artifact fix prompt, this one REQUIRES editing BACKLOG.md
+    to add comprehensive criteria. Each criterion becomes the unit of truth the
+    engineer's tests and the acceptance agent's live journeys must cover."""
+    rows = "\n".join(f"- **{bl}**: {reason}" for bl, reason in sorted(thin_criteria.items()))
+    return f"""Your previous PO run produced a BACKLOG.md whose acceptance criteria are
+NOT comprehensive enough. The pre-merge validator has REJECTED it. You are being
+re-invoked in the SAME worktree. Fix the criteria now.
+
+## BLs with insufficient acceptance criteria
+{rows}
+
+## Required (R18 — acceptance criteria are the contract)
+For EACH flagged BL, edit its `**Acceptance:**` block in BACKLOG.md to carry **at
+least 2-3 (more if warranted) specific, observable, testable** acceptance criteria.
+Each criterion MUST:
+1. Be a single concrete, checkable statement — a verifiable behavior, not a vague
+   aspiration. Good: "Submitting a rating outside 1-5 returns HTTP 400 and persists
+   nothing." Bad: "Validation works."
+2. Name the observable: the endpoint/route/UI surface, the input, and the exact
+   expected result (status code, persisted state, rendered text).
+3. Cover the success path AND the failure/edge paths the BL implies (auth required,
+   bad input rejected, ownership enforced, idempotency, empty/zero cases).
+4. Be independently testable — the engineer will write a test per criterion and the
+   acceptance agent will live-verify each one, so anything untestable is a defect.
+
+Keep the existing numbered-list format under `**Acceptance:**` (the chain derives
+stable IDs `AC-<BL>-<n>` from list position). Then `git add -A` and
+`git commit -m "po: strengthen acceptance criteria (R18)"`. Do NOT amend/rebase
+(R13). Print the same final JSON shape with the NEW commit_sha.
+"""
+
+
 def build_fix_prompt(role: str, validation: dict, *, bl_id: str | None = None) -> str:
     """Construct the delta prompt for a re-invocation when the validator fails."""
+    thin = validation.get("thin_criteria") or {}
+    if role == "po" and thin and not (validation.get("missing") or validation.get("empty")):
+        # Pure criteria failure — route to the criteria-specific fix prompt that
+        # is allowed to edit BACKLOG.md. (When artifacts are ALSO missing, fall
+        # through to the artifact prompt first; criteria get re-checked next loop.)
+        return build_criteria_fix_prompt(thin)
     missing = validation.get("missing", [])
     empty = validation.get("empty", [])
     items = "\n".join([f"- MISSING: `{p}`" for p in missing] + [f"- EMPTY (<120 bytes): `{p}`" for p in empty])

@@ -61,6 +61,31 @@ Every BL-XXXX must include:
 - **Compatibility & Migration Notes**
 - **Risk Level** (Low / Medium / High blast radius)
 - **Spike Tasks** (if deep legacy understanding is still needed)
+- **Acceptance** (comprehensive, specific, testable criteria — see below; MANDATORY)
+
+### Acceptance criteria — the contract (R18, BINDING, no exceptions)
+
+The `**Acceptance:**` block of every BL is **the unit of truth for the entire
+crew**: the engineer writes one test per criterion and the acceptance agent
+live-verifies each one in a real booted environment. A vague or missing criterion
+means a defect can ship unseen, so the validator **REJECTS** any BL whose criteria
+are missing or thin and re-invokes you to fix them. Write them right the first time:
+
+1. **Every BL has ≥2-3 (more if warranted) acceptance criteria**, as a numbered
+   list under `**Acceptance:**`. The chain derives stable IDs `AC-<BL>-<n>` from the
+   list position — keep the numbered format.
+2. **Each criterion is one concrete, observable, checkable statement** — a verifiable
+   behavior, not an aspiration. Name the surface (endpoint/route/UI control), the
+   input, and the **exact expected result** (status code, persisted state, rendered
+   text). Good: *"Submitting a rating outside 1-5 returns HTTP 400 and persists
+   nothing."* Bad: *"Validation works."*
+3. **Cover success AND failure/edge paths the BL implies** — auth required, bad input
+   rejected, ownership enforced, idempotency, empty/zero cases. For any **auth-gated
+   write** (create/update/delete behind login), include a criterion that the write
+   **succeeds for an authenticated user through the real surface** (this is what the
+   acceptance agent live-tests; mock-only per-BL tests cannot).
+4. **Each criterion is independently testable.** Anything you cannot phrase as a
+   pass/fail check is not done — rewrite it until you can.
 
 **Decomposition Rules**:
 - Prefer small, vertical, low-blast-radius slices
