@@ -72,10 +72,16 @@ class OllamaEmbedding extends Embedding {
   getDimension() { return this.dimension; }
   getProvider() { return 'Ollama'; }
   async _embedOne(text) {
+    // input MUST be an array: Ollama's /api/embed HANGS on a bare-string input
+    // (observed on Ollama 0.24.0 — single-string request never returns, which
+    // wedged every semantic_search query embed → the crew grounded blind). The
+    // array form returns normally. AbortSignal is defense-in-depth so a future
+    // server stall can never again hang an agent indefinitely.
     const r = await fetch(`${this.host}/api/embed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.modelName, input: text }),
+      body: JSON.stringify({ model: this.modelName, input: [text] }),
+      signal: AbortSignal.timeout(60000),
     });
     if (!r.ok) throw new Error(`Ollama /api/embed HTTP ${r.status}`);
     const j = await r.json();
@@ -94,6 +100,7 @@ class OllamaEmbedding extends Embedding {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: this.modelName, input: ts }),
+      signal: AbortSignal.timeout(120000),
     });
     if (!r.ok) throw new Error(`Ollama /api/embed HTTP ${r.status}`);
     const j = await r.json();
