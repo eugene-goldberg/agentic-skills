@@ -544,23 +544,34 @@ async def _engineer_flow(
             # NOT Playwright. Whole-feature E2E + full-suite regression run once
             # at the acceptance phase.
             gate = await regression_gate_svc.run_bl_tests(repo_dir, agent_branch=wt.branch,
-                                                          base_ref=cfg.agent_branch, run_id=run_id)
+                                                          base_ref=cfg.agent_branch, run_id=run_id,
+                                                          bl_id=bl_id, feature_slug=feature_slug)
             yield _ptag({"type": "_meta", "phase": "bl_tests",
-                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
+                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail", "uncovered_criteria")}},
                        "engineer", bl_id, trace=trace)
             gate_attempt = 0
             gate_signatures.append(f"{gate.get('kind')}:{','.join(sorted((gate.get('regressions') or []) + (gate.get('new_failures') or [])))}")
             # No-abort doctrine: keep fixing until the BL's tests are GREEN.
-            # Retry on `failed` (a real unit-test failure to fix) or `no_tests`
-            # (engineer must add the required unit tests). `error` is
+            # Retry on `failed` (a real unit-test failure to fix), `no_tests`
+            # (engineer must add the required unit tests), or `coverage_gap` (R19:
+            # a PO acceptance criterion has no covering test). `error` is
             # operator-infra → break and escalate with a dossier.
-            while not gate.get("ok") and gate.get("kind") in ("failed", "no_tests") and gate_attempt < MAX_FIX_ATTEMPTS:
+            while not gate.get("ok") and gate.get("kind") in ("failed", "no_tests", "coverage_gap") and gate_attempt < MAX_FIX_ATTEMPTS:
                 gate_attempt += 1
                 if gate.get("kind") == "no_tests":
                     fix = (f"Your BL {bl_id} added no unit tests. Doctrine requires comprehensive "
                            "unit tests covering this BL's behavior. Add them now (e.g. under "
                            "`backend/tests/...` as `test_*.py`), make them pass, and commit a NEW "
                            "commit. The harness will run ONLY your BL's tests.")
+                elif gate.get("kind") == "coverage_gap":
+                    uncovered = gate.get("uncovered_criteria") or []
+                    fix = (f"R19 — your BL {bl_id} left these PO acceptance criteria UNCOVERED by "
+                           f"any test: {', '.join(uncovered)}. Each acceptance criterion is the "
+                           "contract and MUST have at least one dedicated test that references its "
+                           "id (put the id, e.g. `AC-BL-0001-2`, in the test name, docstring, or a "
+                           "comment) and asserts the exact behavior that criterion specifies — "
+                           "success paths AND the failure/edge paths it names. Add a covering test "
+                           "for EACH uncovered criterion, make them pass, and commit a NEW commit.")
                 else:
                     fix = doctrine_svc.build_gate_fix_prompt("engineer", gate, bl_id=bl_id,
                                                              attempt=gate_attempt, max_attempts=MAX_FIX_ATTEMPTS)
@@ -574,7 +585,8 @@ async def _engineer_flow(
                 if not validation["ok"]:
                     break
                 gate = await regression_gate_svc.run_bl_tests(repo_dir, agent_branch=wt.branch,
-                                                              base_ref=cfg.agent_branch, run_id=run_id)
+                                                              base_ref=cfg.agent_branch, run_id=run_id,
+                                                              bl_id=bl_id, feature_slug=feature_slug)
                 yield _ptag({"type": "_meta", "phase": "bl_tests",
                             "gate_attempt": gate_attempt,
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
@@ -763,17 +775,24 @@ async def _qa_or_scorer_flow(
             # suite, not Playwright (those run once at acceptance).
             _bl_base = bl_base_ref or cfg.agent_branch
             gate = await regression_gate_svc.run_bl_tests(repo_dir, agent_branch=wt.branch,
-                                                          base_ref=_bl_base, run_id=run_id)
+                                                          base_ref=_bl_base, run_id=run_id,
+                                                          bl_id=bl_id, feature_slug=feature_slug)
             yield _ptag({"type": "_meta", "phase": "bl_tests",
-                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
+                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail", "uncovered_criteria")}},
                        role, bl_id, trace=trace)
             gate_attempt = 0
-            while not gate.get("ok") and gate.get("kind") in ("failed", "no_tests") and gate_attempt < MAX_FIX_ATTEMPTS:
+            while not gate.get("ok") and gate.get("kind") in ("failed", "no_tests", "coverage_gap") and gate_attempt < MAX_FIX_ATTEMPTS:
                 gate_attempt += 1
                 if gate.get("kind") == "no_tests":
                     fix = (f"No unit tests are associated with BL {bl_id}. Doctrine requires the "
                            "BL to carry comprehensive unit tests. Add the missing tests (e.g. under "
                            "`backend/tests/...` as `test_*.py`), make them pass, and commit.")
+                elif gate.get("kind") == "coverage_gap":
+                    uncovered = gate.get("uncovered_criteria") or []
+                    fix = (f"R19 — BL {bl_id} left these PO acceptance criteria UNCOVERED by any "
+                           f"test: {', '.join(uncovered)}. Add a dedicated test per uncovered "
+                           "criterion that references its id (e.g. `AC-BL-0001-2`) and asserts the "
+                           "behavior it specifies, make them pass, and commit a NEW commit.")
                 else:
                     fix = doctrine_svc.build_gate_fix_prompt("qa", gate, bl_id=bl_id,
                                                              attempt=gate_attempt, max_attempts=MAX_FIX_ATTEMPTS)
@@ -786,10 +805,11 @@ async def _qa_or_scorer_flow(
                 if not validation["ok"]:
                     break
                 gate = await regression_gate_svc.run_bl_tests(repo_dir, agent_branch=wt.branch,
-                                                              base_ref=_bl_base, run_id=run_id)
+                                                              base_ref=_bl_base, run_id=run_id,
+                                                              bl_id=bl_id, feature_slug=feature_slug)
                 yield _ptag({"type": "_meta", "phase": "bl_tests",
                             "gate_attempt": gate_attempt,
-                            **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
+                            **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail", "uncovered_criteria")}},
                            role, bl_id, trace=trace)
             if validation["ok"] and gate.get("ok"):
                 merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)

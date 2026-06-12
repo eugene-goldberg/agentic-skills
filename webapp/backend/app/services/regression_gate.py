@@ -30,6 +30,7 @@ from pathlib import Path
 from app.services.brownfield import detect_test_command, pick_artifact_dir
 from app.services import repo_config as repo_config_svc
 from app.services import volume_reaper as volume_reaper_svc
+from app.services import backlog as backlog_svc
 from app.services.doctrine_validator import detect_infra_failure
 
 # A26: minimum free disk space (in GB) on the docker storage mount before
@@ -446,13 +447,45 @@ def _bl_test_files(changed: list[str], globs: list[str] | None = None) -> list[s
     return out
 
 
+async def _uncovered_criteria(repo_root: Path, agent_branch: str, bl_id: str,
+                              feature_slug: str | None, bl_tests: list[str]) -> list[str]:
+    """R19 — return the AC ids for ``bl_id`` not referenced by any of the BL's
+    changed test files. The engineer must name each criterion's id
+    (``AC-<BL>-<n>``) in the covering test (test name, docstring, or comment), so
+    a plain substring scan of the test sources proves per-criterion coverage —
+    language-agnostic (works for .py/.cs/.ts/.go). Empty list ⇒ fully covered (or
+    no criteria parseable, in which case the PO gate owns that failure)."""
+    bf = backlog_svc.find_backlog(repo_root, feature_slug=feature_slug)
+    if bf is None:
+        return []
+    crits = backlog_svc.criteria_for(bf.read_text(encoding="utf-8", errors="replace"), bl_id)
+    if not crits:
+        return []
+    blob_parts: list[str] = []
+    for path in bl_tests:
+        code, content = await _git(["show", f"{agent_branch}:{path}"], cwd=repo_root)
+        if code == 0:
+            blob_parts.append(content)
+    blob = "\n".join(blob_parts)
+    return [c.id for c in crits if c.id not in blob]
+
+
 async def run_bl_tests(repo_root: Path, agent_branch: str, base_ref: str,
-                       *, run_id: str | None = None, timeout: int = 1800) -> dict:
+                       *, run_id: str | None = None, timeout: int = 1800,
+                       bl_id: str | None = None,
+                       feature_slug: str | None = None) -> dict:
     """Run ONLY the BL's own tests (the test files its commits added/changed),
     scoped to a db-only stack — no full suite, no Playwright.
 
     Returns a verdict dict shaped like ``run_gate`` so the per-BL flows consume
-    it unchanged. ``kind`` ∈ {green, failed, no_tests, skipped, error}.
+    it unchanged. ``kind`` ∈ {green, failed, no_tests, coverage_gap, skipped,
+    error}.
+
+    R19 (operator directive 2026-06-12): when ``bl_id`` is given, the gate also
+    asserts every PO acceptance criterion (``AC-<BL>-<n>``) for the BL is
+    referenced by at least one of the BL's tests — an uncovered criterion yields
+    ``kind="coverage_gap"`` and drives the no-abort fix loop, so no criterion ships
+    untested.
     """
     cfg = repo_config_svc.load(repo_root)
     has_cfg = (repo_root / repo_config_svc.CONFIG_FILENAME).exists()
@@ -477,6 +510,21 @@ async def run_bl_tests(repo_root: Path, agent_branch: str, base_ref: str,
                            "comprehensive per-BL unit tests; the engineer must add them"),
                 "failing_tests": [], "regressions": [], "new_failures": [],
                 "post_tail": "", "command": []}
+
+    # R19: per-criterion coverage gate. Every PO acceptance criterion must be
+    # referenced by ≥1 of the BL's tests. An uncovered criterion is as blocking as
+    # a failing test — it means a contracted behavior shipped untested.
+    if bl_id:
+        uncovered = await _uncovered_criteria(repo_root, agent_branch, bl_id,
+                                              feature_slug, bl_tests)
+        if uncovered:
+            return {"ok": False, "kind": "coverage_gap",
+                    "reason": ("these PO acceptance criteria are not referenced by any "
+                               "of this BL's tests — each must be covered: "
+                               + ", ".join(uncovered)),
+                    "uncovered_criteria": uncovered,
+                    "failing_tests": [], "regressions": [], "new_failures": [],
+                    "post_tail": "", "command": []}
 
     use_compose = (repo_root / "compose.yml").exists() and (repo_root / "compose.gate.yml").exists()
     wt_id = uuid.uuid4().hex[:8]

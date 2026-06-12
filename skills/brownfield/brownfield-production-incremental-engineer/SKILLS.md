@@ -90,6 +90,16 @@ text**Requirements per slice**:
 - Real persistence following existing ORM/repository patterns
 - Proper auth & authorization matching current implementation
 - 6–10 tests (happy path, error paths, invariants, regression)
+- **Full per-criterion test coverage (R19, BINDING):** the BL's `**Acceptance:**`
+  block has N numbered criteria with stable ids `AC-<BL>-<n>`. You MUST write **at
+  least one test per criterion** that (a) references the criterion id verbatim in
+  the test name, docstring, or a comment (e.g. `// AC-BL-0003-2`), and (b) asserts
+  the exact behavior that criterion specifies — including the failure/edge paths it
+  names (bad input rejected, auth required, ownership enforced, duplicates, empty
+  cases). The per-BL gate parses your tests for every `AC-<BL>-<n>` and returns
+  `coverage_gap` (blocking, just like a failing test) if any criterion is
+  unreferenced — the BL will not merge until every criterion is covered. Map each
+  criterion to its test explicitly; do not leave one untested.
 - Feature flags for any behavior change
 
 ---

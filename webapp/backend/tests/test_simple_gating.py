@@ -55,6 +55,73 @@ def test_run_bl_tests_no_tests(monkeypatch, tmp_path) -> None:
     assert res["ok"] is False
 
 
+_BL_WITH_CRITERIA = """## BL-0001: Submit a review (write)
+**Type:** Feature · **Priority:** CRITICAL
+**Story:** As a user I submit a review.
+**Acceptance:**
+1. A signed-in user submits (rating 1-5, text) and it is persisted.
+2. Rating outside 1-5 returns HTTP 400 and persists nothing.
+3. A second submit by the same user never creates a duplicate.
+**Effort:** 3 · **Dependencies:** none · **Status:** Ready
+"""
+
+
+def _write_backlog(tmp_path, slug="feat"):
+    d = tmp_path / "_brownfield" / "features" / slug
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "BACKLOG.md").write_text(_BL_WITH_CRITERIA, encoding="utf-8")
+
+
+def test_run_bl_tests_coverage_gap(monkeypatch, tmp_path) -> None:
+    """R19 — a BL whose tests reference only some AC ids → kind=coverage_gap,
+    listing the uncovered criteria, before the suite even runs."""
+    _patch_cfg(monkeypatch, tmp_path)
+    _write_backlog(tmp_path)
+
+    async def _git(args, cwd):
+        if args[:2] == ["diff", "--name-only"]:
+            return (0, "backend/tests/test_reviews.py\n")
+        if args[0] == "show":
+            # Test references AC-1 and AC-2 but NOT AC-3.
+            return (0, "def test_submit():  # AC-BL-0001-1\n    ...\n"
+                       "def test_bad_rating():  # AC-BL-0001-2\n    ...\n")
+        return (0, "")
+    monkeypatch.setattr(g, "_git", _git)
+
+    res = asyncio.run(g.run_bl_tests(
+        tmp_path, "agent/x", "agentic-skills-work",
+        run_id="r", bl_id="BL-0001", feature_slug="feat"))
+    assert res["kind"] == "coverage_gap"
+    assert res["ok"] is False
+    assert res["uncovered_criteria"] == ["AC-BL-0001-3"]
+
+
+def test_run_bl_tests_full_coverage_proceeds(monkeypatch, tmp_path) -> None:
+    """R19 — when every AC id is referenced, the coverage gate passes and the
+    suite runs (here mocked green)."""
+    _patch_cfg(monkeypatch, tmp_path)
+    _write_backlog(tmp_path)
+
+    async def _git(args, cwd):
+        if args[:2] == ["diff", "--name-only"]:
+            return (0, "backend/tests/test_reviews.py\n")
+        if args[0] == "show":
+            return (0, "# AC-BL-0001-1 AC-BL-0001-2 AC-BL-0001-3 all covered\n")
+        return (0, "")
+
+    async def _run_capture(cmd, cwd, timeout=1800, env=None):
+        return (0, "===== 3 passed in 0.1s =====", "")
+
+    monkeypatch.setattr(g, "_git", _git)
+    monkeypatch.setattr(g, "_run_capture", _run_capture)
+
+    res = asyncio.run(g.run_bl_tests(
+        tmp_path, "agent/x", "agentic-skills-work",
+        run_id="r", bl_id="BL-0001", feature_slug="feat"))
+    assert res["kind"] == "green", res
+    assert res["ok"] is True
+
+
 def _drive_with_pytest_output(monkeypatch, tmp_path, *, exit_code: int, stdout: str):
     _patch_cfg(monkeypatch, tmp_path)
 
