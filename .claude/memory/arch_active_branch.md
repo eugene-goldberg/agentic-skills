@@ -17,7 +17,16 @@ metadata:
   on 2026-06-07. Do not reference it as active.
 - Both `development` and `main` ≡ `origin` (2026-06-11; in sync, clean, pushed).
   Mid-session `development` may be N commits ahead of `main`.
-- **Latest (2026-06-11, Stage 3):** SHIPPED **ABL-0018 cross-target cumulative
+- **Latest (2026-06-12):** dev≡main local @ **`a4f6606`** (Stage 3 dormant + Architect
+  SKILLS/registry; PUSH STATUS = VERIFY, last confirmed push `caea812`). Two UNMERGED
+  feature branches off `a4f6606`: **`architect-wiring` @ `8fdbb04`** (Architect Stage 0+1
+  orchestrator wiring + cart-discount live-proof brief; 468 tests green; `run_architect`
+  default OFF) and **`acceptance-anomaly-surfacing` @ `ae48124`** (acceptance-anomaly
+  backstop, PARTIAL). This session: ecommerce **Reviews** sprint 8/8 merged (real feature,
+  but a UI review-submit **401** bug); Stage 3 made dormant; **Architect agent (ABL-0002)**
+  added; **acceptance honesty gap** found + partially mitigated. See `CONTINUATION_PROMPT.md`
+  §REMAINING + [[arch_acceptance_honesty_gap]]. Harness PID 17754 = OLD code (no restart yet).
+- **Prior (2026-06-11, Stage 3):** SHIPPED **ABL-0018 cross-target cumulative
   learning** — the mission's "carries forward ACROSS targets" pillar. `global_lessons.py`:
   recurrence graduation (≥2 targets, real-bge-m3 floor 0.62) + curated seed → shared
   global store; merged `search_lessons` + independent `inject_global_lessons` push

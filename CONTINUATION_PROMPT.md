@@ -1,151 +1,125 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-11 (EOD). Supersedes all prior hand-offs. Every fact
-> below was verified against the live repo/processes at write time.
->
-> **THIS SESSION — three things landed, all SHIPPED + verified:**
->
-> 1. **The C# crew loop is PROVEN end-to-end — the first feature ever delivered by
->    the autonomous crew on a NON-Python brownfield target.** Sprint
->    `run-20260610T215031Z-05f865` on `fullstack-ecommerce-app` (C#/.NET 8 + EF Core
->    + Postgres): **4/4 BLs `merged_full`, 0 escalations, regression_checkpoint green,
->    acceptance PASS (7/7 API journeys), closure 0 violations.** Scorecards 92–95 Pass.
->    → ecommerce is now the **2nd sprint-proven real target** (beaverhabits Python = 1st);
->    the **Stage-3 cross-target cumulative-learning substrate is in place.** Full
->    write-up: `EXPERIMENT_ecommerce_wishlist.md` §9.
->
-> 2. **A68 — Milvus etcd-lease resilience under host contention.** Took 3 launches to
->    land the clean sprint; both earlier failures were INFRA, both architect-fixed:
->    (a) the harness Milvus auto-restart waited 30s ≪ Milvus standalone's ~3.5-min
->    segment reload → now `docker restart` + poll-until-serving (300s) + cooldown
->    spanning the reload window; (b) Milvus standalone self-terminated on etcd-lease
->    loss under host pressure → **`ops/milvus/`** hardened deploy (`common.session.ttl
->    30→180`, `retryTimes 30→60`, `etcd.requestTimeout 10000→30000`, `restart:
->    unless-stopped`) + **Docker Desktop memory 12→8 GB** (16 GB host — raising it
->    starved the host; the Milvus stack fits in 8 GB). Run #3 had Milvus
->    `RestartCount: 0` all sprint. Ledger **A68**; memory `local-milvus`.
->
-> 3. **Native-boot acceptance — SHIPPED + LIVE-PROVEN `[x]`.** The #1 follow-up the
->    C# sprint exposed: acceptance was compose-centric, so on a non-compose target it
->    only passed because the agent IMPROVISED the boot. Now config-driven: an
->    `app_boot` block in `.agentic-skills.json` (cmd/env/ready_url/materialize/pre_cmd),
->    a harness-reserved free `${PORT}`, secure `*.example.*`-only config materialization,
->    and an agent-driven boot with a REQUIRED Level-3 feature-route check. **Live proof:**
->    `run-acceptance nativeboot-proof-20260611T013351Z` — harness reserved port 53700 +
->    materialized appsettings; agent booted via the contract, ran the migration + Level-3
->    check, passed **7/7 journeys** on the RESERVED port (no improvisation). Proposal +
->    decisions + proof: `PROPOSAL_NATIVE_BOOT_ACCEPTANCE.md`. Memory: `arch_native_boot_acceptance`.
+> Hand-off written 2026-06-12 (EOD). Supersedes all prior hand-offs. Every fact below
+> was verified against the live repo/processes at write time. **Context ran low at the
+> end of this session — a few items are deliberately left as clean, well-scoped
+> remaining steps (see §REMAINING).**
 
 ---PROMPT START---
 
 You are the **architect** of the agentic-skills project. Read `CLAUDE.md` and
-`THESIS.md` first. The mission: build a **fully autonomous AI crew** that adds complex
-features to real brownfield repos with no human in the loop — grounded, self-correcting,
-honest, cumulative. **The thing being built is the crew.**
+`THESIS.md` first. Mission: a **fully autonomous AI crew** that adds complex features
+to real brownfield repos with no human in the loop — grounded, self-correcting, honest,
+cumulative. **The thing being built is the crew.** Operating doctrine is unchanged
+(quality-over-speed, no-abort, improve-the-crew-not-accommodate, 95%-rigor-before-act,
+no-scope-overclaim `[x]` vs `[~]`). Honor the memory files.
 
-## OPERATING DOCTRINE — BINDING (hard-won; read the memory files for the why)
-1. **Improve the CREW generally; don't accommodate one target's condition.** Every move
-   = "what does the crew gain?" (This session: a Milvus blip → A68 general resilience;
-   one compose-less target → general native-boot acceptance.) [[feedback_improve_crew_not_accommodate]]
-2. **You are the architect with DELIVERY accountability — make the engineering calls and
-   OWN them.** No "option A/B/C — your call?" menus for decisions that are yours. Surface
-   only genuine governance/host-resource calls. (This session: I diagnosed + fixed both
-   infra blockers and implemented native-boot without punting.)
-3. **95% rule = rigor BEFORE acting, not stop-and-ask.** Ground every load-bearing claim
-   in raw source/logs/a command that ran; then act decisively.
-4. **Don't hand-operate the crew.** Each agent is a full Claude Code subprocess — remove
-   structural barriers, don't do its work by hand.
-5. **Verification discipline / falsify before you affirm.** No "X works/is broken" claim
-   until checked against the RAW artifact. (This session: ruled OUT a reaper killing
-   Milvus before fixing the wait; verified the acceptance agent booted on the RESERVED
-   port before claiming the proof.) [[feedback_honest_verification]]
-6. **Never claim a capability's SCOPE beyond traced code paths.** `[x]` LIVE-PROVEN vs
-   `[~]` IMPLEMENTED-BUT-UNIT-TESTED. `validator.ok` ≠ behavior — read the artifacts.
-   [[feedback_no_scope_overclaim]]
-7. **No-abort doctrine.** Investigate→fix→re-test to resolution; escalate only at a true
-   senior-engineer wall. [[feedback_no_abort_persistence]]
+## What happened this session (the arc)
 
-## Branch model (BINDING)
-Work on **`development`**, FF into **`main`** when verified. Only live branches.
-**Both ≡ `origin` @ `0328918`** (verified, clean tree, PUSHED). Harness tests:
-`cd webapp/backend && .venv/bin/python -m pytest tests/ -q` → **~433 passed**. Known
-load-flakes (pass isolated, NOT regressions — do not "fix" without deterministic repro):
-`test_findings_ledger::test_concurrent_append_no_torn_lines`,
-`test_compute_ui_coverage::test_unmerged_bls_ignored`,
-`test_lessons_index::test_milvus_backend_roundtrip`,
-`test_init_feature::test_init_feature_idempotent_gitignore`.
+1. **Stage 3 cross-target cumulative learning (ABL-0018) — SHIPPED then made DORMANT.**
+   Built the global "community" lessons store (recurrence graduation ≥2 targets, real-
+   bge-m3 floor 0.62, + curated seed) + merged `search_lessons` pull + `inject_global_lessons`
+   push. Read-path push+pull was LIVE-PROVEN on ecommerce (first cross-target transfer:
+   a beaverhabits lesson advised the ecommerce PO). **Then, per operator directive, made
+   DORMANT by default** — a master switch `global_lessons.enabled()` (`STAGE3_CROSS_TARGET=1`,
+   default unset) gates ALL three paths (push/pull/graduation). Default = fully dormant;
+   the on-disk store + curated seed stay intact, just unconsumed. Docs: `ABL-0018_*`.
+   Memory: [[arch_stage3_cross_target]]. (commit `caea812`, on dev/main.)
 
-## Verified running processes (re-verify with `lsof -nP -iTCP:<port>`)
-- **Harness: PID 57284**, uvicorn `127.0.0.1:8000` — **CURRENT** (running `0328918`; has
-  A68 + native-boot acceptance + the `/onboard` endpoint). **No restart needed** unless
-  you change harness code. Health: `curl -s localhost:8000/api/health`.
-- **Milvus** (hardened, `ops/milvus/`): standalone+etcd healthy on :19530 (minio
-  "unhealthy" = known false healthcheck). Bring up from the repo copy if down:
-  `cp ops/milvus/{docker-compose.yml,user.yaml} /tmp/milvus/ && cd /tmp/milvus &&
-  DOCKER_VOLUME_DIRECTORY=/tmp/milvus docker compose -p milvus up -d --pull never`.
-- **ecommerce-pg** Postgres :5433 — up (only needed for acceptance/manual app boot).
-- **Docker Desktop memory = 8 GB** (was 12; 16 GB host). Ollama `bge-m3` up (local).
-- **Manual leftover backends (NOT harness — killable):** `:5096` ecommerce baseline
-  build, `:5097` ecommerce integration build (serves the wishlist API — stood up for
-  manual `curl` testing). Kill with `lsof -ti tcp:5096,5097 | xargs kill` if unwanted.
+2. **The Architect agent (ABL-0002) — NEW crew role; SKILLS on dev/main, WIRING on a branch.**
+   Operator direction: fill the crew's "engineering-judgment gap" (the evaluation's
+   "biggest autonomy gap"; the Horizon wall) with a NEW **Architect** role — the Janitor
+   STAYS in its env/merge lane. The Architect REVIEWS + DECIDES; never writes feature code
+   or repairs the harness. Three modes: `plan_review` (PO breakdown), `impl_review`
+   (engineer diff), `adjudicate` (rescue a stuck BL at code-gate exhaustion). SKILLS
+   grounded in 3 reference repos (codenamev/ai-software-architect, SpillwaveSolutions/
+   architect-agent, addyosmani/agent-skills). Confirmed delivery model **(A)**: the
+   Architect returns the fix as a **directive**; the engineer applies it in one bounded
+   re-run through the gate. SKILLS + role-registry on **dev/main (`a4f6606`)**; the
+   **orchestrator wiring (Stage 0 + Stage 1) is on branch `architect-wiring` (`8fdbb04`),
+   UNMERGED, 468 backend tests green, `run_architect` default OFF.** Stage 0 = sprint-
+   summary truthfulness (escalated/deferred roll-up). Stage 1 = `adjudicate`
+   (retry_reframed/defer/escalate) at the engineer escalation seam. Doc:
+   `PROPOSAL_CREW_JUDGMENT_ABL0002.md` (§D wiring map, staged: 0/1 done, 2 backlog-mutation,
+   3 acceptance-regression). Memory: [[arch_stage3_cross_target]] sibling — add an
+   architect memory next session.
 
-## Targets
-- **fullstack-ecommerce-app** (C#/.NET) — `integration` @ `2a859a5` (14 ahead of `main`
-  `9e98e86`: the merged wishlist feature + the `app_boot` config). Sprint-proven. To run
-  a FRESH sprint cleanly: `git -C <target> checkout integration && git reset --hard 9e98e86`
-  first (baseline). Has `app_boot` for native-boot acceptance.
-- **beaverhabits** (Python) — @ `174a30a`. 1st sprint-proven target.
+3. **Reviews feature sprint on ecommerce (C#/.NET) — delivered, 8/8, BUT a real UI bug +
+   an acceptance honesty gap.** Ran ~12h on `run-20260611T132014Z-03e27a`: **8/8
+   merged_full** (scored 92–95), regression_checkpoint GREEN, closure 0 violations. The
+   acceptance agent **improvised a frontend boot + Playwright** and captured **15 UI
+   screenshots** (`webapp/backend/traces_archive/run-20260611T132014Z-03e27a/acceptance/screenshots/`).
+   - **The read/display UI is correct and real** (detail summary avg+distribution+list;
+     per-product card rating badges; reusable star component readonly + interactive).
+   - **REAL DEFECT — the UI review-submit fails with `401`.** Journey 03 shows "Could not
+     save your review." The write form renders + star-picker works + draft fills, but the
+     POST is rejected. Likely cause (unconfirmed): the frontend `reviewService` doesn't
+     attach the JWT (`setupAuthHeader`), or the review endpoint requires auth the UI
+     doesn't send. The displayed reviews were seeded by the acceptance agent via the API
+     (with a token). This is the exact class of bug C# **mock-only** per-BL tests can't
+     catch (mocks fake auth) — it only surfaces at live boot.
 
-## THE FRONTIER — decide + build, don't ask (priority order)
-0. **Stage 3 — cross-target cumulative learning — SHIPPED 2026-06-11 (`b627d32`).**
-   `global_lessons.py`: recurrence graduation (≥2 targets, real-bge-m3 floor 0.62) +
-   curated seed → shared global store (`.crew-memory/global_lessons.jsonl` + Milvus
-   `lessons_global`); merged `search_lessons` (scope-tagged) + independent
-   `inject_global_lessons` push (DEFAULT OFF). Read-path push+pull **LIVE-PROVEN** on
-   ecommerce; recurrence write-path **`[~]`** (proven on real embeddings; never
-   organically fired — fleet has 1 confirmed lesson, 0 cross-target recurrence). 467
-   passed. Doc `ABL-0018_CROSS_TARGET_TRANSFER.md`; memory `arch_stage3_cross_target`.
-   **Remaining Stage-3 work:** (a) **Batch-E smoke + flag-flip** — one sprint with
-   `inject_global_lessons=true`, confirm the global block renders + no regression, then
-   flip default ON. (b) **Organic graduation live-proof** — accumulate ≥2 targets sharing
-   a confirmed failure mode so recurrence fires for real (data, not code). (c) Consider a
-   separately-calibrated, slightly-lower **global-pull floor** (cross-domain matches sit
-   ~0.48–0.51 < 0.55) — but only with enough cross-target data to calibrate without
-   false-surfacing; do NOT lower blind.
-1. **Native-boot acceptance — process reaper (small, filed).** Native boot leaks the
-   agent-backgrounded app process past worktree reaping (a `dotnet` listener survived on
-   :53700; reaped manually). Add a process/port reaper on acceptance teardown, analogous
-   to the compose volume reaper. Close before heavy native-boot use. (`PROPOSAL_NATIVE_BOOT_ACCEPTANCE.md` header.)
-3. **Onboarder live-proof → `auto_onboard`** — STILL `[~]` (wired + unit-tested, never
-   live-proven) from two sessions ago. Onboard a fresh un-onboarded repo end-to-end, then
-   add the `auto_onboard` flag (the literal "point at a repo and walk away" entry).
-   Memory: `arch_onboarder_capability`.
-4. **A66 live-proof** (carried, `[~]`) — acceptance-followup Janitor+remerge on beaverhabits.
+4. **THE ACCEPTANCE HONESTY GAP (operator-flagged) + its mitigation (PARTIAL).** The
+   sprint reported "8/8 merged, regression green, clean" **while acceptance journey 03
+   actually FAILED** (the 401). Why it was buried: (a) per-BL gates run only each BL's own
+   MOCK tests → auth bug invisible; (b) acceptance is ADVISORY + runs AFTER
+   `sprint_complete` → can't un-merge; (c) the failed journey produced **0 findings** and
+   `acceptance.done` never surfaced journey pass/fail counts. **Mitigation shipped
+   (PARTIAL)** on branch **`acceptance-anomaly-surfacing` (`ae48124`)**: `_acceptance_flow`
+   now ALWAYS surfaces an anomalous acceptance EXPLICITLY — `_summarize_acceptance_journeys`
+   extracts per-journey anomalies (+ missing/unparseable report + non-OK validator), emits
+   a loud **`acceptance.anomaly`** event, and `acceptance.done` carries
+   **`acceptance_clean=false` + `anomaly_count` + `anomalies` + journey summary**. VERIFIED
+   the helper flags this run's journey 03; compiles. **Not yet:** the SKILLS addition +
+   tests + merge (see §REMAINING).
 
-Smaller standing crew-hardening (all GENERAL):
-- **Non-Python gate fidelity:** `regression_checkpoint` on C# is exit-code-green only
-  (can't name regressions or do a true pre/post differential — collateral-regression
-  detection is weaker off the pytest path). Parse `dotnet test`/`go test`/junit output.
-- Onboarding's independent verification could RUN `test_cmd`; A56 warm-up telemetry on
-  cold targets; host-contention resilience beyond A68 (why Milvus stops under load).
+## Branch state (verify with `git`)
+- **`development` ≡ `main` @ `a4f6606`** — Stage 3 (dormant) + Architect SKILLS/registry
+  (role registered but INERT — no wiring on this branch). **Push status: VERIFY** (last
+  confirmed push was `caea812`; `a4f6606` may be local-only — `git push` if so).
+- **`architect-wiring` @ `8fdbb04`** (off `a4f6606`) — Architect Stage 0+1 orchestrator
+  wiring (`b8abe34`) + the cart-discount hard brief/launcher (`8fdbb04`). UNMERGED. 468
+  tests green. `run_architect` default OFF.
+- **`acceptance-anomaly-surfacing` @ `ae48124`** (off `a4f6606`) — the acceptance anomaly
+  backstop (PARTIAL). UNMERGED. **← current branch.**
 
-## Honest caveats / open (do not pretend these are closed)
-- **Native-boot acceptance is `[x]` but has the process-reaper leak (frontier #2).**
-- **regression_checkpoint on non-Python is exit-code-green, not a parsed differential.**
-- **ecommerce baseline was HAND-greened** (operator-approved one-off, NOT onboarding).
-- **n=2 sprint-proven targets; Onboarder + A66 still `[~]`.**
-- **Acceptance found a real PRE-EXISTING bug in ecommerce (FIND-01):** `POST /api/v1/Carts`
-  → 500 (`ICartManagement` DI unregistered). Flagged, not dispatched (pre-existing,
-  outside feature scope). The wishlist's move-to-cart uses a different (working) path.
+## Running services (re-verify: `lsof -nP -iTCP:<port>`)
+- **Harness** uvicorn `127.0.0.1:8000` PID **17754** — running OLD code (pre-architect-
+  wiring, pre-acceptance-fix). No live sprint. Restart only when you want new harness code
+  live.
+- **Milvus** :19530 (hardened `ops/milvus/`), **Ollama** bge-m3, **ecommerce-pg** :5433 — up.
+- A **Vite frontend on :5173** (ecommerce integration code) may still be running. No `:5096`
+  backend (acceptance's ephemeral backend was torn down).
+- ecommerce target on branch `integration @ 92a3b47` (the merged reviews feature). Baseline
+  to reset for a fresh sprint: `git -C <target> checkout integration && git reset --hard 9e98e86`.
 
-## Where to start the new session
-1. Read `CLAUDE.md`, `THESIS.md`, `ARCHITECTURE_INVARIANTS.md`, then this file.
-2. Re-verify: `git log --oneline -1` (expect `0328918`), dev≡main≡origin, clean tree.
-   Skim memory `arch_native_boot_acceptance` + `arch_target_ecommerce` + ledger A68.
-3. **Run pre-flight** (`PREFLIGHT.md`) — verify Milvus :19530 (hardened deploy) + Ollama
-   + indexer before any sprint.
-4. Pick a frontier item. **#1 (Stage 3)** is the biggest mission play; **#2 (reaper)** is
-   a quick close of this session's filed leak; **#3 (Onboarder live-proof)** closes a
-   long-standing `[~]`. The harness is current — no restart needed unless you change code.
+## REMAINING mitigation steps (prioritized)
+1. **Finish the acceptance-anomaly fix** (branch `acceptance-anomaly-surfacing`): (a) add to
+   the acceptance SKILLS (`skills/brownfield/brownfield-acceptance-agent/SKILLS.md`) a
+   mandate that the agent records EACH failed/unshippable journey as an explicit `findings`
+   entry (classification + summary) in report.json — so it lands in the ledger, not just as
+   a journey status; (b) add an acceptance-flow test asserting a report with a failed journey
+   yields `acceptance.anomaly` + `acceptance_clean=false`; (c) run the backend suite; (d)
+   merge to `development` + restart the harness.
+2. **Fix the review-submit 401** (the real product bug). Diagnose: does the frontend
+   `reviewService` attach the JWT? does the review controller require auth? It's a small
+   frontend/auth fix — or dispatch a follow-up engineer on it once acceptance findings wire
+   it up (which #1 enables).
+3. **Architect Stage-1 live-proof** (operator DECLINED running it this session; brief +
+   launcher are ready on `architect-wiring`): when wanted, merge `architect-wiring` →
+   `development`, restart harness, reset ecommerce baseline, launch
+   `scripts/launch_ecommerce_cart_discount.py` (`run_architect=true`). The penny-rounding
+   foundation BL reliably fails the engineer's own mock test (proportional + whole-cent +
+   exact-sum is solvable via largest-remainder; naive rounding fails the exact-sum) →
+   Architect `retry_reframed` (the full rescue loop). Probabilistic (crew may solve it).
+4. **Merge decisions:** `architect-wiring` and `acceptance-anomaly-surfacing` are both
+   unmerged off `a4f6606`. Decide order; both are additive + flag-gated/observability-only.
+
+## Where to start
+1. Read `CLAUDE.md`, `THESIS.md`, then this file + memory `arch_active_branch`,
+   `arch_stage3_cross_target`, the new `arch_acceptance_honesty_gap`.
+2. `git branch -v`; confirm the three branches above; push `a4f6606` if origin is behind.
+3. Pick a REMAINING item. #1 (finish acceptance anomaly fix) is the smallest + closes the
+   operator-flagged honesty gap cleanly. #2 (the 401) is the real delivered-feature bug.
 
 ---PROMPT END---
