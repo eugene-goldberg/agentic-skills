@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 from app.services import backlog as backlog_svc  # noqa: E402
 from app.services import doctrine_validator as dv  # noqa: E402
+from app.services import orchestrator as orch  # noqa: E402
 
 
 _GOOD_BL = """## BL-0003: Submit a review (write)
@@ -107,3 +108,30 @@ def test_validate_po_passes_with_comprehensive_criteria(tmp_path: Path) -> None:
     res = dv.validate_po(tmp_path, feature_slug=slug)
     assert res["ok"] is True, res["summary"]
     assert not res["thin_criteria"]
+
+
+# ── R20: acceptance per-criterion live verification ─────────────────────────
+
+def _seed_backlog(tmp_path: Path, slug: str = "feat") -> None:
+    d = tmp_path / "_brownfield" / "features" / slug
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "BACKLOG.md").write_text(_GOOD_BL.replace("BL-0003", "BL-0001"), encoding="utf-8")
+
+
+def test_unverified_criteria_flags_missing_and_failed(tmp_path: Path) -> None:
+    _seed_backlog(tmp_path)
+    report = {"ac_coverage": [
+        {"ac_id": "AC-BL-0001-1", "status": "verified", "journey_id": "ui_1"},
+        {"ac_id": "AC-BL-0001-2", "status": "failed", "journey_id": "ui_1"},
+        # AC-BL-0001-3 entirely absent
+    ]}
+    unverified = orch._unverified_criteria(tmp_path, "feat", report)
+    assert set(unverified) == {"AC-BL-0001-2", "AC-BL-0001-3"}
+
+
+def test_unverified_criteria_empty_when_all_verified(tmp_path: Path) -> None:
+    _seed_backlog(tmp_path)
+    report = {"ac_coverage": [
+        {"ac_id": f"AC-BL-0001-{i}", "status": "verified"} for i in (1, 2, 3)
+    ]}
+    assert orch._unverified_criteria(tmp_path, "feat", report) == []

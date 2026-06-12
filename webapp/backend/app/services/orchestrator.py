@@ -2074,7 +2074,13 @@ def _archive_acceptance_dir(acceptance_dir: Path, run_id: str) -> Path | None:
 # §9 Decision 2: v1 dispatches at most one follow-up per sprint. Bump (or
 # make operator-configurable) only after calibration. The framework's
 # highest-risk action stays small until proven.
-FOLLOWUP_COST_CAP = 1
+# Chain (operator directive 2026-06-12): EVERY detected product failure must be
+# dispatched — a cap of 1 would silently defer the rest, which is a defect escape.
+# Raised to a generous bound that covers any realistic sprint's failure count while
+# remaining a runaway backstop. Overflow beyond the cap is surfaced loudly
+# (acceptance.followup.skipped reason=cost_cap) and caught by the terminal integrity
+# gate, never silently dropped.
+FOLLOWUP_COST_CAP = 25
 
 # A60: confidence-gated auto-confirm. The acceptance agent is a full copy of the
 # architect — when it root-causes a product_bug, falsifies the competing
@@ -2455,6 +2461,35 @@ def _summarize_acceptance_journeys(report: dict) -> tuple[dict, list[dict]]:
     return summary, anomalies
 
 
+def _unverified_criteria(repo_dir: Path, feature_slug: str | None, report: dict) -> list[str]:
+    """R20 — every PO acceptance criterion (AC-<BL>-<n>) MUST be verified by a live
+    acceptance journey. Returns the AC ids the report does NOT mark verified (missing
+    OR failed in its ``ac_coverage`` array). Empty list ⇒ every criterion was
+    live-verified. Defensive: any parse problem yields [] (the journey/finding paths
+    still surface failures), so this never crashes the flow."""
+    try:
+        bf = backlog_svc.find_backlog(repo_dir, feature_slug=feature_slug)
+        if bf is None:
+            return []
+        items = backlog_svc.parse(bf.read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001
+        return []
+    all_ids = [c.id for crits in backlog_svc.all_criteria(items).values() for c in crits]
+    if not all_ids:
+        return []
+    verified: set = set()
+    cov = report.get("ac_coverage") if isinstance(report, dict) else None
+    if isinstance(cov, list):
+        for e in cov:
+            if not isinstance(e, dict):
+                continue
+            acid = str(e.get("ac_id") or e.get("id") or "")
+            status = str(e.get("status") or "").lower()
+            if acid and status in ("verified", "pass", "passed", "ok", "covered"):
+                verified.add(acid)
+    return [a for a in all_ids if a not in verified]
+
+
 async def _acceptance_flow(
     repo_dir: Path,
     repo_name: str,
@@ -2723,6 +2758,7 @@ async def _acceptance_flow(
         # dedicated `acceptance.anomaly` event + an `anomalous` flag on `acceptance.done`.
         acceptance_anomalies: list[dict] = []
         journey_summary: dict = {}
+        unverified_acs: list[str] = []
         report_src: Path | None = None
         if archive_dest is not None and (archive_dest / "report.json").exists():
             report_src = archive_dest / "report.json"
@@ -2738,6 +2774,16 @@ async def _acceptance_flow(
                 report_dict = json.loads(report_src.read_text(encoding="utf-8"))
                 journey_summary, _journey_anoms = _summarize_acceptance_journeys(report_dict)
                 acceptance_anomalies.extend(_journey_anoms)
+                # R20 — per-criterion live verification: any PO acceptance criterion
+                # not verified by a live journey is an anomaly (→ non-clean), so a
+                # criterion can never be silently skipped at the integration check.
+                unverified_acs = _unverified_criteria(repo_dir, feature_slug, report_dict)
+                for _acid in unverified_acs:
+                    acceptance_anomalies.append({
+                        "kind": "criterion_unverified",
+                        "ac_id": _acid,
+                        "detail": f"acceptance criterion {_acid} was not verified by a "
+                                  f"live journey (missing or failed in report.ac_coverage)"})
                 ledger = findings_ledger_svc.FindingsLedger(repo_dir, feature_slug)
                 persisted = await asyncio.to_thread(
                     ledger.append_from_report,
@@ -2844,21 +2890,46 @@ async def _acceptance_flow(
             "detail": "the acceptance validator did not reach an OK verdict "
                       f"({validation.get('summary') or 'incomplete/give_up'})"})
 
+    # Component 4 — terminal integrity gate (operator directive 2026-06-12: 0%
+    # detected-defect escape). Re-read the ledger AFTER dispatch: any eligible
+    # failure-finding still un-dispatched (cap overflow, no retrieval builder, or
+    # not eligible) is an OPEN failure that was NOT addressed. Combined with any
+    # unverified criterion, this is the binding "nothing escapes silently" check —
+    # surfaced on every acceptance.done so the sprint's honest top-line reflects it.
+    open_failures: list = []
+    if feature_slug:
+        try:
+            open_failures, _ = _select_followup_candidates(
+                findings_ledger_svc.FindingsLedger(repo_dir, feature_slug).list_all())
+        except Exception:  # noqa: BLE001
+            open_failures = []
+    open_failure_ids = [getattr(f, "finding_id", "?") for f in open_failures]
+
     # Operator directive 2026-06-11: ALWAYS surface an anomalous acceptance EXPLICITLY,
     # loudly, as its own event — so a failed/unshippable journey (or a missing report)
     # can never hide under "8/8 merged, regression green". This is honest aggregation
     # (I-5): the top-line success of the per-BL gates does NOT imply acceptance passed.
     acceptance_clean = not acceptance_anomalies
-    if not acceptance_clean:
+    # integrity_ok is the conservative, no-overclaim verdict: the run is clean AND no
+    # detected failure is left un-addressed (un-dispatched) AND every criterion was
+    # live-verified. A dispatched-but-not-yet-re-verified fix keeps integrity_ok False
+    # until a follow-up acceptance confirms it — we never declare integrity restored on
+    # a fix we have not observed working.
+    integrity_ok = acceptance_clean and not open_failures and not unverified_acs
+    if not acceptance_clean or open_failures:
         yield _evt(
             "acceptance.anomaly",
             run_id=run_id,
             feature_slug=feature_slug,
             anomaly_count=len(acceptance_anomalies),
             anomalies=acceptance_anomalies[:30],
+            unverified_criteria=unverified_acs[:50],
+            open_failures=open_failure_ids[:50],
             journeys=journey_summary,
+            integrity_ok=integrity_ok,
             reason="acceptance produced anomalous results (failed/unshippable journeys, "
-                   "a missing/corrupt report, or a non-OK validator) — escalated explicitly",
+                   "unverified acceptance criteria, an un-addressed failure, a missing/"
+                   "corrupt report, or a non-OK validator) — escalated explicitly",
         )
 
     yield _seal(_evt(
@@ -2871,6 +2942,9 @@ async def _acceptance_flow(
         backend_bls=backend_bls,
         findings_persisted=findings_persisted,
         acceptance_clean=acceptance_clean,            # explicit clean/anomalous verdict
+        integrity_ok=integrity_ok,                    # binding 0%-escape terminal verdict
+        unverified_criteria=unverified_acs[:50],      # criteria not live-verified
+        open_failures=open_failure_ids[:50],          # detected failures not yet dispatched
         anomaly_count=len(acceptance_anomalies),
         anomalies=acceptance_anomalies[:30],
         journeys=journey_summary,

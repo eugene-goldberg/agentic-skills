@@ -161,6 +161,32 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
         docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_ACCEPTANCE_REAL_TEST_MANDATE.md"),
     ),
     DoctrineRule(
+        "R18", "every BL carries comprehensive, specific, testable acceptance "
+               "criteria (the AC-<BL>-<n> unit of truth); a BL with missing/thin "
+               "criteria fails the PO gate",
+        "post_validation", True,
+        "app.services.doctrine_validator:validate_po",
+        has_test=True, targeted_failure_class="silent-failure",
+        docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_ACCEPTANCE_REAL_TEST_MANDATE.md"),
+    ),
+    DoctrineRule(
+        "R19", "engineer tests cover every PO acceptance criterion; a criterion "
+               "with no referencing test fails the per-BL gate (coverage_gap)",
+        "gate", True,
+        "app.services.regression_gate:run_bl_tests",
+        has_test=True, targeted_failure_class="silent-failure",
+        docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_ACCEPTANCE_REAL_TEST_MANDATE.md"),
+    ),
+    DoctrineRule(
+        "R20", "acceptance live-verifies every acceptance criterion (per-criterion "
+               "ac_coverage); an unverified criterion or un-addressed failure blocks "
+               "the integrity verdict",
+        "orchestrator", True,
+        "app.services.orchestrator:_unverified_criteria",
+        has_test=True, targeted_failure_class="silent-failure",
+        docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_ACCEPTANCE_REAL_TEST_MANDATE.md"),
+    ),
+    DoctrineRule(
         "Tier1.5", "pre-modification kill: <min grounded calls before Write/Edit",
         "streaming", True,
         "app.services.claude_agent:stream_agent_task",
@@ -174,7 +200,7 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
 # not yet registered — its enforcement point is to be confirmed first.
 CANONICAL_RULE_IDS = frozenset({
     "R5", "R5b", "R7", "R8", "R9", "R10", "R10.1", "R10.2",
-    "R11", "R12", "R13", "R15", "R16", "R17", "Tier1.5",
+    "R11", "R12", "R13", "R15", "R16", "R17", "R18", "R19", "R20", "Tier1.5",
 })
 
 

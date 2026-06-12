@@ -74,9 +74,42 @@ Mirror the row into the CLAUDE.md R-rule table + DOCTRINE.md.
 - **Rollback:** revert the branch; R17 is registry-gated; nothing about already-merged BLs
   changes; the dispatch rail can be re-narrowed behind `run_acceptance_followup` in one line.
 
-## Status
-- [ ] SKILLS real-coverage + finding-on-failure mandate
-- [ ] `_acceptance_flow` dispatch-on-observed-failure
-- [ ] R17 in doctrine_spec + CLAUDE.md table + DOCTRINE.md
-- [ ] tests green (full backend suite)
-- [ ] operator merge approval → `development` + harness restart
+## Status — R17 (spine) DONE; full chain built on `development`
+- [x] SKILLS real-coverage + finding-on-failure mandate
+- [x] `_acceptance_flow` dispatch-on-observed-failure
+- [x] R17 in doctrine_spec + CLAUDE.md table
+- [x] tests green
+
+---
+
+# The full zero-defect-escape chain (operator directive 2026-06-12)
+
+> *"PO writes comprehensive criteria → engineer fully covers each → acceptance
+> live-verifies each in production → every failure always dispatches a fixer →
+> 0% chance of a detected defect escaping."*
+
+The unit of truth is the **acceptance criterion** `AC-<BL>-<n>`, enforced at four
+gates. Honest boundary (stated to the operator): the loop guarantees **zero
+*detected* escape** — every criterion is tested + live-verified, every detected
+failure is dispatched, and the run cannot report `integrity_ok` while anything is
+open. The only residual is a behavior **no criterion describes** (PO-completeness
+limit), which R18 + the comprehensiveness mandate drive down but cannot make
+literally zero.
+
+| Gate | Rule | Where | Status |
+|---|---|---|---|
+| 1. PO criteria | **R18** | `validate_po` + `thin_criteria_report`; criteria fix-prompt; PO SKILLS | **[x]** |
+| 2. Engineer coverage | **R19** | `run_bl_tests` `coverage_gap` (per-criterion AC-id scan); both no-abort loops; engineer SKILLS | **[x]** |
+| 3. Acceptance live-verify each AC | **R20** | `_unverified_criteria` + `ac_coverage` cross-check in `_acceptance_flow`; acceptance SKILLS | **[x]** |
+| 3b. Always-dispatch | **R17/R20** | cap 1→25 (no silent drop); observed-failure auto-dispatch | **[x]** |
+| 4. Terminal integrity | **R20** | `integrity_ok` + `unverified_criteria` + `open_failures` on `acceptance.anomaly`/`acceptance.done` | **[x]** |
+
+All four registered in `doctrine_spec.py` (I-2) + CLAUDE.md R-rule table (consistency
+test green). Tests: `test_acceptance_criteria_chain.py`, `test_simple_gating.py`
+(coverage_gap), `test_acceptance_flow.py` (R17 dispatch).
+
+## Remaining
+- [ ] full backend suite green (running)
+- [ ] operator merge approval → FF `main`, restart harness
+- [ ] live-prove the chain on a real sprint (the review-submit 401 is the canonical
+      defect it must now catch + auto-fix)

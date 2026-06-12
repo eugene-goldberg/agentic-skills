@@ -191,8 +191,12 @@ def test_followup_section_degrades_without_dossier() -> None:
     assert "EVERY surface" in s  # the binding instruction is unconditional
 
 
-def test_cost_cap_default_is_one() -> None:
-    assert orch.FOLLOWUP_COST_CAP == 1
+def test_cost_cap_generous_no_silent_drop() -> None:
+    # Chain (operator directive 2026-06-12): EVERY detected product failure must be
+    # dispatched — a cap of 1 would silently defer the rest (a defect escape). The cap
+    # is now a generous runaway-backstop, not a routine 1; overflow is surfaced loudly
+    # (acceptance.followup.skipped reason=cost_cap) and caught by the integrity gate.
+    assert orch.FOLLOWUP_COST_CAP >= 25
 
 
 # ─── section + hypothesis builders ─────────────────────────────────────────

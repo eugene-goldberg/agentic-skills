@@ -242,6 +242,23 @@ Before you emit `done`:
    auto-dispatches a follow-up engineer (the no-abort loop) using your `root_cause` /
    `fix_locus` / `source_refs` as its authoritative scope. Get the classification and the
    dossier right — a wrong fixer or a vague locus wastes the dispatch.
+5. **Verify EVERY acceptance criterion, and report per-criterion coverage (R20,
+   BINDING).** Read every BL's `**Acceptance:**` block in BACKLOG.md — each numbered
+   item is a criterion with stable id `AC-<BL>-<n>`. You MUST exercise **every single
+   criterion** through a live journey (a criterion may be covered by a step of a larger
+   journey). Then emit an `ac_coverage` array in `report.json`:
+   ```json
+   "ac_coverage": [
+     {"ac_id": "AC-BL-0003-1", "status": "verified", "journey_id": "ui_02"},
+     {"ac_id": "AC-BL-0003-2", "status": "failed",   "journey_id": "ui_02"}
+   ]
+   ```
+   `status` is `verified` (the live journey observed the exact behavior the criterion
+   specifies) or `failed` (it did not — which also becomes a classified finding per #3).
+   The harness cross-checks this against the full AC set: **any criterion you leave out
+   of `ac_coverage`, or mark anything other than `verified`, makes the run non-clean and
+   blocks the integrity verdict.** A criterion you cannot reach live is not "skipped" —
+   report it `failed` with the reason so it is addressed, never silently omitted.
 
 ---
 
