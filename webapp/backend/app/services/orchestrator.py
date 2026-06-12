@@ -651,6 +651,9 @@ async def _engineer_flow(
                 "last_failing_tests": last_failing[:50],
                 "first_failure_signature": gate_signatures[0] if gate_signatures else None,
                 "exhausted_ceiling": gate_attempt >= MAX_FIX_ATTEMPTS,
+                # ABL-0002: the failed attempt branch survives worktree removal — record
+                # it so the Architect can `git diff` exactly what the engineer tried.
+                "agent_branch_failed": wt.branch if wt is not None else None,
             }
             if merge_failed:
                 dossier["blocker"] = "merge_error"
@@ -1110,6 +1113,167 @@ async def _run_janitor(repo_dir: Path, repo_name: str, run_id: str,
             continue
         yield e
     _run_janitor.last_outcome = outcome  # type: ignore[attr-defined]
+
+
+# ─── ABL-0002 Stage 1: the Architect — in-sprint judgment at code-gate exhaustion ──
+# A new crew role (NOT the Janitor — operator 2026-06-11). The Janitor repairs the
+# ENVIRONMENT on non-code failures; the Architect makes the engineering JUDGMENT the
+# confined engineer cannot at a CODE-gate exhaustion: re-frame the problem, defer the
+# BL with rationale (continue the sprint), or honestly escalate — instead of halting.
+# Mirrors _janitor_flow exactly (spawn → deterministic JSON sidecar verdict → act).
+# split/respec verdicts are recorded but treated as escalate in Stage 1 (Stage 2 adds
+# backlog mutation). Operator-gated (run_architect, default OFF); no-abort (default
+# verdict on a missing/garbage sidecar is escalate).
+
+_ARCHITECT_VERDICTS = frozenset(
+    {"retry_reframed", "split", "defer", "respec", "escalate"})
+
+
+def _architect_should_adjudicate(dossier: dict, run_architect: bool) -> bool:
+    """Adjudicate a CODE-gate exhaustion only. Merge/env failures are the Janitor's
+    lane (blocker == "merge_error" or a non-code gate kind never reaches here as a
+    code defect). Fires once per BL at the escalation seam."""
+    if not run_architect or not isinstance(dossier, dict):
+        return False
+    return dossier.get("blocker") != "merge_error"
+
+
+def _build_architect_adjudicate_task(
+    skill: str, *, run_id: str, feature_slug: str | None, bl_id: str,
+    dossier: dict, agent_branch_failed: str | None,
+    report_rel: str, report_json_rel: str,
+) -> str:
+    slug = feature_slug or "_no_feature"
+    backlog_rel = f"_brownfield/features/{slug}/BACKLOG.md"
+    diff_hint = (
+        f"- The engineer's FAILED attempt is on branch `{agent_branch_failed}` — "
+        f"inspect it with `git diff {agent_branch_failed}` / `git show {agent_branch_failed}` "
+        f"to see exactly what it tried."
+        if agent_branch_failed else
+        "- The engineer's worktree was reaped; reason from the dossier + the codebase."
+    )
+    return (
+        f"{skill}\n\n---\n\n"
+        f"# Architect dispatch — MODE: adjudicate ({bl_id}, run {run_id})\n\n"
+        f"An engineer exhausted its gate-fix retries on **{bl_id}** and the sprint is "
+        f"about to halt. Take the step-back decision it structurally cannot. Ground "
+        f"everything in the real code (Read/Grep/git); falsify before you affirm.\n\n"
+        f"## The failure dossier (verbatim)\n```json\n{json.dumps(dossier, indent=2)[:4000]}\n```\n\n"
+        f"## Your inputs\n"
+        f"- The BL spec: read the `{bl_id}` section of `{backlog_rel}`.\n"
+        f"{diff_hint}\n"
+        f"- The failing tests + signature are in the dossier; OPEN the failing test AND "
+        f"the source it exercises before deciding.\n\n"
+        f"## Decide ONE verdict (least-disruptive that is honestly correct):\n"
+        f"- `retry_reframed` — the engineer mis-framed it; you can point to WHAT it missed. "
+        f"Return a precise corrected `directive` (root cause file:line + the exact change + "
+        f"the analog to mirror). It gets ONE fresh bounded re-run.\n"
+        f"- `defer` — genuinely blocked on something out of this sprint's scope (a product "
+        f"decision, a pre-existing defect, a dependency on a later BL). Return `defer_reason` "
+        f"(what's blocked + what's needed). The sprint CONTINUES with the other BLs.\n"
+        f"- `escalate` — a true wall a senior engineer would also hit. Honest terminal.\n"
+        f"- `split` / `respec` — (record your recommendation; Stage-1 treats these as escalate).\n\n"
+        f"## Deliverables (BOTH — the orchestrator reads the JSON, never stdout)\n"
+        f"1. A grounded report at `{report_rel}` (what you reviewed, grounding with file:line, "
+        f"the decision + why, alternatives considered).\n"
+        f"2. The EXACT JSON verdict at `{report_json_rel}`:\n"
+        f"```json\n"
+        f'{{"mode":"adjudicate","bl_id":"{bl_id}",'
+        f'"verdict":"retry_reframed|split|defer|respec|escalate",'
+        f'"directive":"<reframed fix directive>"|null,'
+        f'"defer_reason":"<what is blocked + what is needed>"|null,'
+        f'"split_recommendation":"<ordered sub-BLs>"|null,'
+        f'"respec_recommendation":"<corrected spec>"|null,'
+        f'"root_cause":"<one line, cited file:line>","summary":"<brief>"}}\n```\n'
+        f"Then emit that same JSON as your final assistant message. No-abort: if you "
+        f"cannot stand behind a resolution, `verdict=\"escalate\"` with a cited root_cause."
+    )
+
+
+async def _architect_flow(
+    repo_dir: Path, repo_name: str, run_id: str, feature_slug: str | None, *,
+    bl_id: str, dossier: dict, timeout: int,
+) -> AsyncIterator[dict]:
+    """Spawn the Architect in adjudicate mode over a code-gate-exhaustion dossier.
+    Reads a deterministic JSON sidecar verdict. Advisory: a crash never aborts the
+    run (the caller falls back to the normal escalation)."""
+    cfg = repo_config_svc.load(repo_dir)
+    slug = feature_slug or "_no_feature"
+    arch_dir = repo_dir / "_brownfield" / "features" / slug / "architect"
+    report_rel = f"_brownfield/features/{slug}/architect/adjudicate-{bl_id}-{run_id}.md"
+    report_json_rel = f"_brownfield/features/{slug}/architect/adjudicate-{bl_id}-{run_id}.json"
+    try:
+        arch_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+    yield _evt("architect.start", run_id=run_id, bl_id=bl_id, mode="adjudicate",
+               report=report_rel)
+
+    trace = None
+    verdict: dict = {}
+    try:
+        skill = prompts_brownfield_svc._load_skill("architect")
+        task = _build_architect_adjudicate_task(
+            skill, run_id=run_id, feature_slug=feature_slug, bl_id=bl_id,
+            dossier=dossier, agent_branch_failed=dossier.get("agent_branch_failed"),
+            report_rel=report_rel, report_json_rel=report_json_rel)
+        trace = TraceWriter(repo=repo_name, role="architect", bl_id=bl_id, task_id=run_id)
+        async for event in stream_agent_task(
+            task, repo_dir, timeout_seconds=timeout, idle_timeout=900,
+            allowed_tools="Bash,Read,Grep,Glob,Write", trace=trace,
+        ):
+            event.setdefault("orchestrator_step", "architect")
+            yield event
+    except Exception as exc:  # noqa: BLE001 — advisory: an Architect crash never aborts
+        yield _evt("architect.error", run_id=run_id, bl_id=bl_id, error=str(exc)[:500])
+    finally:
+        if trace is not None:
+            try:
+                trace.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    report_json_abs = repo_dir / report_json_rel
+    if report_json_abs.exists():
+        try:
+            verdict = json.loads(report_json_abs.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            yield _evt("architect.verdict.error", run_id=run_id, bl_id=bl_id,
+                       error=str(exc)[:300], path=report_json_rel)
+            verdict = {}
+
+    v = verdict.get("verdict") if isinstance(verdict, dict) else None
+    if v not in _ARCHITECT_VERDICTS:
+        v = "escalate"  # conservative default on a missing/garbage sidecar
+    # Stage 1 has no backlog-mutation authority yet: split/respec are honoured as a
+    # recommendation on the dossier but resolved as an escalation.
+    effective = v if v in ("retry_reframed", "defer", "escalate") else "escalate"
+
+    yield _evt("architect.done", run_id=run_id, bl_id=bl_id, mode="adjudicate",
+               verdict=v, effective_verdict=effective,
+               root_cause=(verdict.get("root_cause") if isinstance(verdict, dict) else None))
+    yield {"_orchestrator_outcome": True, "role": "architect", "run_id": run_id,
+           "bl_id": bl_id, "verdict": effective, "raw_verdict": v,
+           "directive": (verdict.get("directive") if isinstance(verdict, dict) else None),
+           "defer_reason": (verdict.get("defer_reason") if isinstance(verdict, dict) else None),
+           "root_cause": (verdict.get("root_cause") if isinstance(verdict, dict) else None),
+           "report": report_rel, "verdict_doc": verdict}
+
+
+async def _run_architect(repo_dir: Path, repo_name: str, run_id: str,
+                         feature_slug: str | None, *, bl_id: str, dossier: dict,
+                         timeout: int) -> AsyncIterator[dict]:
+    """Thin driver around _architect_flow (mirrors _run_janitor): re-yields stream
+    events, stashes the terminal verdict on a private attribute."""
+    outcome: dict | None = None
+    async for e in _architect_flow(repo_dir, repo_name, run_id, feature_slug,
+                                   bl_id=bl_id, dossier=dossier, timeout=timeout):
+        if "_orchestrator_outcome" in e:
+            outcome = e
+            continue
+        yield e
+    _run_architect.last_outcome = outcome  # type: ignore[attr-defined]
 
 
 # ─── onboarding flow (the Janitor/Ops-Steward in ONBOARDING MODE) ─────────────
@@ -2951,6 +3115,10 @@ async def run_brief(
     run_janitor: bool = True,  # Janitor/Ops role (operator 2026-06-07): spawn the
                                # environment-repair agent on non-code failures.
                                # Flag = named rollback (set False to disable wiring).
+    run_architect: bool = False,  # ABL-0002 Stage 1 (operator 2026-06-11): spawn the
+                                  # Architect to ADJUDICATE a code-gate exhaustion
+                                  # (retry_reframed / defer / escalate) instead of
+                                  # halting. Default OFF until live-proven.
     warm_retrieval: bool = True,  # A56 (operator 2026-06-07): warm the LOCAL
                                   # retrieval backend before the PO so the first
                                   # agent isn't grounding-blind. Flag = rollback.
@@ -2970,6 +3138,10 @@ async def run_brief(
     # at a smaller, schema-stable shape so resume can read it without coupling
     # to the full per-role outcome structure.
     bl_outcomes_compact: list[dict] = []
+    # ABL-0002 Stage 0: surfaced roll-ups so escalated/deferred BLs are reported in
+    # the sprint_complete summary instead of vanishing from coverage math.
+    escalated_bls: list[dict] = []
+    deferred_bls: list[dict] = []
     # A7: terminal status for the disk state move. Defaults to "aborted" so any
     # return / exception path lands in done/ tagged as aborted; the single
     # sprint_complete path flips this just before the terminal yield.
@@ -3259,6 +3431,61 @@ async def run_brief(
                                        reason=(f"Janitor repaired the environment and the merge "
                                                f"landed ({(remerge.get('merged_sha') or '')[:8]}); "
                                                f"{bl_id} fully resolved in-loop — no escalation"))
+                # === ABL-0002 Stage 1: Architect adjudication at code-gate exhaustion ===
+                # The Janitor handles env/merge; if it didn't recover this (a CODE
+                # failure), the Architect makes the step-back decision the confined
+                # engineer cannot — reframe & re-run, defer-and-continue, or escalate
+                # honestly — instead of halting the sprint. Operator-gated (run_architect).
+                if not _recovered and _architect_should_adjudicate(_dossier, run_architect):
+                    _adj = {}
+                    try:
+                        async for ae in _run_architect(repo_dir, repo_name, run_id,
+                                                       feature_slug, bl_id=bl_id,
+                                                       dossier=_dossier, timeout=timeout_per_role):
+                            yield ae
+                        _adj = getattr(_run_architect, "last_outcome", None) or {}
+                    except Exception as exc:  # noqa: BLE001 — advisory; never block escalation
+                        yield _evt("architect.error", bl_id=bl_id, run_id=run_id, error=str(exc)[:300])
+                    _dossier["architect"] = _adj
+                    _av = _adj.get("verdict")
+                    if _av == "retry_reframed" and _adj.get("directive"):
+                        try:
+                            _sect = _resolve_engineer_section(repo_dir, bl_id, feature_slug, None)
+                        except Exception:  # noqa: BLE001
+                            _sect = ""
+                        _reframed = (f"{_sect}\n\n## ARCHITECT DIRECTIVE (adjudication — "
+                                     f"root-cause corrected)\n{_adj.get('directive')}\n")
+                        yield _evt("architect.retry_reframed", bl_id=bl_id,
+                                   root_cause=_adj.get("root_cause"))
+                        _re_out = None
+                        async for e in _engineer_flow(repo_dir, repo_name, bl_id,
+                                                      timeout_per_role, retrieval_kwargs_builder,
+                                                      run_id=run_id, feature_slug=feature_slug,
+                                                      section_override=_reframed,
+                                                      inject_lessons=inject_lessons,
+                                                      inject_global_lessons=inject_global_lessons):
+                            if "_orchestrator_outcome" in e:
+                                _re_out = e
+                                continue
+                            yield e
+                        if _re_out and _re_out.get("merged"):
+                            _recovered = True
+                            eng_outcome = _re_out
+                            yield _evt("architect.resolved", bl_id=bl_id, verdict="retry_reframed",
+                                       reason=(f"Architect reframed the root cause and the engineer's "
+                                               f"re-run merged {bl_id} — resolved in-loop, no escalation"))
+                    elif _av == "defer":
+                        _dreason = (_adj.get("defer_reason") or "architect deferred (out of scope)")[:500]
+                        summary["bls"].append(per_bl)
+                        bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "deferred",
+                                                    "reason": _dreason[:300]})
+                        deferred_bls.append({"bl_id": bl_id, "reason": _dreason})
+                        _checkpoint(current_bl=None)  # A7
+                        yield _evt("bl.deferred", bl_id=bl_id, reason=_dreason, dossier=_dossier)
+                        yield _evt("bl.done", bl_id=bl_id, outcome="deferred")
+                        continue  # defer = skip this BL, keep the sprint going
+                    # escalate / split / respec → fall through to the escalate block;
+                    # the Architect's reasoning is attached to _dossier["architect"].
                 if not _recovered:
                     summary["bls"].append(per_bl)
                     bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "engineer_escalated"})
@@ -3275,6 +3502,8 @@ async def run_brief(
                     else:
                         _esc_reason = (f"engineer could not reach a green gate for {bl_id} "
                                        f"after exhaustive investigate→fix→re-test attempts")
+                    escalated_bls.append({"bl_id": bl_id, "role": "engineer",
+                                          "reason": _esc_reason})  # ABL-0002 Stage 0 roll-up
                     yield _evt("bl.escalated", bl_id=bl_id, role="engineer",
                                reason=_esc_reason, dossier=_dossier)
                     yield _evt("bl.done", bl_id=bl_id, outcome="engineer_escalated")
@@ -3500,6 +3729,11 @@ async def run_brief(
             coverage_subtype=subtype,
             ui_coverage_ratio=round(coverage["ratio"], 4),
             ui_coverage_threshold=min_ui_coverage_ratio,
+            # ABL-0002 Stage 0: surface escalated/deferred BLs so dropped work is
+            # reported, not silently lost from coverage math. Honest aggregation (I-5).
+            escalated_bls=escalated_bls,
+            deferred_bls=deferred_bls,
+            bl_outcomes=bl_outcomes_compact,
         )
 
         # ABL-0019 Batch C: refresh the per-target Pattern Profile from the

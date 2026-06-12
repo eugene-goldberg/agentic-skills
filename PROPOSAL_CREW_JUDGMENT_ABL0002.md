@@ -231,12 +231,22 @@ seams. Each behind its own default-OFF flag; rolled out in stages, lowest-risk f
 | **Mode 2 — impl_review** | in `_engineer_flow` after the BL's own tests are green, around `merge_to_target` | `run_architect_impl_review` | `approve`→merge; `request_changes`→re-spawn engineer with the per-BLOCK directives (bounded). Scope to *high-risk* BLs (those Mode 1 flagged) to bound cost. |
 
 **Staged rollout (each flag default OFF):**
-- **Stage 0 — summary truthfulness** (Part B): `escalated`/`deferred` roll-up in
-  `sprint_complete` + fix coverage math (`:3347`). Makes every Architect decision
-  visible; closes the Seam-3 honesty hole (A2/A5). Prerequisite; ~30 LOC.
-- **Stage 1 — Mode 3 adjudicate** with `retry_reframed`/`defer`/`escalate` only (NO
-  backlog mutation). Converts "halt the sprint" into a judgment. Highest value, lowest
-  structural risk. The headline. `_architect_flow` + sidecar read + the three actions.
+- **Stage 0 — summary truthfulness** (Part B): **SHIPPED** — `sprint_complete` now
+  carries `escalated_bls` + `deferred_bls` + `bl_outcomes`; escalated BLs recorded in a
+  roll-up at the escalation seam. Makes every Architect decision visible; closes the
+  Seam-3 honesty hole (A2/A5).
+- **Stage 1 — Mode 3 adjudicate** with `retry_reframed`/`defer`/`escalate` (NO backlog
+  mutation; `split`/`respec` preserved as a recommendation but resolved as escalate):
+  **SHIPPED** behind `run_architect` (default OFF). `_architect_should_adjudicate` gate
+  (code-failure only, never merge_error) → `_architect_flow`/`_run_architect` (mirror
+  the Janitor: spawn in the real repo, read the deterministic JSON sidecar verdict) →
+  wired at the engineer escalation seam: `retry_reframed`→ONE bounded reframed engineer
+  re-run (merges → recovered, falls through to QA/scorer); `defer`→structured deferral +
+  `continue` (sprint keeps going); `escalate`→the existing dossier path with the
+  Architect's reasoning attached. The failed attempt branch is recorded in the dossier
+  (`agent_branch_failed`) so the Architect can `git diff` it. Tests:
+  `test_architect_flow.py` (11). **Live-proof pending** (a Horizon-class hard feature
+  with `run_architect=true`).
 - **Stage 2 — backlog mutation**: Mode 1 plan_review + the `split`/`respec`/`revise`
   verdicts. Requires the `for it in ordered:` loop to support dynamic sub-BL insertion +
   a re-spec'd section; bounded by a global split/respec budget → `escalate` on exhaust.

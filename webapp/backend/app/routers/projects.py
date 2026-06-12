@@ -1210,6 +1210,10 @@ class RunBriefRequest(BaseModel):
     # blast radius than per-target lessons → separate rollout). DEFAULT OFF until
     # the read-path smoke confirms global lessons render + no regression.
     inject_global_lessons: bool = False
+    # ABL-0002 Stage 1: spawn the Architect to ADJUDICATE a code-gate exhaustion
+    # (retry_reframed / defer / escalate) instead of halting the sprint. DEFAULT OFF
+    # until live-proven on a hard feature.
+    run_architect: bool = False
     # A48 pre-flight disk-free check (2026-06-01). Default advisory:
     # the check ALWAYS runs and emits an SSE event with the breakdown,
     # but only refuses the run (HTTP 409) when enforce=True. This
@@ -1464,6 +1468,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 run_acceptance_followup=req.run_acceptance_followup,
                 inject_lessons=req.inject_lessons,
                 inject_global_lessons=req.inject_global_lessons,
+                run_architect=req.run_architect,
                 warm_retrieval=req.warm_retrieval,
                 acceptance_timeout=req.acceptance_timeout,
                 min_ui_coverage_ratio=req.min_ui_coverage_ratio,
