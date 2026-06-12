@@ -196,7 +196,15 @@ def _retrieval_kwargs(wt: Worktree, role: str, bl_id: str | None = None, trace: 
         retrieval_log = wt.path / ".agile-v" / "logs" / log_name
     kw = {
         "reference_repo": RETRIEVAL_REFERENCE_REPO,
-        "target_repo": wt.path,
+        # Point retrieval at the STABLE main checkout (already indexed at
+        # index_initial), NOT the per-agent worktree. Each worktree is a fresh
+        # path → a fresh EMPTY code collection → claude-context-core re-indexes
+        # the whole repo before that agent's first semantic_search (minutes on a
+        # CPU-only host; it blew the warmup + search timeouts and forced the crew
+        # to ground blind). The worktree is byte-identical to main at spawn, so
+        # the main collection grounds correctly; the agent reads its own new
+        # files directly. Mirrors the lessons_repo stable-key fix below.
+        "target_repo": lessons_repo or wt.path,
         "retrieval_log_path": retrieval_log,
     }
     # ABL-0016 Stage 1.5: pass the STABLE main-checkout path so the lessons
