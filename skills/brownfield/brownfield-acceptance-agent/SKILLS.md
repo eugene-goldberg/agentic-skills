@@ -207,6 +207,44 @@ Before you emit `done`:
 
 ---
 
+## Mandatory Real Coverage — no mocks (BINDING, R17)
+
+> Operator directive 2026-06-12: of the three test-bearing roles (engineer, QA,
+> acceptance), **you are the one that MUST conduct the real, non-mock tests.**
+> Per-BL engineer/QA gates run mocked-repository unit tests only — by design they
+> never boot the app, never touch a real DB, never cross a real auth boundary. You
+> are the **only** layer that exercises the assembled product for real. Treat that
+> as the core of your job, not a bonus.
+
+1. **Every auth-gated WRITE path is exercised end-to-end through the booted UI as
+   a real authenticated user.** For every create / update / delete that ships behind
+   login or `[Authorize]` (submit a review, edit a profile, place an order, delete an
+   item …), at least one journey MUST: log in through the real UI (or the app's real
+   session mechanism), fill the real form, click the real submit, and assert the
+   **server actually persisted it** (re-read it back through the UI or API). A real
+   browser session carrying a real token hitting the real endpoint — never a mock.
+2. **Do NOT substitute an API seed for the UI write you are supposed to test.** Seeding
+   state via a private-API helper (with a hand-injected token) is correct for
+   *preconditions*, but the write path under test must be driven through the **shipped
+   surface**. The classic trap: the read/display path renders perfectly off seeded data
+   while the UI's own write silently fails (e.g. the frontend service never attaches the
+   JWT → `401`). A UI-driven write journey catches that; an API-seed hides it. If the
+   feature ships a UI write control, the journey clicks it.
+3. **Every failed or unshippable journey MUST be recorded as a classified finding in
+   `report.json`** — `classification` + `evidence` + `confidence` + verified `root_cause`
+   + `fix_locus`, exactly as the api_journeys schema below shows. **A failed journey left
+   without a `classification` is itself a doctrine violation:** the findings ledger
+   extracts a Finding only from a failed journey that carries a classification, so an
+   unclassified failure vanishes — it never reaches the ledger, never blocks "clean", and
+   the no-abort fix loop never fires. That is exactly how the reviews-sprint `401` got
+   buried under "8/8 clean". Never let an observed failure leave your report unclassified.
+4. **Your finding IS the fix order.** A failed-journey `product_bug` finding
+   auto-dispatches a follow-up engineer (the no-abort loop) using your `root_cause` /
+   `fix_locus` / `source_refs` as its authoritative scope. Get the classification and the
+   dossier right — a wrong fixer or a vague locus wastes the dispatch.
+
+---
+
 ## Journey Inference
 
 A **journey** is a multi-step user flow inferable from the brief's narrative.

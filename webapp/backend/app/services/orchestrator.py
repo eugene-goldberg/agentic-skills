@@ -2227,6 +2227,50 @@ def select_followup_finding(repo_dir: Path, feature_slug: str, finding_id: str):
     return finding, ledger, None
 
 
+def _summarize_acceptance_journeys(report: dict) -> tuple[dict, list[dict]]:
+    """Extract a journey pass/fail summary + a list of anomaly records (one per
+    failed/unshippable journey) from an acceptance report.json. Defensive: tolerates
+    missing keys and either count fields or per-journey arrays. Feeds the explicit
+    `acceptance.anomaly` surfacing (operator 2026-06-11): a failed journey must never
+    hide under a clean summary."""
+    if not isinstance(report, dict):
+        return {}, [{"kind": "report_shape", "detail": "report.json was not an object"}]
+    summary = {k: report[k] for k in (
+        "journeys_planned", "journeys_passed", "journeys_failed", "journeys_unshippable",
+        "api_journeys_planned", "api_journeys_passed", "api_journeys_failed",
+        "api_journeys_unshippable") if isinstance(report.get(k), int)}
+    # Prefer rich per-journey anomalies from any journey array; fall back to the
+    # numeric count fields only if no array is present (so we never double-count).
+    per_journey: list[dict] = []
+    seen: set = set()
+    for arr_key in ("journeys", "api_journeys", "ui_journeys"):
+        arr = report.get(arr_key)
+        if not isinstance(arr, list):
+            continue
+        for j in arr:
+            if not isinstance(j, dict):
+                continue
+            status = str(j.get("status", "")).lower()
+            if status in ("failed", "fail", "unshippable", "error"):
+                jid = str(j.get("id") or j.get("name") or "?")
+                if (arr_key, jid) in seen:
+                    continue
+                seen.add((arr_key, jid))
+                per_journey.append({
+                    "kind": "journey_" + status, "journey": jid,
+                    "title": str(j.get("title") or j.get("name") or "")[:120],
+                    "evidence": str(j.get("evidence_summary") or j.get("reason") or "")[:200],
+                })
+    if per_journey:
+        return summary, per_journey
+    anomalies = [
+        {"kind": k, "count": report[k], "detail": f"{report[k]} {k.replace('_', ' ')}"}
+        for k in ("journeys_failed", "api_journeys_failed",
+                  "journeys_unshippable", "api_journeys_unshippable")
+        if isinstance(report.get(k), int) and report[k] > 0]
+    return summary, anomalies
+
+
 async def _acceptance_flow(
     repo_dir: Path,
     repo_name: str,
@@ -2488,14 +2532,28 @@ async def _acceptance_flow(
         # the sprint, so a corrupt report.json yields an .error event
         # but the flow continues to `remove_worktree` and `done`.
         findings_persisted = 0
+        # Operator directive 2026-06-11: an ANOMALOUS acceptance result (any failed /
+        # unshippable journey, a missing/corrupt report, or a non-OK validator) must
+        # ALWAYS be surfaced EXPLICITLY — never buried under a "clean" summary while a
+        # journey silently failed (the review-submit 401 case). These trackers feed a
+        # dedicated `acceptance.anomaly` event + an `anomalous` flag on `acceptance.done`.
+        acceptance_anomalies: list[dict] = []
+        journey_summary: dict = {}
         report_src: Path | None = None
         if archive_dest is not None and (archive_dest / "report.json").exists():
             report_src = archive_dest / "report.json"
         elif (acceptance_dir_wt / "report.json").exists():
             report_src = acceptance_dir_wt / "report.json"
+        if report_src is None:
+            acceptance_anomalies.append({
+                "kind": "report_missing",
+                "detail": "no acceptance report.json was produced — the run could NOT "
+                          "be verified end-to-end (treat as anomalous, not clean)"})
         if report_src is not None:
             try:
                 report_dict = json.loads(report_src.read_text(encoding="utf-8"))
+                journey_summary, _journey_anoms = _summarize_acceptance_journeys(report_dict)
+                acceptance_anomalies.extend(_journey_anoms)
                 ledger = findings_ledger_svc.FindingsLedger(repo_dir, feature_slug)
                 persisted = await asyncio.to_thread(
                     ledger.append_from_report,
@@ -2512,6 +2570,10 @@ async def _acceptance_flow(
                     ledger_path=str(ledger.path),
                 )
             except Exception as exc:  # noqa: BLE001 — advisory: never abort sprint
+                acceptance_anomalies.append({
+                    "kind": "report_unparseable",
+                    "detail": f"acceptance report.json could not be read/parsed "
+                              f"({type(exc).__name__}: {exc}) — run NOT verified"})
                 yield _evt(
                     "acceptance.ledger.error",
                     run_id=run_id,
@@ -2544,14 +2606,44 @@ async def _acceptance_flow(
         except Exception:
             pass
 
-    # ABL-0015 Batch C: auto-dispatch a follow-up engineer on confirmed
-    # product_bug findings. Runs AFTER the finally (acceptance worktree +
-    # volumes already reaped) and BEFORE acceptance.done — so the follow-up
-    # worktree is created AND reaped (by _engineer_flow's own finally)
-    # before run_brief's closure_check.scan_all fires. Gated OFF by default
-    # and requires the retrieval builder (Batch B). Advisory: a dispatch
-    # failure must not abort the sprint.
-    if run_acceptance_followup and retrieval_kwargs_builder is not None and feature_slug:
+    # ABL-0015 Batch C + R17 (operator directive 2026-06-12): auto-dispatch the
+    # no-abort fix loop on confirmed product_bug findings. Runs AFTER the finally
+    # (acceptance worktree + volumes already reaped) and BEFORE acceptance.done — so
+    # the follow-up worktree is created AND reaped (by _engineer_flow's own finally)
+    # before run_brief's closure_check.scan_all fires. Requires the retrieval builder
+    # (Batch B). Advisory: a dispatch failure must not abort the sprint.
+    #
+    # R17 — acceptance is the BINDING real-test owner. A failed real journey is the
+    # strongest possible signal: the assembled product broke end-to-end. So dispatch
+    # fires whenever there is an eligible observed-failure finding, INDEPENDENT of the
+    # calibration-gated ``run_acceptance_followup`` flag — an observed real failure is
+    # never left un-actioned (no-abort). All acceptance findings are, by construction,
+    # observed failures (the ledger extracts a Finding only from a failed/caveat journey
+    # that carries a classification). Every safety rail is preserved:
+    # ``_select_followup_candidates`` still requires product_bug + confidence>=0.90
+    # (or operator-confirmed) + cost_cap + R15 idempotency, and the dispatched fix must
+    # itself clear the full doctrine+gate+merge bar (a broken fix never merges) — so the
+    # zero-false-merge guarantee holds. ``run_acceptance_followup`` still force-enables
+    # the path even when nothing is eligible yet (calibration-campaign smoke).
+    eligible_now: list = []
+    if feature_slug:
+        try:
+            eligible_now, _capped_now = _select_followup_candidates(
+                findings_ledger_svc.FindingsLedger(repo_dir, feature_slug).list_all()
+            )
+        except Exception:  # noqa: BLE001 — selection is advisory; never abort
+            eligible_now = []
+    should_dispatch = bool(eligible_now) or run_acceptance_followup
+    if should_dispatch and retrieval_kwargs_builder is not None and feature_slug:
+        if eligible_now and not run_acceptance_followup:
+            yield _evt(
+                "acceptance.followup.auto_triggered",
+                run_id=run_id,
+                feature_slug=feature_slug,
+                eligible=len(eligible_now),
+                reason="R17: observed real-journey-failure product_bug finding(s) "
+                       "auto-dispatched independent of the calibration flag",
+            )
         try:
             async for evt in _dispatch_followup_engineers(
                 repo_dir, repo_name, run_id, feature_slug,
@@ -2560,6 +2652,30 @@ async def _acceptance_flow(
                 yield evt
         except Exception as exc:  # noqa: BLE001 — advisory: never abort sprint
             yield _evt("acceptance.followup.error", run_id=run_id, error=str(exc))
+
+    # A non-OK validator (the acceptance agent itself didn't converge) is anomalous.
+    if not validation.get("ok"):
+        acceptance_anomalies.append({
+            "kind": "validator_not_ok",
+            "detail": "the acceptance validator did not reach an OK verdict "
+                      f"({validation.get('summary') or 'incomplete/give_up'})"})
+
+    # Operator directive 2026-06-11: ALWAYS surface an anomalous acceptance EXPLICITLY,
+    # loudly, as its own event — so a failed/unshippable journey (or a missing report)
+    # can never hide under "8/8 merged, regression green". This is honest aggregation
+    # (I-5): the top-line success of the per-BL gates does NOT imply acceptance passed.
+    acceptance_clean = not acceptance_anomalies
+    if not acceptance_clean:
+        yield _evt(
+            "acceptance.anomaly",
+            run_id=run_id,
+            feature_slug=feature_slug,
+            anomaly_count=len(acceptance_anomalies),
+            anomalies=acceptance_anomalies[:30],
+            journeys=journey_summary,
+            reason="acceptance produced anomalous results (failed/unshippable journeys, "
+                   "a missing/corrupt report, or a non-OK validator) — escalated explicitly",
+        )
 
     yield _seal(_evt(
         "acceptance.done",
@@ -2570,6 +2686,10 @@ async def _acceptance_flow(
         acceptance_dir=str(feature_dir / "acceptance"),
         backend_bls=backend_bls,
         findings_persisted=findings_persisted,
+        acceptance_clean=acceptance_clean,            # explicit clean/anomalous verdict
+        anomaly_count=len(acceptance_anomalies),
+        anomalies=acceptance_anomalies[:30],
+        journeys=journey_summary,
         batch="B",
     ))
 
