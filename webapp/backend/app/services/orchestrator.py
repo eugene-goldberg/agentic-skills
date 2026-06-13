@@ -2040,11 +2040,20 @@ def _build_acceptance_task(
                 f"  First run these setup step(s) (e.g. DB migrations) from the "
                 f"worktree root:\n{steps}\n"
             )
+        fixed_note = ""
+        if isinstance(app_boot, dict) and app_boot.get("port"):
+            fixed_note = (
+                f"  This target pins the backend to port {port} (the frontend "
+                f"hardcodes it). If {port} is already in use by a stale process, "
+                f"free it first (e.g. `fuser -k {port}/tcp` or kill the listener) "
+                f"before booting.\n"
+            )
         boot_block = (
             f"- BOOT THE APP NATIVELY — this target has NO docker-compose stack. "
             f"The harness has reserved **port {port}** and materialized the "
             f"gitignored runtime config into your worktree. Drive the boot "
             f"yourself from the worktree root:\n"
+            f"{fixed_note}"
             f"{pre_lines}"
             f"  Then start the app (background it) and wait for it to serve:\n"
             f"    {env_str + ' ' if env_str else ''}{cmd_str}\n"
@@ -2161,6 +2170,60 @@ def _archive_acceptance_dir(acceptance_dir: Path, run_id: str) -> Path | None:
         return dest
     except (OSError, shutil.Error):
         return None
+
+
+def _persist_acceptance_in_target(
+    acceptance_dir_wt: Path,
+    feature_dir: Path,
+    repo_dir: Path,
+    run_id: str,
+    feature_slug: str | None,
+) -> dict:
+    """Persist the acceptance evidence PERMANENTLY in-target under
+    ``_brownfield/features/<slug>/acceptance/`` and commit it on the agent_branch
+    (operator directive 2026-06-13). Journeys, screenshots, api-logs, and the
+    report then travel WITH the feature on the integration branch — not only in
+    the harness-side ``traces_archive`` (which is reaped/ephemeral relative to the
+    target).
+
+    Orchestrator-owned: the acceptance agent itself never commits (R13). Copies
+    the worktree's acceptance tree into the real checkout (merging — so the
+    findings ledger already written there is preserved), then ``git add`` +
+    ``git commit`` scoped to the acceptance pathspec only (leaves any other
+    working-tree state untouched). Best-effort: returns a result dict and never
+    raises — a persist failure must not abort the sprint."""
+    import subprocess
+    dst = feature_dir / "acceptance"
+    res = {"ok": False, "committed": False, "path": str(dst), "reason": ""}
+    try:
+        if not acceptance_dir_wt.exists():
+            res["reason"] = "no acceptance dir in worktree"
+            return res
+        dst.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(acceptance_dir_wt, dst, dirs_exist_ok=True)
+        res["ok"] = True
+        try:
+            rel = str(dst.relative_to(repo_dir))
+        except ValueError:
+            rel = str(dst)
+        subprocess.run(["git", "-C", str(repo_dir), "add", "--", rel],
+                       check=False, capture_output=True)
+        staged = subprocess.run(
+            ["git", "-C", str(repo_dir), "diff", "--cached", "--quiet", "--", rel],
+            capture_output=True)
+        if staged.returncode != 0:  # non-zero ⇒ there ARE staged changes
+            msg = f"acceptance({feature_slug or 'feature'}): persist results (run {run_id})"
+            cm = subprocess.run(
+                ["git", "-C", str(repo_dir), "commit", "-m", msg, "--", rel],
+                capture_output=True, text=True)
+            res["committed"] = cm.returncode == 0
+            res["reason"] = "committed" if cm.returncode == 0 else f"commit failed: {cm.stderr[-200:]}"
+        else:
+            res["reason"] = "no staged changes (already persisted / all gitignored)"
+        return res
+    except Exception as exc:  # noqa: BLE001 — best-effort, never abort the sprint
+        res["reason"] = f"error: {type(exc).__name__}: {exc}"
+        return res
 
 
 # ─── ABL-0015 auto-dispatch follow-up engineer ─────────────────────────────
@@ -2783,7 +2846,10 @@ async def _acceptance_flow(
     resolved_app_boot = None
     _app_boot_cfg = getattr(cfg, "app_boot", None)  # getattr: tolerate test-double cfgs (A67 pattern)
     if _app_boot_cfg:
-        _port = _alloc_free_port()
+        # app_boot v2: honor a FIXED backend port when the contract pins one
+        # (frontend hardcodes the API URL); else allocate a free port.
+        _fixed_port = _app_boot_cfg.get("port")
+        _port = _fixed_port if isinstance(_fixed_port, int) and _fixed_port > 0 else _alloc_free_port()
         # app_boot v2: reserve a SECOND free port for the real frontend when a
         # frontend sub-block is configured (full-app boot for live UI acceptance).
         _has_fe = isinstance(_app_boot_cfg.get("frontend"), dict) and \
@@ -2893,6 +2959,18 @@ async def _acceptance_flow(
                 run_id=run_id,
                 archive=str(archive_dest),
             )
+        # Operator directive 2026-06-13: the acceptance evidence (journeys,
+        # screenshots, api-logs, report) must persist PERMANENTLY in-target under
+        # _brownfield/features/<slug>/acceptance/ — travelling with the feature on
+        # the agent_branch — not only harness-side. Orchestrator copies + commits
+        # (the agent never commits). Best-effort; never aborts the sprint.
+        try:
+            persisted = _persist_acceptance_in_target(
+                acceptance_dir_wt, feature_dir, repo_dir, run_id, feature_slug)
+            yield _evt("acceptance.persisted_in_target", run_id=run_id,
+                       feature_slug=feature_slug, **persisted)
+        except Exception as exc:  # noqa: BLE001
+            yield _evt("acceptance.persist_error", run_id=run_id, error=str(exc))
         # ABL-0014 §I.3 Batch B: persist acceptance findings to the
         # per-feature ledger. Prefer the archived copy (immutable,
         # survives worktree cleanup); fall back to the worktree copy
