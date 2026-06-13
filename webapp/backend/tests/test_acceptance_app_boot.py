@@ -68,6 +68,14 @@ def test_frontend_clean_shape():
     assert fe["base_url_env"] == "VITE_API_URL"
 
 
+def test_fixed_port_passthrough():
+    out = _normalize_app_boot({"cmd": ["dotnet", "run"], "port": 5096})
+    assert out["port"] == 5096
+    # invalid ports dropped
+    assert "port" not in _normalize_app_boot({"cmd": ["dotnet", "run"], "port": 0})
+    assert "port" not in _normalize_app_boot({"cmd": ["dotnet", "run"], "port": "5096"})
+
+
 def test_frontend_dir_defaults_and_hardcoded_url():
     # base_url_env omitted ⇒ hardcoded-URL target (no key stored)
     out = _normalize_app_boot({
@@ -96,6 +104,29 @@ def test_resolve_app_boot_port_substitutes():
 def test_alloc_free_port_is_usable():
     p = o._alloc_free_port()
     assert isinstance(p, int) and 1024 < p < 65536
+
+
+def test_frontend_fixed_port_passthrough():
+    out = _normalize_app_boot({"cmd": ["dotnet", "run"],
+                               "frontend": {"cmd": ["npm", "run", "dev"], "port": 5173}})
+    assert out["frontend"]["port"] == 5173
+    # invalid dropped
+    out2 = _normalize_app_boot({"cmd": ["dotnet", "run"],
+                                "frontend": {"cmd": ["npm", "run", "dev"], "port": "5173"}})
+    assert "port" not in out2["frontend"]
+
+
+def test_free_app_boot_ports_extracts_backend_and_frontend():
+    # safe high ports unlikely to host a real listener
+    ab = o._resolve_app_boot_port({"cmd": ["x"], "frontend": {"cmd": ["y"]}}, 59996, 59997)
+    freed = o._free_app_boot_ports(ab)
+    assert set(freed) == {59996, 59997}
+
+
+def test_free_app_boot_ports_handles_none_and_empty():
+    assert o._free_app_boot_ports(None) == []
+    assert o._free_app_boot_ports({}) == []
+    assert o._free_app_boot_ports({"cmd": ["x"]}) == []  # no _port resolved yet
 
 
 def test_resolve_app_boot_port_resolves_frontend(tmp_path):

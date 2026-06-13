@@ -1933,6 +1933,39 @@ def _materialize_app_boot(app_boot: dict, wt_path: Path) -> list[dict]:
     return results
 
 
+def _free_app_boot_ports(app_boot: dict | None) -> list[int]:
+    """Harness-owned: kill any process listening on the app_boot backend/frontend
+    ports BEFORE (re)booting in an acceptance round, and reap them after.
+
+    Root cause this guards (PROPOSAL_LIVE_ACCEPTANCE_LOOP, 2026-06-13): the boot
+    is agent-driven and backgrounded on a FIXED port (the frontend hardcodes the
+    backend URL). A prior round's/run's app process can linger on that port, so a
+    later round polls the STALE binary, tests pre-fix code, and the convergence
+    loop escalates on an already-fixed defect (the F1 audience false-negative).
+    Freeing the ports each round forces the agent's fresh boot to bind its own
+    freshly-built process. Best-effort; never raises. Returns the ports freed."""
+    if not isinstance(app_boot, dict):
+        return []
+    import subprocess
+    ports: list[int] = []
+    if isinstance(app_boot.get("_port"), int):
+        ports.append(app_boot["_port"])
+    fe = app_boot.get("frontend")
+    if isinstance(fe, dict) and isinstance(fe.get("_port"), int):
+        ports.append(fe["_port"])
+    for port in ports:
+        try:
+            subprocess.run(
+                ["bash", "-c",
+                 f"fuser -k {port}/tcp 2>/dev/null; "
+                 f"lsof -ti tcp:{port} 2>/dev/null | xargs -r kill -9 2>/dev/null; "
+                 f"true"],
+                capture_output=True, timeout=20)
+        except Exception:  # noqa: BLE001 — best-effort, never block the sprint
+            pass
+    return ports
+
+
 def _build_acceptance_task(
     skill: str,
     *,
@@ -2854,10 +2887,21 @@ async def _acceptance_flow(
         # frontend sub-block is configured (full-app boot for live UI acceptance).
         _has_fe = isinstance(_app_boot_cfg.get("frontend"), dict) and \
             _app_boot_cfg["frontend"].get("cmd")
-        _fe_port = _alloc_free_port() if _has_fe else None
-        if _fe_port == _port:  # vanishingly unlikely; keep them distinct
-            _fe_port = _alloc_free_port()
+        # Honor a FIXED frontend port when pinned (e.g. :5173 to satisfy the
+        # backend's CORS allowlist); else a free port.
+        _fe_fixed = (_app_boot_cfg.get("frontend") or {}).get("port") if _has_fe else None
+        if _has_fe:
+            _fe_port = _fe_fixed if isinstance(_fe_fixed, int) and _fe_fixed > 0 else _alloc_free_port()
+            if _fe_port == _port:  # keep them distinct
+                _fe_port = _alloc_free_port()
+        else:
+            _fe_port = None
         resolved_app_boot = _resolve_app_boot_port(_app_boot_cfg, _port, _fe_port)
+        # Free the boot ports up-front so the agent's boot binds a fresh,
+        # freshly-built process (not a stale listener from a prior round/run).
+        _freed = _free_app_boot_ports(resolved_app_boot)
+        if _freed:
+            yield _evt("acceptance.app_boot.ports_freed", run_id=run_id, ports=_freed)
         mat_results = _materialize_app_boot(resolved_app_boot, wt.path)
         yield _seal(_evt(
             "acceptance.app_boot.prepared",
@@ -2876,6 +2920,10 @@ async def _acceptance_flow(
     try:
         for attempt in range(1, ACCEPTANCE_MAX_RETRIES + 2):  # 1, 2, 3 = 1 + 2 retries
             last_attempt = attempt
+            # Free the boot ports before every attempt's spawn too — the prior
+            # attempt may have left a backgrounded app process bound to them.
+            if attempt > 1:
+                _free_app_boot_ports(resolved_app_boot)
             prior_missing = (
                 validation.get("missing", []) if attempt > 1 else None
             )
@@ -2950,6 +2998,15 @@ async def _acceptance_flow(
                 break
     finally:
         trace.close()
+        # Reap the app processes the agent backgrounded on the fixed boot ports,
+        # so they can't linger and serve STALE code to a later round/run
+        # (the F1 audience false-negative root cause). Best-effort.
+        try:
+            _reaped = _free_app_boot_ports(resolved_app_boot)
+            if _reaped:
+                yield _evt("acceptance.app_boot.ports_reaped", run_id=run_id, ports=_reaped)
+        except Exception:  # noqa: BLE001
+            pass
         # Archive whatever the agent produced (even on give_up, the report
         # is the most valuable evidence — keep it).
         archive_dest = _archive_acceptance_dir(acceptance_dir_wt, run_id)

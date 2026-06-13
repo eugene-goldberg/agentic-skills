@@ -143,6 +143,12 @@ def _normalize_frontend_boot(raw: object) -> dict | None:
     out: dict = {"cmd": [str(x) for x in cmd]}
     d = raw.get("dir")
     out["dir"] = str(d) if isinstance(d, str) and d else "."
+    # Optional FIXED frontend port: when set, the harness boots the UI on exactly
+    # this port (and frees it first) instead of a random one. Needed when the
+    # backend's CORS allowlist only permits a specific dev origin (e.g. :5173).
+    fp = raw.get("port")
+    if isinstance(fp, int) and 0 < fp < 65536:
+        out["port"] = fp
     env = raw.get("env")
     if isinstance(env, dict) and env:
         out["env"] = {str(k): str(v) for k, v in env.items()}
