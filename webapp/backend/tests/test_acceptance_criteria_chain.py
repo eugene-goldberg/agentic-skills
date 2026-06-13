@@ -118,20 +118,53 @@ def _seed_backlog(tmp_path: Path, slug: str = "feat") -> None:
     (d / "BACKLOG.md").write_text(_GOOD_BL.replace("BL-0003", "BL-0001"), encoding="utf-8")
 
 
+def _evbase(tmp_path: Path) -> Path:
+    """Acceptance output dir with one real evidence artifact, for R20 evidence-enforcement."""
+    base = tmp_path / "acceptance"
+    (base / "screenshots").mkdir(parents=True, exist_ok=True)
+    (base / "screenshots" / "ac1.png").write_bytes(b"\x89PNG real-evidence")
+    return base
+
+
 def test_unverified_criteria_flags_missing_and_failed(tmp_path: Path) -> None:
     _seed_backlog(tmp_path)
+    base = _evbase(tmp_path)
     report = {"ac_coverage": [
-        {"ac_id": "AC-BL-0001-1", "status": "verified", "journey_id": "ui_1"},
-        {"ac_id": "AC-BL-0001-2", "status": "failed", "journey_id": "ui_1"},
+        {"ac_id": "AC-BL-0001-1", "status": "verified", "evidence": "ac1.png"},  # real evidence
+        {"ac_id": "AC-BL-0001-2", "status": "failed", "evidence": "ac1.png"},
         # AC-BL-0001-3 entirely absent
     ]}
-    unverified = orch._unverified_criteria(tmp_path, "feat", report)
+    unverified = orch._unverified_criteria(tmp_path, "feat", report, evidence_base=base)
     assert set(unverified) == {"AC-BL-0001-2", "AC-BL-0001-3"}
 
 
-def test_unverified_criteria_empty_when_all_verified(tmp_path: Path) -> None:
+def test_unverified_criteria_empty_when_all_verified_with_evidence(tmp_path: Path) -> None:
     _seed_backlog(tmp_path)
+    base = _evbase(tmp_path)
     report = {"ac_coverage": [
-        {"ac_id": f"AC-BL-0001-{i}", "status": "verified"} for i in (1, 2, 3)
+        {"ac_id": f"AC-BL-0001-{i}", "status": "verified", "evidence": "ac1.png"} for i in (1, 2, 3)
     ]}
-    assert orch._unverified_criteria(tmp_path, "feat", report) == []
+    assert orch._unverified_criteria(tmp_path, "feat", report, evidence_base=base) == []
+
+
+def test_unverified_criteria_rejects_verified_without_evidence(tmp_path: Path) -> None:
+    """R20 evidence-enforcement: status=verified with NO real artifact ⇒ unverified."""
+    _seed_backlog(tmp_path)
+    base = _evbase(tmp_path)
+    report = {"ac_coverage": [
+        {"ac_id": "AC-BL-0001-1", "status": "verified", "evidence": "ac1.png"},      # real
+        {"ac_id": "AC-BL-0001-2", "status": "verified"},                              # NO evidence
+        {"ac_id": "AC-BL-0001-3", "status": "verified", "evidence": "missing.png"},   # dangling
+    ]}
+    unverified = orch._unverified_criteria(tmp_path, "feat", report, evidence_base=base)
+    assert set(unverified) == {"AC-BL-0001-2", "AC-BL-0001-3"}
+
+
+def test_evidence_exists_resolution(tmp_path: Path) -> None:
+    base = _evbase(tmp_path)
+    assert orch._evidence_exists(base, "ac1.png") is True               # under screenshots/
+    assert orch._evidence_exists(base, ["nope.png", "ac1.png"]) is True  # any hit
+    assert orch._evidence_exists(base, "nope.png") is False
+    assert orch._evidence_exists(base, "") is False
+    assert orch._evidence_exists(base, None) is False
+    assert orch._evidence_exists(None, "x.png") is True                 # degraded: no base

@@ -98,6 +98,50 @@ def test_alloc_free_port_is_usable():
     assert isinstance(p, int) and 1024 < p < 65536
 
 
+def test_resolve_app_boot_port_resolves_frontend(tmp_path):
+    ab = o._resolve_app_boot_port({
+        "cmd": ["dotnet", "run", "--urls", "http://localhost:5096"],
+        "ready_url": "http://localhost:5096/api/v1/Products",
+        "frontend": {
+            "dir": "frontend",
+            "pre_cmd": [["npm", "ci"]],
+            "cmd": ["npm", "run", "dev", "--", "--port", "${FE_PORT}"],
+            "ready_url": "http://localhost:${FE_PORT}/",
+        },
+    }, 5096, 4317)
+    assert ab["_port"] == 5096
+    fe = ab["frontend"]
+    assert fe["_port"] == 4317
+    assert fe["cmd"][-1] == "4317"
+    assert fe["ready_url"] == "http://localhost:4317/"
+    assert fe["pre_cmd"] == [["npm", "ci"]]
+
+
+def test_prompt_full_app_drives_frontend_and_playwright():
+    ab = o._resolve_app_boot_port({
+        "cmd": ["dotnet", "run", "--urls", "http://localhost:5096"],
+        "ready_url": "http://localhost:5096/api/v1/Products",
+        "frontend": {"dir": "frontend", "cmd": ["npm", "run", "dev", "--", "--port", "${FE_PORT}"],
+                     "ready_url": "http://localhost:${FE_PORT}/"},
+    }, 5096, 4317)
+    p = o._build_acceptance_task("SKILL", app_boot=ab, **_COMMON)
+    assert "BOOT THE REAL FRONTEND TOO" in p
+    assert "4317" in p                                  # FE port surfaced
+    assert "Playwright" in p
+    assert "VERIFY PERSISTENCE" in p
+    assert "EVIDENCE PER CRITERION" in p
+    assert "evidence` MUST cite a real" in p
+
+
+def test_prompt_backend_only_has_no_frontend_block():
+    ab = o._resolve_app_boot_port(
+        {"cmd": ["dotnet", "run", "--urls", "http://localhost:${PORT}"],
+         "ready_url": "http://localhost:${PORT}/h"}, 5099)
+    p = o._build_acceptance_task("SKILL", app_boot=ab, **_COMMON)
+    assert "BOOT THE APP NATIVELY" in p
+    assert "BOOT THE REAL FRONTEND TOO" not in p        # no frontend ⇒ no UI block
+
+
 # ---- materialize security (decision A) -------------------------------------
 
 def test_materialize_copies_example_template(tmp_path: Path):

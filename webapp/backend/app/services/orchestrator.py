@@ -1495,6 +1495,30 @@ async def run_onboarding(
 MAX_FIX_ATTEMPTS = 6
 
 ACCEPTANCE_MAX_RETRIES = 2  # R10.1 — matches per-role doctrine retry budget
+# PROPOSAL_LIVE_ACCEPTANCE_LOOP: max boot→exercise→fix→re-boot rounds before the
+# convergence loop escalates with a dossier. Generous backstop (no-abort doctrine),
+# not a routine give-up — the loop also exits early when a round makes no progress.
+ACCEPTANCE_LOOP_MAX_ROUNDS = 5
+
+
+def _acceptance_loop_next(round_done: dict | None, accept_round: int,
+                          max_rounds: int) -> str:
+    """Decide the live-acceptance convergence-loop action after one round.
+
+    Returns one of:
+    - "accept"   — integrity_ok: every criterion live-verified, zero open failures.
+    - "reround"  — not clean but ≥1 fix was dispatched this round AND rounds remain →
+                   re-boot + re-exercise to confirm the fix live.
+    - "escalate" — not clean and either nothing actionable was dispatched (a senior
+                   engineer would also be blocked) or rounds are exhausted. No-abort:
+                   surfaces a dossier, never a silent clean / routine give-up.
+    """
+    if round_done and round_done.get("integrity_ok"):
+        return "accept"
+    dispatched = int((round_done or {}).get("dispatched_count", 0) or 0)
+    if dispatched > 0 and accept_round < max_rounds:
+        return "reround"
+    return "escalate"
 
 
 async def _gate_stack_present(run_id: str) -> bool:
@@ -1825,18 +1849,42 @@ def _alloc_free_port() -> int:
         s.close()
 
 
-def _resolve_app_boot_port(app_boot: dict, port: int) -> dict:
-    """Return a copy of the app_boot contract with ``${PORT}`` substituted in
-    cmd / ready_url / pre_cmd, and the chosen port recorded under ``_port``."""
+def _resolve_app_boot_port(app_boot: dict, port: int, fe_port: int | None = None) -> dict:
+    """Return a copy of the app_boot contract with ``${PORT}`` (backend) and
+    ``${FE_PORT}`` (frontend) substituted in cmd / ready_url / pre_cmd / env, and
+    the chosen ports recorded under ``_port`` / ``frontend._port``.
+
+    app_boot v2 (PROPOSAL_LIVE_ACCEPTANCE_LOOP): when an ``app_boot.frontend``
+    sub-block is present, it is resolved too so acceptance can boot the real UI
+    alongside the backend and Playwright-drive it.
+    """
     def _sub(s: str) -> str:
-        return s.replace("${PORT}", str(port))
+        s = s.replace("${PORT}", str(port))
+        if fe_port is not None:
+            s = s.replace("${FE_PORT}", str(fe_port))
+        return s
     out = dict(app_boot)
     out["cmd"] = [_sub(x) for x in app_boot.get("cmd", [])]
     if app_boot.get("ready_url"):
         out["ready_url"] = _sub(app_boot["ready_url"])
     if app_boot.get("pre_cmd"):
         out["pre_cmd"] = [[_sub(tok) for tok in step] for step in app_boot["pre_cmd"]]
+    if isinstance(app_boot.get("env"), dict):
+        out["env"] = {k: _sub(v) for k, v in app_boot["env"].items()}
     out["_port"] = port
+    fe = app_boot.get("frontend")
+    if isinstance(fe, dict) and fe.get("cmd"):
+        fe_out = dict(fe)
+        fe_out["cmd"] = [_sub(x) for x in fe.get("cmd", [])]
+        if fe.get("ready_url"):
+            fe_out["ready_url"] = _sub(fe["ready_url"])
+        if fe.get("pre_cmd"):
+            fe_out["pre_cmd"] = [[_sub(tok) for tok in step] for step in fe["pre_cmd"]]
+        if isinstance(fe.get("env"), dict):
+            fe_out["env"] = {k: _sub(v) for k, v in fe["env"].items()}
+        if fe_port is not None:
+            fe_out["_port"] = fe_port
+        out["frontend"] = fe_out
     return out
 
 
@@ -2006,8 +2054,53 @@ def _build_acceptance_task(
             f"route and verify it is NOT 404. A stale baseline build can answer "
             f"200 on old routes while 404ing the new ones; if that happens you "
             f"booted the wrong build/port — fix it before proceeding. Drive all "
-            f"journeys over HTTP against `http://localhost:{port}`.\n"
+            f"API journeys over HTTP against `http://localhost:{port}`.\n"
         )
+        # app_boot v2 (PROPOSAL_LIVE_ACCEPTANCE_LOOP): full-app boot — also boot
+        # the real frontend and Playwright-drive EVERY UI acceptance criterion
+        # against it (the customer-acceptance standard). The harness reserved the
+        # FE port + materialized any frontend config; the agent drives the boot.
+        fe = app_boot.get("frontend") if isinstance(app_boot, dict) else None
+        if isinstance(fe, dict) and fe.get("cmd"):
+            fe_port = fe.get("_port")
+            fe_dir = fe.get("dir", ".")
+            fe_cmd = " ".join(fe.get("cmd", []))
+            fe_env = fe.get("env") or {}
+            fe_env_str = " ".join(f"{k}={v}" for k, v in fe_env.items())
+            fe_ready = fe.get("ready_url") or f"http://localhost:{fe_port}/"
+            fe_ready_to = fe.get("ready_timeout_s", 180)
+            fe_pre = ""
+            if fe.get("pre_cmd"):
+                steps = "\n".join("      " + " ".join(s) for s in fe["pre_cmd"])
+                fe_pre = (
+                    f"  First run the frontend setup step(s) from `{fe_dir}/`:\n{steps}\n"
+                )
+            boot_block += (
+                f"- BOOT THE REAL FRONTEND TOO (full-app acceptance — MANDATORY). The "
+                f"harness reserved **frontend port {fe_port}**. From `{fe_dir}/`:\n"
+                f"{fe_pre}"
+                f"  Start the UI (background it):\n"
+                f"    {fe_env_str + ' ' if fe_env_str else ''}{fe_cmd}\n"
+                f"  Poll `{fe_ready}` until it serves (up to {fe_ready_to}s). The UI "
+                f"talks to the backend you booted on port {port}.\n"
+                f"- EXERCISE EVERY UI ACCEPTANCE CRITERION through this running UI with "
+                f"**Playwright** at `http://localhost:{fe_port}` — navigate the real "
+                f"pages, click the real controls, fill the real forms, like the paying "
+                f"customer who just received the app. This is NOT optional and is NOT "
+                f"replaced by an API call or a build check.\n"
+                f"- VERIFY PERSISTENCE where a criterion changes state: after a save, "
+                f"**reload the page (or re-fetch) and assert the data persisted**; after "
+                f"an edit, confirm it stuck; after a delete, confirm it's gone; for a "
+                f"reject-path criterion, confirm the live UI actually rejects it. A "
+                f"toast/optimistic update alone is NOT acceptance — re-read the state.\n"
+                f"- EVIDENCE PER CRITERION: every `AC-<BL>-<n>` MUST map to one journey "
+                f"that ran against the live app and produced a screenshot (UI) or a "
+                f"recorded request/response (API) under your output dir, plus the "
+                f"persistence re-check. Record it in `report.json` `ac_coverage: "
+                f"[{{ac_id, status, journey, evidence}}]` — `evidence` MUST cite a real "
+                f"artifact path that exists. A criterion with no real evidence is "
+                f"treated as UNVERIFIED (the run cannot read clean).\n"
+            )
     else:
         boot_block = (
             f"- When you boot any docker compose stack for the seed/run, "
@@ -2461,12 +2554,52 @@ def _summarize_acceptance_journeys(report: dict) -> tuple[dict, list[dict]]:
     return summary, anomalies
 
 
-def _unverified_criteria(repo_dir: Path, feature_slug: str | None, report: dict) -> list[str]:
+def _evidence_exists(evidence_base: Path | None, evidence: object) -> bool:
+    """R20 evidence-enforcement (PROPOSAL_LIVE_ACCEPTANCE_LOOP): an ac_coverage
+    entry is only credited as verified if it cites a real artifact that EXISTS on
+    disk (a screenshot, a recorded request/response log, a playwright spec/result),
+    not just a self-reported status. ``evidence`` may be a string path or a list of
+    paths; each is resolved relative to the acceptance output dir (and tried under a
+    couple of conventional subdirs). Returns True if at least one cited path exists
+    as a file. If we cannot resolve a base dir, fall back to truthiness (degraded
+    but never crashes)."""
+    paths: list[str] = []
+    if isinstance(evidence, str) and evidence.strip():
+        paths = [evidence.strip()]
+    elif isinstance(evidence, list):
+        paths = [str(x).strip() for x in evidence if isinstance(x, (str,)) and str(x).strip()]
+    if not paths:
+        return False
+    if evidence_base is None:
+        return True  # degraded: no base to resolve against — accept non-empty citation
+    base = evidence_base
+    for p in paths:
+        cand = Path(p)
+        tries = [cand] if cand.is_absolute() else [
+            base / p, base / "screenshots" / p, base / "fixtures" / p,
+            base / "tests" / "_acceptance" / p,
+        ]
+        for t in tries:
+            try:
+                if t.is_file():
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def _unverified_criteria(
+    repo_dir: Path,
+    feature_slug: str | None,
+    report: dict,
+    evidence_base: Path | None = None,
+) -> list[str]:
     """R20 — every PO acceptance criterion (AC-<BL>-<n>) MUST be verified by a live
-    acceptance journey. Returns the AC ids the report does NOT mark verified (missing
-    OR failed in its ``ac_coverage`` array). Empty list ⇒ every criterion was
-    live-verified. Defensive: any parse problem yields [] (the journey/finding paths
-    still surface failures), so this never crashes the flow."""
+    acceptance journey **backed by real evidence on disk**. Returns the AC ids the
+    report does NOT credit as verified (missing, failed, or with no real evidence
+    artifact in its ``ac_coverage`` entry). Empty list ⇒ every criterion was
+    live-verified with evidence. Defensive: any parse problem yields [] (the
+    journey/finding paths still surface failures), so this never crashes the flow."""
     try:
         bf = backlog_svc.find_backlog(repo_dir, feature_slug=feature_slug)
         if bf is None:
@@ -2485,7 +2618,13 @@ def _unverified_criteria(repo_dir: Path, feature_slug: str | None, report: dict)
                 continue
             acid = str(e.get("ac_id") or e.get("id") or "")
             status = str(e.get("status") or "").lower()
-            if acid and status in ("verified", "pass", "passed", "ok", "covered"):
+            if not (acid and status in ("verified", "pass", "passed", "ok", "covered")):
+                continue
+            # R20 evidence-enforcement: status alone is not enough — require a real
+            # cited artifact that exists, so a criterion can't be self-reported
+            # verified without having actually been exercised against the live app.
+            if _evidence_exists(evidence_base, e.get("evidence") or e.get("evidence_path")
+                                or e.get("screenshot") or e.get("artifact")):
                 verified.add(acid)
     return [a for a in all_ids if a not in verified]
 
@@ -2645,14 +2784,25 @@ async def _acceptance_flow(
     _app_boot_cfg = getattr(cfg, "app_boot", None)  # getattr: tolerate test-double cfgs (A67 pattern)
     if _app_boot_cfg:
         _port = _alloc_free_port()
-        resolved_app_boot = _resolve_app_boot_port(_app_boot_cfg, _port)
+        # app_boot v2: reserve a SECOND free port for the real frontend when a
+        # frontend sub-block is configured (full-app boot for live UI acceptance).
+        _has_fe = isinstance(_app_boot_cfg.get("frontend"), dict) and \
+            _app_boot_cfg["frontend"].get("cmd")
+        _fe_port = _alloc_free_port() if _has_fe else None
+        if _fe_port == _port:  # vanishingly unlikely; keep them distinct
+            _fe_port = _alloc_free_port()
+        resolved_app_boot = _resolve_app_boot_port(_app_boot_cfg, _port, _fe_port)
         mat_results = _materialize_app_boot(resolved_app_boot, wt.path)
         yield _seal(_evt(
             "acceptance.app_boot.prepared",
             run_id=run_id,
             port=_port,
+            frontend_port=_fe_port,
+            full_app=bool(_has_fe),
             cmd=resolved_app_boot.get("cmd"),
             ready_url=resolved_app_boot.get("ready_url"),
+            frontend_cmd=(resolved_app_boot.get("frontend") or {}).get("cmd") if _has_fe else None,
+            frontend_ready_url=(resolved_app_boot.get("frontend") or {}).get("ready_url") if _has_fe else None,
             materialized=[m for m in mat_results if m["ok"]],
             rejected=[m for m in mat_results if not m["ok"]],
         ))
@@ -2777,7 +2927,9 @@ async def _acceptance_flow(
                 # R20 — per-criterion live verification: any PO acceptance criterion
                 # not verified by a live journey is an anomaly (→ non-clean), so a
                 # criterion can never be silently skipped at the integration check.
-                unverified_acs = _unverified_criteria(repo_dir, feature_slug, report_dict)
+                unverified_acs = _unverified_criteria(
+                    repo_dir, feature_slug, report_dict,
+                    evidence_base=report_src.parent)
                 for _acid in unverified_acs:
                     acceptance_anomalies.append({
                         "kind": "criterion_unverified",
@@ -2904,6 +3056,12 @@ async def _acceptance_flow(
         except Exception:  # noqa: BLE001
             open_failures = []
     open_failure_ids = [getattr(f, "finding_id", "?") for f in open_failures]
+    # Convergence-loop progress signal (PROPOSAL_LIVE_ACCEPTANCE_LOOP): how many
+    # eligible failure-findings moved out of the eligible set this round (i.e. got
+    # a follow-up engineer dispatched). >0 ⇒ the loop made progress and a re-boot+
+    # re-exercise round is warranted to confirm the fix live; 0 with integrity not
+    # ok ⇒ nothing actionable ⇒ the outer loop escalates rather than spin.
+    dispatched_count = max(0, len(eligible_now) - len(open_failures))
 
     # Operator directive 2026-06-11: ALWAYS surface an anomalous acceptance EXPLICITLY,
     # loudly, as its own event — so a failed/unshippable journey (or a missing report)
@@ -2945,6 +3103,7 @@ async def _acceptance_flow(
         integrity_ok=integrity_ok,                    # binding 0%-escape terminal verdict
         unverified_criteria=unverified_acs[:50],      # criteria not live-verified
         open_failures=open_failure_ids[:50],          # detected failures not yet dispatched
+        dispatched_count=dispatched_count,            # fixes dispatched this round (loop progress)
         anomaly_count=len(acceptance_anomalies),
         anomalies=acceptance_anomalies[:30],
         journeys=journey_summary,
@@ -3866,55 +4025,100 @@ async def run_brief(
         # are surfaced as acceptance.error and never abort the sprint.
         # Default off until §E.1 Q6 calibration (3 smoke runs) flips it on.
         if run_acceptance:
-            # A13-followup (A64): one TraceWriter shared by the regression
-            # checkpoint AND the acceptance flow, so both seal their enforcement
-            # phase events into a single co-located phase_events.jsonl that the
-            # ABL-0017 efficacy aggregator joins against. Before A64 the
-            # integration checkpoint — the one gate that protects PRE-EXISTING
-            # behavior — was invisible to the self-hardening loop (its own crew
-            # surfaced this gap from sealed evidence).
-            acceptance_trace = TraceWriter(
-                repo=repo_name, role="acceptance", task_id=run_id)
-            # Simple gating model (2026-06-06) — the ONE full-suite regression
-            # checkpoint: run the entire pre-existing suite of the assembled
-            # feature against the sprint-start baseline to catch collateral
-            # regressions to PRE-EXISTING functionality (per-BL gates only ran
-            # each BL's own tests). run_gate's A49 arbitration still applies, so
-            # a transient flake won't false-red it. Advisory here (acceptance is
-            # post sprint_complete): a red is surfaced loudly for operator action.
-            if run_base_sha:
+            # ── Live-acceptance convergence loop (PROPOSAL_LIVE_ACCEPTANCE_LOOP) ──
+            # The customer-acceptance standard: boot the WHOLE app, exercise every
+            # AC live; if acceptance finds defects it dispatches follow-up
+            # engineer(s) (R17), and we RE-BOOT + RE-EXERCISE until acceptance
+            # accepts every criterion live (integrity_ok) — or, after exhausting
+            # rounds / when no actionable fix can be dispatched, escalate honestly
+            # (no-abort: never a silent clean, never a routine give-up).
+            accepted = False
+            last_round_done: dict | None = None
+            for accept_round in range(1, ACCEPTANCE_LOOP_MAX_ROUNDS + 1):
+                if accept_round > 1:
+                    yield _evt("acceptance.loop.reround", run_id=run_id,
+                               round=accept_round,
+                               max_rounds=ACCEPTANCE_LOOP_MAX_ROUNDS,
+                               reason="prior round dispatched fix(es) — re-booting the "
+                                      "live app to re-exercise every criterion")
+                # Fresh trace per round (round-tagged task_id). A64: one TraceWriter
+                # shared by the regression checkpoint AND the acceptance flow so both
+                # seal into one co-located phase_events.jsonl.
+                acceptance_trace = TraceWriter(
+                    repo=repo_name, role="acceptance",
+                    task_id=(run_id if accept_round == 1 else f"{run_id}-r{accept_round}"))
+                # The ONE full-suite regression checkpoint (re-run each round so a
+                # fix's collateral regressions are caught before re-accept).
+                if run_base_sha:
+                    try:
+                        _accfg = repo_config_svc.load(repo_dir)
+                        rc = await regression_gate_svc.run_gate(
+                            repo_dir, agent_branch=_accfg.agent_branch,
+                            target_ref=run_base_sha, run_id=run_id)
+                        rc_evt = _evt("regression_checkpoint",
+                                      round=accept_round,
+                                      ok=rc.get("ok"), kind=rc.get("kind"),
+                                      reason=rc.get("reason"),
+                                      regressions=(rc.get("regressions") or [])[:50],
+                                      failing_tests=(rc.get("failing_tests") or [])[:50])
+                        try:
+                            acceptance_trace.write_phase_event(rc_evt)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        yield rc_evt
+                    except Exception as exc:  # noqa: BLE001
+                        yield _evt("regression_checkpoint.error", error=str(exc))
+                round_done: dict | None = None
                 try:
-                    _accfg = repo_config_svc.load(repo_dir)
-                    rc = await regression_gate_svc.run_gate(
-                        repo_dir, agent_branch=_accfg.agent_branch,
-                        target_ref=run_base_sha, run_id=run_id)
-                    rc_evt = _evt("regression_checkpoint",
-                                  ok=rc.get("ok"), kind=rc.get("kind"),
-                                  reason=rc.get("reason"),
-                                  regressions=(rc.get("regressions") or [])[:50],
-                                  failing_tests=(rc.get("failing_tests") or [])[:50])
-                    try:  # A64: seal — defensive, observability never blocks
-                        acceptance_trace.write_phase_event(rc_evt)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    yield rc_evt
-                except Exception as exc:  # noqa: BLE001
-                    yield _evt("regression_checkpoint.error", error=str(exc))
-            try:
-                async for evt in _acceptance_flow(
-                    repo_dir,
-                    repo_name,
-                    run_id,
-                    feature_slug,
-                    timeout=acceptance_timeout,
-                    inject_acceptance_priors=inject_acceptance_priors,
-                    retrieval_kwargs_builder=retrieval_kwargs_builder,
-                    run_acceptance_followup=run_acceptance_followup,
-                    trace=acceptance_trace,  # A64: share the checkpoint's trace
-                ):
-                    yield evt
-            except Exception as exc:
-                yield _evt("acceptance.error", error=str(exc))
+                    async for evt in _acceptance_flow(
+                        repo_dir,
+                        repo_name,
+                        run_id,
+                        feature_slug,
+                        timeout=acceptance_timeout,
+                        inject_acceptance_priors=inject_acceptance_priors,
+                        retrieval_kwargs_builder=retrieval_kwargs_builder,
+                        run_acceptance_followup=run_acceptance_followup,
+                        trace=acceptance_trace,
+                    ):
+                        if isinstance(evt, dict) and evt.get("phase") == "orchestrator.acceptance.done":
+                            round_done = evt
+                        yield evt
+                except Exception as exc:
+                    yield _evt("acceptance.error", round=accept_round, error=str(exc))
+                    break
+                last_round_done = round_done or last_round_done
+                decision = _acceptance_loop_next(
+                    round_done, accept_round, ACCEPTANCE_LOOP_MAX_ROUNDS)
+                dispatched = int((round_done or {}).get("dispatched_count", 0) or 0)
+                if decision == "accept":
+                    accepted = True
+                    yield _evt("acceptance.loop.accepted", run_id=run_id,
+                               round=accept_round,
+                               reason="every acceptance criterion live-verified against the "
+                                      "booted app with evidence; zero open failures")
+                    break
+                if decision == "reround":
+                    yield _evt("acceptance.loop.progress", run_id=run_id,
+                               round=accept_round, dispatched=dispatched,
+                               reason="fix(es) dispatched+merged — will re-boot and re-verify")
+                    continue
+                # decision == "escalate": rounds exhausted OR nothing actionable.
+                exhausted = accept_round >= ACCEPTANCE_LOOP_MAX_ROUNDS
+                yield _evt("acceptance.loop.escalated", run_id=run_id,
+                           round=accept_round, integrity_ok=False,
+                           rounds_used=accept_round,
+                           max_rounds=ACCEPTANCE_LOOP_MAX_ROUNDS,
+                           unverified_criteria=(round_done or {}).get("unverified_criteria", []),
+                           open_failures=(round_done or {}).get("open_failures", []),
+                           dispatched_last_round=dispatched,
+                           reason=("exhausted acceptance rounds without a live-clean accept — "
+                                   "escalating with dossier (no-abort: not a silent clean)"
+                                   if exhausted else
+                                   "remaining failures/unverified criteria have no actionable "
+                                   "auto-fix (nothing eligible to dispatch) — a senior engineer "
+                                   "would also be blocked; escalating with dossier"))
+                break
 
         # B-3 / I-7: spawn the doctrine-meta-agent against this sprint's
         # archived traces. Runs ONLY after sprint_complete (a partial sprint
