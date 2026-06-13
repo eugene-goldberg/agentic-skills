@@ -703,6 +703,34 @@ agent the harness should invoke:
 You do NOT fix anything (see Constraints). You produce the verified diagnosis
 that lets the harness route the correct fixer **with confidence**.
 
+### `infra_bug` vs `product_bug` — the boundary (BINDING)
+
+`infra_bug` is **ONLY** for a genuine environment/operator failure that is NOT
+the application's own code: the DB container is down, a port is already in use,
+a dependency isn't installed, a migration tool is missing, the network is
+unreachable. These route to the operator because no code change fixes them.
+
+**A failure produced by the application's OWN booted code is a `product_bug`,
+never `infra_bug`** — even when the HTTP status looks "infra-ish". Specifically:
+
+- A **401 / 403** on a shipped write path because the app's **frontend never
+  attached the auth token** (e.g. the new reviewService omits the `Authorization`
+  header that cartService/userService send) is a **`product_bug`** in that
+  frontend service file. The backend correctly demands auth; the app's own client
+  code is the defect. *(This is the canonical reviews-submit 401.)*
+- A **500** from the app's own endpoint (null-deref, bad query, unhandled case)
+  is a **`product_bug`** in that endpoint.
+- A **400/409** the app returns when it shouldn't (or fails to return when it
+  should) is a **`product_bug`** in the validation/handler.
+
+Litmus test: *"Would editing application source under `frontend/src` or
+`backend/` make this pass?"* If yes → `product_bug` (it auto-dispatches a fixer
+and the live-acceptance loop drives it to a verified fix). If the only fix is an
+operator/environment action with no app code change → `infra_bug`. When a write
+journey you drove through the real UI returns 401 and the request shows
+`has_authorization_header: false`, that is a `product_bug` (frontend omitted the
+token), full stop — do not file it `infra_bug`.
+
 ---
 
 ## Failure Mode Reporting
