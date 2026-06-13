@@ -265,8 +265,20 @@ class SemanticRegistry:
         """
         repo = self._paths[name]
         if name not in self._indexed:
-            idx = self.index(name)
-            if not idx.get("ok"):
-                return idx
+            # Short-circuit: if the Milvus collection for this repo already has
+            # rows (built by index_initial or a prior run), skip the blocking
+            # op=index. A full re-index of a large repo on CPU-only embeddings
+            # can exceed the 900s op=index timeout, which would make *every*
+            # search fail (the search wrapper returns the index error without
+            # ever querying). Query what is already indexed instead. The
+            # `has_index` bridge op exists for exactly this; previously it was
+            # never wired into the Python search path.
+            hi = _run_bridge(self.node_dir, {"op": "has_index", "repo": str(repo)})
+            if hi.get("ok") and hi.get("result", {}).get("has_rows"):
+                self._indexed.add(name)
+            else:
+                idx = self.index(name)
+                if not idx.get("ok"):
+                    return idx
         r = _run_bridge(self.node_dir, {"op": "search", "repo": str(repo), "query": query, "k": k})
         return r
