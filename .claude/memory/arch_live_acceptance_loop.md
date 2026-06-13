@@ -61,6 +61,19 @@ Spec: `PROPOSAL_LIVE_ACCEPTANCE_LOOP.md`. Shipped on `development`≡`main`
   `acceptance.app_boot.prepared full_app=true` + per-AC screenshots + a
   `acceptance.loop.accepted` (or honest escalate) are in the trace.
 
+**Update 2026-06-13 (boot-hardening, commit `5874d11`):** the prior run's loop escalated NOT
+because the fix failed but because round 2 tested STALE code — the agent backgrounds the boot
+on the FIXED port (frontend hardcodes :5096) and a prior round's process lingered, so round 2
+polled the old pre-fix binary (proven: a fresh boot of current integration authenticates a real
+JWT — no 401). Fix: `_free_app_boot_ports` makes the HARNESS kill any listener on the
+backend+frontend ports before each round/attempt boot + reap in finally; frontend pinned to the
+CORS-allowlisted **:5173** (`frontend.port` in `.agentic-skills.json`, closes the F3 CORS gap).
+Also: classification sharpened (`4f9f0a9`) — a 401/403/500 from the app's OWN endpoint is a
+product_bug, never infra_bug. **Convergence (acceptance.loop.accepted) NOT yet proven** —
+verification re-run `run-20260613T192653Z-1babd8` IN FLIGHT (the standing objective; see
+CONTINUATION_PROMPT.md for the 5-condition /goal). Residual: 500-on-missing-userId (endpoint
+should derive reviewer from JWT) + baseline-auth scope decision (operator).
+
 Boot facts: dotnet-ef is a GLOBAL tool at ~/.dotnet/tools (PATH export needed);
 backend host = Ecommerce.Infrastructure project; Postgres ecommerce-pg :5433
 persistent (shared across runs). `pkill -f bridge.js` (not "spike-node/bridge.js").
