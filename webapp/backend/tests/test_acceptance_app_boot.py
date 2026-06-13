@@ -35,6 +35,50 @@ def test_normalize_clean_shape():
     assert out["pre_cmd"] == [["dotnet", "ef", "database", "update"]]          # non-list dropped
 
 
+# ---- app_boot v2: frontend sub-block (PROPOSAL_LIVE_ACCEPTANCE_LOOP) --------
+
+def test_frontend_absent_by_default():
+    out = _normalize_app_boot({"cmd": ["dotnet", "run"]})
+    assert "frontend" not in out
+
+
+def test_frontend_requires_cmd():
+    out = _normalize_app_boot({"cmd": ["dotnet", "run"], "frontend": {"dir": "frontend"}})
+    assert "frontend" not in out  # no cmd ⇒ dropped
+
+
+def test_frontend_clean_shape():
+    out = _normalize_app_boot({
+        "cmd": ["dotnet", "run", "--urls", "http://localhost:5096"],
+        "frontend": {
+            "dir": "frontend",
+            "pre_cmd": [["npm", "ci"], "bad"],
+            "cmd": ["npm", "run", "dev", "--", "--port", "${FE_PORT}"],
+            "ready_url": "http://localhost:${FE_PORT}/",
+            "ready_timeout_s": 180,
+            "base_url_env": "VITE_API_URL",
+        },
+    })
+    fe = out["frontend"]
+    assert fe["dir"] == "frontend"
+    assert fe["cmd"][-1] == "${FE_PORT}"
+    assert fe["pre_cmd"] == [["npm", "ci"]]  # non-list dropped
+    assert fe["ready_url"] == "http://localhost:${FE_PORT}/"
+    assert fe["ready_timeout_s"] == 180
+    assert fe["base_url_env"] == "VITE_API_URL"
+
+
+def test_frontend_dir_defaults_and_hardcoded_url():
+    # base_url_env omitted ⇒ hardcoded-URL target (no key stored)
+    out = _normalize_app_boot({
+        "cmd": ["dotnet", "run"],
+        "frontend": {"cmd": ["npm", "run", "dev"]},
+    })
+    fe = out["frontend"]
+    assert fe["dir"] == "."            # default
+    assert "base_url_env" not in fe    # hardcoded-URL semantics
+
+
 # ---- port substitution -----------------------------------------------------
 
 def test_resolve_app_boot_port_substitutes():

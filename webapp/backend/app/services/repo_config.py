@@ -112,6 +112,52 @@ def _normalize_app_boot(raw: object) -> dict | None:
         ]
         if clean_pre:
             out["pre_cmd"] = clean_pre
+    # app_boot v2 (PROPOSAL_LIVE_ACCEPTANCE_LOOP): optional `frontend` sub-block.
+    # Present ⇒ acceptance boots the real UI alongside the backend and Playwright
+    # drives it. Same shape as the backend block (cmd/pre_cmd/ready_url/...) plus
+    # `dir` (frontend subdir, default ".") and `base_url_env` (env var the
+    # frontend reads to find the backend; null ⇒ frontend hardcodes the URL and
+    # the backend MUST boot on the matching port).
+    fe = _normalize_frontend_boot(raw.get("frontend"))
+    if fe is not None:
+        out["frontend"] = fe
+    return out
+
+
+def _normalize_frontend_boot(raw: object) -> dict | None:
+    """Validate/normalize the optional `app_boot.frontend` sub-block. Returns a
+    clean dict or None. `cmd` is the one required field (without it there is no
+    frontend to boot)."""
+    if not isinstance(raw, dict):
+        return None
+    cmd = raw.get("cmd")
+    if not (isinstance(cmd, list) and cmd and all(isinstance(x, str) for x in cmd)):
+        return None
+    out: dict = {"cmd": [str(x) for x in cmd]}
+    d = raw.get("dir")
+    out["dir"] = str(d) if isinstance(d, str) and d else "."
+    env = raw.get("env")
+    if isinstance(env, dict) and env:
+        out["env"] = {str(k): str(v) for k, v in env.items()}
+    ready_url = raw.get("ready_url")
+    if isinstance(ready_url, str) and ready_url:
+        out["ready_url"] = ready_url
+    rt = raw.get("ready_timeout_s")
+    if isinstance(rt, (int, float)) and rt > 0:
+        out["ready_timeout_s"] = int(rt)
+    pre = raw.get("pre_cmd")
+    if isinstance(pre, list) and pre:
+        clean_pre = [
+            [str(tok) for tok in step]
+            for step in pre
+            if isinstance(step, list) and step and all(isinstance(tok, str) for tok in step)
+        ]
+        if clean_pre:
+            out["pre_cmd"] = clean_pre
+    beu = raw.get("base_url_env")
+    # explicit null is meaningful (hardcoded-URL targets); only store a real str
+    if isinstance(beu, str) and beu:
+        out["base_url_env"] = beu
     return out
 
 
