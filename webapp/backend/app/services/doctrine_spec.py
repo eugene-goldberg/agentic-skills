@@ -151,14 +151,16 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
         docs=("CLAUDE.md", "PROPOSAL_OPS_STEWARD_ROLE.md"),
     ),
     DoctrineRule(
-        "R17", "acceptance runs real (non-mock) E2E over every auth-gated write "
-               "path; a failed/unshippable journey blocks 'clean' and yields a "
-               "classified product_bug finding that auto-dispatches the no-abort "
-               "fix loop",
+        "R17", "acceptance boots the WHOLE app (backend + real frontend when the "
+               "app_boot contract carries a frontend tier) and runs real (non-mock) "
+               "E2E over every auth-gated write path through the booted UI/API; a "
+               "failed/unshippable journey blocks 'clean' and yields a classified "
+               "product_bug finding that auto-dispatches the no-abort fix loop",
         "orchestrator", True,
         "app.services.orchestrator:_acceptance_flow",
         has_test=True, targeted_failure_class="silent-failure",
-        docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_ACCEPTANCE_REAL_TEST_MANDATE.md"),
+        docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_ACCEPTANCE_REAL_TEST_MANDATE.md",
+              "PROPOSAL_LIVE_ACCEPTANCE_LOOP.md"),
     ),
     DoctrineRule(
         "R18", "every BL carries comprehensive, specific, testable acceptance "
@@ -178,13 +180,17 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
         docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_ACCEPTANCE_REAL_TEST_MANDATE.md"),
     ),
     DoctrineRule(
-        "R20", "acceptance live-verifies every acceptance criterion (per-criterion "
-               "ac_coverage); an unverified criterion or un-addressed failure blocks "
-               "the integrity verdict",
+        "R20", "acceptance live-verifies every acceptance criterion against the "
+               "booted app, each backed by a real on-disk evidence artifact "
+               "(screenshot/recorded response) cited in ac_coverage — a self-reported "
+               "'verified' without evidence does NOT count; any unverified criterion "
+               "or un-addressed failure blocks the integrity verdict and drives the "
+               "boot->exercise->fix->re-boot convergence loop until accepted or escalated",
         "orchestrator", True,
         "app.services.orchestrator:_unverified_criteria",
         has_test=True, targeted_failure_class="silent-failure",
-        docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_ACCEPTANCE_REAL_TEST_MANDATE.md"),
+        docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_ACCEPTANCE_REAL_TEST_MANDATE.md",
+              "PROPOSAL_LIVE_ACCEPTANCE_LOOP.md"),
     ),
     DoctrineRule(
         "Tier1.5", "pre-modification kill: <min grounded calls before Write/Edit",

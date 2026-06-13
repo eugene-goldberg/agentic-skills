@@ -88,6 +88,13 @@ def _normalize_app_boot(raw: object) -> dict | None:
     env = raw.get("env")
     if isinstance(env, dict) and env:
         out["env"] = {str(k): str(v) for k, v in env.items()}
+    # Optional FIXED backend port (app_boot v2): when set, the harness boots the
+    # backend on exactly this port instead of allocating a random free one. Needed
+    # when the frontend hardcodes the API URL (e.g. http://localhost:5096) and the
+    # brief forbids editing the frontend source — the backend MUST match it.
+    port = raw.get("port")
+    if isinstance(port, int) and 0 < port < 65536:
+        out["port"] = port
     ready_url = raw.get("ready_url")
     if isinstance(ready_url, str) and ready_url:
         out["ready_url"] = ready_url

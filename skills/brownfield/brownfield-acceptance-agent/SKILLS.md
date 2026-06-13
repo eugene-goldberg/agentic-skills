@@ -108,6 +108,16 @@ You will receive a `run_id` and access to:
      confirm the app serves a route of THIS sprint's feature (not 404) so you
      never test a stale baseline build. Always prefer the run-context boot
      contract when present; it overrides the compose assumption.
+   - **Full-app targets (backend + frontend).** When the Run context carries a
+     **frontend boot** block too (a reserved FE port, an `npm`-style boot command,
+     and a frontend `ready_url`), you MUST boot the **real UI as well** and drive
+     every UI journey through it with Playwright — exactly as the paying customer
+     who just received the app would: open the real pages, click the real controls,
+     fill the real forms. The UI talks to the backend you booted. Booting only the
+     backend and "verifying the UI" via API calls or a build check is NOT
+     acceptable and will leave UI criteria UNVERIFIED (the run cannot read clean).
+     Boot order: backend first (poll its `ready_url`), then the frontend (poll its
+     `ready_url`), then run journeys against `http://localhost:<FE_PORT>`.
 6. **The brownfield rubric** —
    `<agentic-skills>/rubrics/production_grade_scorecard_brownfield.md`. Used
    as a secondary lens: every journey should exercise at least one of the
@@ -247,12 +257,25 @@ Before you emit `done`:
    item is a criterion with stable id `AC-<BL>-<n>`. You MUST exercise **every single
    criterion** through a live journey (a criterion may be covered by a step of a larger
    journey). Then emit an `ac_coverage` array in `report.json`:
+   **Every entry MUST cite real `evidence` — a file path that EXISTS under your
+   acceptance output dir** (a full-page screenshot for a UI criterion, or a recorded
+   request/response log for an API criterion):
    ```json
    "ac_coverage": [
-     {"ac_id": "AC-BL-0003-1", "status": "verified", "journey_id": "ui_02"},
-     {"ac_id": "AC-BL-0003-2", "status": "failed",   "journey_id": "ui_02"}
+     {"ac_id": "AC-BL-0003-1", "status": "verified", "journey_id": "ui_02",
+      "evidence": "screenshots/journey_02_submit_review/step_04_persisted.png"},
+     {"ac_id": "AC-BL-0003-2", "status": "verified", "journey_id": "api_03",
+      "evidence": "fixtures/api_logs/api_03.jsonl"},
+     {"ac_id": "AC-BL-0003-3", "status": "failed",   "journey_id": "ui_02",
+      "evidence": "screenshots/journey_02_submit_review/step_06_error.png"}
    ]
    ```
+   **R20 evidence-enforcement (BINDING):** a `verified` entry whose `evidence` is
+   missing, empty, or points at a file that does not exist is treated as UNVERIFIED —
+   self-reporting "verified" without a real artifact does NOT count. For any criterion
+   that changes state (save/edit/delete), the cited evidence MUST show the
+   **persistence re-check** (e.g. the screenshot taken AFTER a reload showing the saved
+   data still present).
    `status` is `verified` (the live journey observed the exact behavior the criterion
    specifies) or `failed` (it did not — which also becomes a classified finding per #3).
    The harness cross-checks this against the full AC set: **any criterion you leave out
