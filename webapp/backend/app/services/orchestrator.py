@@ -1521,6 +1521,18 @@ def _acceptance_loop_next(round_done: dict | None, accept_round: int,
     return "escalate"
 
 
+def _accept_worktree_task_id(run_id: str, accept_round: int) -> str:
+    """Round-unique detached-worktree task id for the live-acceptance loop.
+
+    Round 1 keeps the historical ``accept-<run_id>`` name; rounds >=2 append
+    ``-r<round>`` so a rerounds ``git worktree add -b`` does not collide with the
+    prior rounds still-existing ``agent/accept-<run_id>`` branch (the worktree_failed
+    acceptance-reround escalation in run-20260614T143621Z-0b7c91).
+    """
+    base = f"accept-{run_id}"
+    return base if accept_round <= 1 else f"{base}-r{accept_round}"
+
+
 async def _gate_stack_present(run_id: str) -> bool:
     """§E.1 Q7 pre-flight: is a regression-gate docker stack still up for
     this run? Returns True if any container named ``gate-<run_id>*`` exists.
@@ -2735,6 +2747,10 @@ async def _acceptance_flow(
     inject_acceptance_priors: bool = False,
     retrieval_kwargs_builder=None,  # ABL-0015 Batch B: needed to spawn followup engineer
     run_acceptance_followup: bool = False,  # ABL-0015: auto-dispatch; OFF until calibrated
+    accept_round: int = 1,  # live-acceptance convergence round (>=2 on reround); makes the
+                            # detached worktree branch round-unique so a reround does not
+                            # collide with the prior round's still-existing branch (acceptance
+                            # reround worktree_failed bug, run-20260614T143621Z-0b7c91).
     trace=None,  # A13-followup (A64): caller-supplied TraceWriter so the acceptance
                  # flow seals its enforcement phase events (regression_checkpoint +
                  # lifecycle) into the SAME co-located phase_events.jsonl the
@@ -2804,7 +2820,7 @@ async def _acceptance_flow(
     try:
         wt = await create_worktree(
             repo_dir,
-            task_id=f"accept-{run_id}",
+            task_id=_accept_worktree_task_id(run_id, accept_round),
             base_ref=agent_branch,
         )
     except RuntimeError as exc:
@@ -4292,6 +4308,7 @@ async def run_brief(
                         inject_acceptance_priors=inject_acceptance_priors,
                         retrieval_kwargs_builder=retrieval_kwargs_builder,
                         run_acceptance_followup=run_acceptance_followup,
+                        accept_round=accept_round,
                         trace=acceptance_trace,
                     ):
                         if isinstance(evt, dict) and evt.get("phase") == "orchestrator.acceptance.done":
