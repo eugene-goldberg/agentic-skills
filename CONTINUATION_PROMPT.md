@@ -1,12 +1,32 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-13. Supersedes all prior hand-offs. **Headline: this session
-> built the LIVE-ACCEPTANCE LOOP — acceptance now boots the WHOLE app (backend+frontend),
-> Playwright-exercises every acceptance criterion with real on-disk evidence + persistence
-> re-checks, and loops fix→re-boot→re-test until live-clean or honest escalation. It is
-> mechanically proven (caught the canonical review-submit 401, auto-dispatched a fixer that
-> edited the code, re-booted, re-exercised). A verification re-run is IN FLIGHT to prove it
-> CONVERGES to `acceptance.loop.accepted`.**
+> Hand-off written 2026-06-13 (updated PM). Supersedes all prior hand-offs. **Headline: the
+> LIVE-ACCEPTANCE LOOP is CONVERGED + PROVEN `[x]`.** Run `run-20260613T202407Z-013ac4`
+> reached `orchestrator.acceptance.loop.accepted` (round 1, "every acceptance criterion
+> live-verified against the booted app with evidence; zero open failures") with
+> `integrity_ok=true, unverified_criteria=[], open_failures=[], anomaly_count=0`; full-app
+> boot fired (`full_app=true, port=5096, frontend_port=5173`, `ports_freed=[5096,5173]` —
+> the `5874d11` boot-port fix worked); an authenticated review submit returned
+> `actual_status: 201` (NOT 401); evidence (report.json + 20 Playwright .png + api_logs)
+> committed in-target on `integration` @ `9eb9392`. The 5-condition `/goal` is fully met —
+> condition 5 (baseline-auth) closed by an explicit operator approval of the JWT
+> `ValidAudience` fix as in-scope (see [[feedback_baseline_auth_inscope]]).
+>
+> **PROCESS LESSON (cost a kill→relaunch cycle):** the remote (192.168.12.180) CANNOT reach
+> origin; this session's harness work lives there as UNCOMMITTED working-tree edits. HEAD
+> stays stale at `6e2c096` and the run-manifest `harness_sha` records that stale HEAD, NOT
+> the working tree. uvicorn does not hot-reload, so a harness started BEFORE the edits runs
+> pre-fix code in memory even though the fix is on disk. ALWAYS restart the harness after
+> deploying working-tree edits; verify a fix by grepping the actual source, not the manifest
+> sha. (The prior `…1babd8` run was wedged at `reindex_after_engineer.BL-0004` on a
+> stale-in-memory harness — killed it, restarted harness, `DELETE FROM reviews`, relaunched
+> → converged.)
+>
+> **DEPLOYMENT DEBT (next-session priority):** the remote's live-acceptance work is uncommitted
+> and unpushable (no origin access from 180). Local Mac is at `187f06c` (handoff) ≡ `origin`.
+> Reconcile: either commit the remote working-tree edits and get them to origin via the Mac,
+> or confirm the Mac commits (`5874d11` etc.) already equal the remote tree and just redeploy
+> cleanly. Until then the remote is a stale-HEAD + dirty-tree deployment.
 
 ---PROMPT START---
 

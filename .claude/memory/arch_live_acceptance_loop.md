@@ -1,8 +1,10 @@
 ---
 name: arch_live_acceptance_loop
-description: Live-acceptance loop — acceptance boots the WHOLE app (backend+frontend), Playwright-verifies every AC with real evidence, and loops fix→re-test until accepted live or escalates. Built 2026-06-13.
-metadata:
+description: "Live-acceptance loop — acceptance boots the WHOLE app (backend+frontend), Playwright-verifies every AC with real evidence, and loops fix→re-test until accepted live or escalates. Built 2026-06-13."
+metadata: 
+  node_type: memory
   type: project
+  originSessionId: 154fb558-ad8d-47e9-b9fa-cbac688b2031
 ---
 
 **Operator directive 2026-06-13 (BINDING) — the customer-acceptance standard.**
@@ -69,10 +71,36 @@ JWT — no 401). Fix: `_free_app_boot_ports` makes the HARNESS kill any listener
 backend+frontend ports before each round/attempt boot + reap in finally; frontend pinned to the
 CORS-allowlisted **:5173** (`frontend.port` in `.agentic-skills.json`, closes the F3 CORS gap).
 Also: classification sharpened (`4f9f0a9`) — a 401/403/500 from the app's OWN endpoint is a
-product_bug, never infra_bug. **Convergence (acceptance.loop.accepted) NOT yet proven** —
-verification re-run `run-20260613T192653Z-1babd8` IN FLIGHT (the standing objective; see
-CONTINUATION_PROMPT.md for the 5-condition /goal). Residual: 500-on-missing-userId (endpoint
-should derive reviewer from JWT) + baseline-auth scope decision (operator).
+product_bug, never infra_bug.
+
+**CONVERGED 2026-06-13 — `[x]` PROVEN. `run-20260613T202407Z-013ac4`.** The loop reached
+`acceptance.loop.accepted` (round 1, "every acceptance criterion live-verified against the
+booted app with evidence; zero open failures") with `integrity_ok=true, unverified_criteria=[],
+open_failures=[], anomaly_count=0`. Full-app boot fired (`app_boot.prepared full_app=true,
+port=5096, frontend_port=5173`; `ports_freed=[5096,5173]` — the boot-port fix worked; both
+ports confirmed live: dotnet 5096 + vite 5173). Authenticated review submit returned
+`actual_status: 201` (NOT 401). Evidence committed in-target on `integration` (`9eb9392`):
+report.json + 20 .png Playwright screenshots + api_logs under
+`_brownfield/features/ecommerce-reviews/acceptance/`. All 5 `/goal` conditions demonstrated.
+**KEY PROCESS LESSON (cost me the first kill→relaunch):** the remote can't reach origin and
+the session's harness work lives there as UNCOMMITTED working-tree edits — HEAD stays stale
+(`6e2c096`) and the run-manifest `harness_sha` records that stale HEAD, NOT the working tree.
+uvicorn does not hot-reload, so a harness process started BEFORE the edits runs pre-fix code in
+memory even though the fix is on disk. ALWAYS restart the harness after deploying working-tree
+edits; verify the fix by grepping the actual source, not the manifest sha. The prior run
+`…1babd8` was wedged at `reindex_after_engineer.BL-0004` on a stale-in-memory harness; killed
+it, restarted harness (loads on-disk fix), DELETE FROM reviews, relaunched → converged.
+
+**Baseline-auth scope — operator decision 2026-06-13 (see [[feedback_baseline_auth_inscope]]):**
+the only out-of-brief baseline-auth change is the JWT `ValidAudience` assignment
+(`Program.cs` + new `JwtBearerConfiguration.cs`, commit `0cb651f` from the prior run's
+followup fixer). Baseline app had `ValidateAudience=true` but never assigned `ValidAudience`
+→ IDX10208 → 401 on every authed request → feature undeliverable. Operator APPROVED as
+in-scope ("Approve as in-scope"): a genuine blocking baseline defect, surgically fixed, is
+acceptable for a feature crew to repair. Residual (deferred, non-blocking): 500-on-missing-userId
+(`POST /reviews/product/{id}` should derive reviewer from JWT, not require body userId);
+`index_initial` re-indexes every run (~15min, benign via has_index short-circuit but a speed win
+to wire into index_initial too).
 
 Boot facts: dotnet-ef is a GLOBAL tool at ~/.dotnet/tools (PATH export needed);
 backend host = Ecommerce.Infrastructure project; Postgres ecommerce-pg :5433
