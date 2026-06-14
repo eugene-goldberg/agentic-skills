@@ -3820,29 +3820,8 @@ async def run_brief(
         # resume the scorer for that BL onward.
         _reached_start_bl = start_bl is None
         _prev_wave = None
-        for it in ordered:
+        async def _one_bl(it):
             bl_id = it.id
-            if not _reached_start_bl:
-                if bl_id == start_bl:
-                    _reached_start_bl = True
-                else:
-                    yield _evt("bl.skipped", bl_id=bl_id, reason=f"before start_bl={start_bl}")
-                    continue
-            # Wave-execution Phase 2: emit wave boundaries as the flattened order
-            # crosses from one DAG layer to the next (only when the flag is on).
-            if wave_execution and _wave_of:
-                _wi = _wave_of.get(bl_id)
-                if _wi != _prev_wave:
-                    if _prev_wave is not None:
-                        yield _evt("wave.done", wave=_prev_wave)
-                        # Wave Phase 3: ONE reindex at the barrier (replaces the 2
-                        # per-BL reindexes) so the next dependent wave grounds on
-                        # the just-completed wave's merged code.
-                        async for e in _run_indexers(repo_dir, f"reindex_after_wave.{_prev_wave}"):
-                            yield e
-                    yield _evt("wave.start", wave=_wi,
-                               bls=[i.id for i in _waves[_wi]])
-                    _prev_wave = _wi
             per_bl = {"bl_id": bl_id, "title": it.title}
             yield _evt("bl.start", bl_id=bl_id, title=it.title)
             _checkpoint(current_bl=bl_id)  # A7: mark which BL is in flight
@@ -3908,7 +3887,7 @@ async def run_brief(
                     bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "no_op"})
                     _checkpoint(current_bl=None)  # A7
                     yield _evt("bl.done", bl_id=bl_id, outcome="no_op")
-                    continue
+                    return
                 # Engineer no_op but QA report missing OR uncommitted —
                 # partial-resume path. Reason string distinguishes the cases.
                 if qa_report.exists() and not qa_committed:
@@ -4045,7 +4024,7 @@ async def run_brief(
                         _checkpoint(current_bl=None)  # A7
                         yield _evt("bl.deferred", bl_id=bl_id, reason=_dreason, dossier=_dossier)
                         yield _evt("bl.done", bl_id=bl_id, outcome="deferred")
-                        continue  # defer = skip this BL, keep the sprint going
+                        return
                     # escalate / split / respec → fall through to the escalate block;
                     # the Architect's reasoning is attached to _dossier["architect"].
                 if not _recovered:
@@ -4070,13 +4049,13 @@ async def run_brief(
                                reason=_esc_reason, dossier=_dossier)
                     yield _evt("bl.done", bl_id=bl_id, outcome="engineer_escalated")
                     if stop_on_failure:
-                        terminal_status = "escalated"
                         yield _evt("escalated", bl_id=bl_id, role="engineer",
                                    reason=f"engineer escalated {bl_id} for operator review "
                                           f"(no-abort doctrine, Option A — dossier attached)",
                                    dossier=_dossier)
+                        yield {"_wave_abort": "escalated"}
                         return
-                    continue
+                    return
                 # A59: Janitor-recovered merge — reindex then fall through to the
                 # normal QA/scorer continuation (same as a clean merge).
                 # Wave Phase 3: in wave mode the post-engineer reindex is deferred
@@ -4135,11 +4114,11 @@ async def run_brief(
                     yield _evt("bl.done", bl_id=bl_id,
                                outcome="rolled_back" if pre_bl_sha else "merged_no_qa")
                     # No-abort doctrine (Option A): escalate with dossier, not abort.
-                    terminal_status = "escalated"
                     yield _evt("escalated", bl_id=bl_id, role="qa",
                                reason=f"QA could not satisfy doctrine for {bl_id} after exhaustive "
                                       f"attempts (stop_on_qa_doctrine_failure) — escalating for operator review",
                                dossier=(qa_outcome or {}).get("dossier") or {})
+                    yield {"_wave_abort": "escalated"}
                     return
 
             # A37: QA merge failed independent of doctrine. Engineer-merge-
@@ -4200,17 +4179,17 @@ async def run_brief(
                     yield _evt("bl.done", bl_id=bl_id,
                                outcome="rolled_back" if pre_bl_sha else "merged_no_qa")
                     # No-abort doctrine (Option A): escalate with dossier, not abort.
-                    terminal_status = "escalated"
                     yield _evt("escalated", bl_id=bl_id, role="qa",
                                reason=f"QA could not reach a green gate for {bl_id} after exhaustive "
                                       f"investigate→fix→re-test attempts — escalating for operator review",
                                dossier=_qa_dossier)
+                    yield {"_wave_abort": "escalated"}
                     return
                 # stop_on_failure=False: best-effort continue. The engineer's
                 # merge stays on the trunk (rollback is scoped to aborts); the
                 # merged_no_qa outcome flags that it shipped without QA.
                 yield _evt("bl.done", bl_id=bl_id, outcome="merged_no_qa")
-                continue
+                return
 
             # Reindex post-QA (QA may add characterization tests).
             # Wave Phase 3: deferred to the wave barrier in wave mode.
@@ -4249,6 +4228,39 @@ async def run_brief(
             bl_outcomes_compact.append({"bl_id": bl_id, "outcome": outcome})
             _checkpoint(current_bl=None)  # A7
             yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
+
+        for it in ordered:
+            bl_id = it.id
+            if not _reached_start_bl:
+                if bl_id == start_bl:
+                    _reached_start_bl = True
+                else:
+                    yield _evt("bl.skipped", bl_id=bl_id, reason=f"before start_bl={start_bl}")
+                    continue
+            # Wave-execution Phase 2: emit wave boundaries as the flattened order
+            # crosses from one DAG layer to the next (only when the flag is on).
+            if wave_execution and _wave_of:
+                _wi = _wave_of.get(bl_id)
+                if _wi != _prev_wave:
+                    if _prev_wave is not None:
+                        yield _evt("wave.done", wave=_prev_wave)
+                        # Wave Phase 3: ONE reindex at the barrier (replaces the 2
+                        # per-BL reindexes) so the next dependent wave grounds on
+                        # the just-completed wave's merged code.
+                        async for e in _run_indexers(repo_dir, f"reindex_after_wave.{_prev_wave}"):
+                            yield e
+                    yield _evt("wave.start", wave=_wi,
+                               bls=[i.id for i in _waves[_wi]])
+                    _prev_wave = _wi
+            _aborted = False
+            async for ev in _one_bl(it):
+                if isinstance(ev, dict) and "_wave_abort" in ev:
+                    terminal_status = ev["_wave_abort"]
+                    _aborted = True
+                    break
+                yield ev
+            if _aborted:
+                return
 
         # Wave-execution Phase 2: close the final wave once the loop drains.
         if wave_execution and _prev_wave is not None:
