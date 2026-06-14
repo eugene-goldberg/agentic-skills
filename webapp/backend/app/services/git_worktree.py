@@ -261,6 +261,78 @@ async def fast_forward_target(repo_root: Path, branch: str, target_ref: str = "m
     return {"ok": True, "kind": "ff", "merged_sha": branch_sha, "target_ref": target_ref}
 
 
+async def merge_branch_into_target(repo_root: Path, branch: str, target_ref: str = "main") -> dict:
+    """Real (3-way) merge of `branch` into `target_ref` in the main checkout.
+
+    Unlike `fast_forward_target` (FF-only), this performs an actual merge so a
+    wave per-BL branches (all forked from the SAME wave-base SHA, hence non-FF
+    after the first) can be assembled onto the trunk in fixed order
+    (PROPOSAL_WAVE_CONCURRENCY.md Strategy A, step 3 - deterministic barrier
+    assembly). Returns {ok, kind, merged_sha?, conflict_files?, error?}:
+      - "merged"   : clean 3-way merge landed on target_ref
+      - "noop"     : branch already contained in target_ref
+      - "conflict" : overlapping edits; the merge is ABORTED (trunk left clean)
+                     and the caller routes that BL to the no-abort path
+      - "error"    : git/precondition failure
+    """
+    code, out, _ = await _run(["git", "rev-parse", "--verify", branch], cwd=repo_root)
+    if code != 0:
+        return {"ok": False, "kind": "error", "error": f"branch {branch} not found"}
+    branch_sha = out.strip()
+    code, out, _ = await _run(["git", "rev-parse", "--verify", target_ref], cwd=repo_root)
+    if code != 0:
+        return {"ok": False, "kind": "error", "error": f"{target_ref} not found"}
+    target_sha = out.strip()
+    # already merged?
+    code, _, _ = await _run(
+        ["git", "merge-base", "--is-ancestor", branch_sha, target_sha], cwd=repo_root,
+    )
+    if code == 0:
+        return {"ok": True, "kind": "noop", "merged_sha": target_sha}
+    # refuse if the main checkout has modified tracked files (mirror FF guard)
+    code, out, _ = await _run(
+        ["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo_root,
+    )
+    if code == 0 and out.strip():
+        return {"ok": False, "kind": "error",
+                "error": "main checkout has modified tracked files; not merging",
+                "status": out.strip()[:400]}
+    # ensure target_ref is the checked-out branch (else merge lands on the wrong ref)
+    code_cur, cur_out, _ = await _run(
+        ["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=repo_root,
+    )
+    if (cur_out.strip() if code_cur == 0 else None) != target_ref:
+        code, _, err = await _run(["git", "checkout", target_ref], cwd=repo_root)
+        if code != 0:
+            return {"ok": False, "kind": "error",
+                    "error": f"could not checkout {target_ref}: {err.strip()}"}
+    # disposable graphify-out symlink cleanup (mirror fast_forward_target / A35)
+    graphify_out = repo_root / "graphify-out"
+    if graphify_out.is_symlink():
+        try:
+            graphify_out.unlink()
+        except OSError:
+            pass
+    # the real 3-way merge
+    code, _, err = await _run(
+        ["git", "merge", "--no-ff", "--no-edit", branch], cwd=repo_root,
+    )
+    if code == 0:
+        return {"ok": True, "kind": "merged",
+                "merged_sha": await rev_parse(repo_root, "HEAD"), "target_ref": target_ref}
+    # conflict: collect the unmerged paths, then abort so the trunk stays clean
+    cf_code, cf_out, _ = await _run(
+        ["git", "diff", "--name-only", "--diff-filter=U"], cwd=repo_root,
+    )
+    conflict_files = [f for f in cf_out.splitlines() if f.strip()] if cf_code == 0 else []
+    await _run(["git", "merge", "--abort"], cwd=repo_root)
+    if conflict_files:
+        return {"ok": False, "kind": "conflict", "conflict_files": conflict_files,
+                "error": f"merge of {branch} into {target_ref} conflicts in "
+                         f"{len(conflict_files)} file(s)"}
+    return {"ok": False, "kind": "error", "error": f"git merge failed: {err.strip()}"}
+
+
 async def has_new_commits(wt: Worktree, base_ref: str = "HEAD~0") -> int:
     """Count commits the agent added beyond the worktree's base."""
     code, out, _ = await _run(
