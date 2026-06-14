@@ -1,7 +1,11 @@
 # Design — Wave concurrency>1 (true intra-wave parallel BL execution)
 
 > Author: architect (Claude). Date: 2026-06-14. Branch: `wave-concurrency`.
-> Status: **DESIGN — awaiting operator review before implementation.**
+> Status: **DESIGN APPROVED — implementation queued.** Operator decisions (2026-06-14):
+> **(1) Assembly-conflict policy = Strategy A** (serialized deterministic assembly; §4).
+> **(2) Sequencing = implement AFTER the current run `run-20260614T143621Z-0b7c91`
+> finishes clean** (all 5 BLs merged, `acceptance.loop.accepted`, regression green,
+> `integrity_ok=true`) — so concurrency is built on a verified concurrency=1 base.
 > Predecessor: `PROPOSAL_PARALLEL_WAVE_EXECUTION.md` (Phases 1–3, shipped, flag
 > `wave_execution`, concurrency=1). This is **Phase 5** of that program: raise the
 > intra-wave concurrency from 1 to N.
@@ -199,6 +203,9 @@ adds an agent + a new, harder-to-prove failure mode. Defer until (A) is live-pro
 
 **Recommendation:** build **(A)** now (serialized-assembly concurrency); keep **(B)** as a
 named follow-on. This staged path keeps each step independently provable.
+
+> **DECISION (operator 2026-06-14): Strategy A is LOCKED.** §9 implements (A); (B) is a
+> named future phase, not in this scope.
 
 ---
 
