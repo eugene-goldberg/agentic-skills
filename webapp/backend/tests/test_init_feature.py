@@ -36,7 +36,8 @@ def target_repo(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     repos_root.mkdir()
     repo = repos_root / "demo-target"
     repo.mkdir()
-    _git(repo, "init", "-b", "master")
+    _git(repo, "init")
+    _git(repo, "symbolic-ref", "HEAD", "refs/heads/master")
     (repo / "README.md").write_text("# demo\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", "initial")

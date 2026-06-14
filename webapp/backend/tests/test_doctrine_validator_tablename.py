@@ -213,7 +213,8 @@ def _git_init_with_baseline(tmp_path, model_body: str, mig_files: dict[str, str]
     """Initialize a git repo, commit a baseline models.py + migrations
     representing 'prior BLs', and return the baseline ref name."""
     import subprocess as sp
-    sp.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    sp.run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], cwd=tmp_path, check=True)
     sp.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, check=True)
     sp.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
     sp.run(["git", "config", "commit.gpgsign", "false"], cwd=tmp_path, check=True)

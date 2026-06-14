@@ -215,7 +215,8 @@ def test_reset_target_to_rolls_back_branch(tmp_path) -> None:
     from app.services.git_worktree import rev_parse, reset_target_to
     repo = tmp_path / "repo"
     repo.mkdir()
-    _git_sync(repo, "init", "-q", "-b", "main")
+    _git_sync(repo, "init", "-q")
+    _git_sync(repo, "symbolic-ref", "HEAD", "refs/heads/main")
     _git_sync(repo, "config", "user.email", "t@t")
     _git_sync(repo, "config", "user.name", "t")
     (repo / "a.txt").write_text("A")

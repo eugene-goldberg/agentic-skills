@@ -26,7 +26,8 @@ def _run(args: list[str], cwd: Path) -> None:
 
 def _init_repo(path: Path, *, default_branch: str = "main") -> None:
     path.mkdir(parents=True, exist_ok=True)
-    _run(["git", "init", "-b", default_branch], cwd=path)
+    _run(["git", "init"], cwd=path)
+    _run(["git", "symbolic-ref", "HEAD", f"refs/heads/{default_branch}"], cwd=path)
     _run(["git", "config", "user.email", "test@example.com"], cwd=path)
     _run(["git", "config", "user.name", "Test"], cwd=path)
     # Initial commit so HEAD is defined

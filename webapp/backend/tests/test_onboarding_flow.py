@@ -25,7 +25,8 @@ def _git(args, cwd):
 def _make_repo(tmp_path: Path, *, with_cfg=True, with_branch=True, with_ignore=True) -> Path:
     repo = tmp_path / "target"
     repo.mkdir()
-    _git(["init", "-q", "-b", "main"], repo)
+    _git(["init", "-q"], repo)
+    _git(["symbolic-ref", "HEAD", "refs/heads/main"], repo)
     _git(["config", "user.email", "t@t.local"], repo)
     _git(["config", "user.name", "t"], repo)
     (repo / "README.md").write_text("x")
