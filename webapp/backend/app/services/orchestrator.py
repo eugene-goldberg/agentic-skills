@@ -3470,6 +3470,50 @@ def _dep_waves(items: list) -> list[list]:
     return [[by_id[b] for b in wave if b in by_id] for wave in id_waves]
 
 
+async def _merge_streams(factories, concurrency):
+    """Fan-in N event-stream factories into one stream, <=`concurrency` at once.
+
+    PROPOSAL_WAVE_CONCURRENCY.md step 2 - the intra-wave parallelism primitive.
+    `factories`: zero-arg callables each returning an async iterator of events (one
+    per BL in a wave). Yields `(idx, event)` as events arrive; `idx` is the factory
+    position (-> bl_id) so the merged stream stays legible. A semaphore gates so at
+    most `concurrency` factories drain simultaneously. Per-stream event order is
+    preserved; cross-stream interleaving is timing-dependent and MUST NOT feed any
+    control decision (read each stream's structured result after it ends -
+    interleaving-independent determinism). No-abort: a factory that raises is
+    isolated into one `{"_stream_error": ..., "_idx": idx}` event and never cancels
+    its siblings.
+    """
+    q: asyncio.Queue = asyncio.Queue()
+    sem = asyncio.Semaphore(max(1, concurrency))
+    _SENTINEL = object()
+
+    async def _drain(factory, idx):
+        async with sem:
+            try:
+                async for ev in factory():
+                    await q.put((idx, ev))
+            except Exception as exc:  # noqa: BLE001 - isolate one BL's failure
+                await q.put((idx, {"_stream_error": repr(exc), "_idx": idx}))
+            finally:
+                await q.put((idx, _SENTINEL))
+
+    tasks = [asyncio.create_task(_drain(f, i)) for i, f in enumerate(factories)]
+    live = len(tasks)
+    try:
+        while live:
+            idx, ev = await q.get()
+            if ev is _SENTINEL:
+                live -= 1
+                continue
+            yield idx, ev
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def _ensure_on_agent_branch(repo_dir: Path) -> dict:
     """Structural fix (2026-06-06, Ops/Steward proposal §9): put the target
     checkout on the configured ``agent_branch`` at run start.
