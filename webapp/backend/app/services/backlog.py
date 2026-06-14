@@ -173,6 +173,171 @@ def parse_file(path: Path) -> list[BacklogItem]:
     return parse(path.read_text(encoding="utf-8", errors="replace"))
 
 
+# ── R21: dependency DAG + interface contracts (wave-execution Phase 1) ────────
+# The PO declares, per BL, a structured **Dependencies:** list of BL-ids and the
+# interface contracts each BL **Exposes:** / **Consumes:**. This is the artifact
+# the future wave scheduler reads to parallelize independent BLs and sequence
+# dependent ones; in Phase 1 we only PRODUCE + VALIDATE it (execution unchanged).
+
+_BL_ID_RE = re.compile(r"BL-\d{4}")
+_NONE_TOKENS = {"none", "n/a", "na", "-", "", "—"}
+_EXPOSES_RE = re.compile(
+    r"\*\*Exposes\s*:?\*\*\s*(.+?)(?=\n[ \t]*\*\*[A-Z]|\Z)", re.IGNORECASE | re.DOTALL)
+_CONSUMES_RE = re.compile(
+    r"\*\*Consumes\s*:?\*\*\s*(.+?)(?=\n[ \t]*\*\*[A-Z]|\Z)", re.IGNORECASE | re.DOTALL)
+
+
+def _meta_of(item) -> dict:
+    if isinstance(item, dict):
+        return item.get("meta") or {}
+    return getattr(item, "meta", {}) or {}
+
+
+def declared_dependencies(item) -> list[str] | None:
+    """BL-ids this BL declares it depends on, from its ``**Dependencies:**`` meta.
+
+    Returns ``None`` when the field is ABSENT (a distinct, flaggable state), ``[]``
+    when present and "none". Self-references are kept here and flagged by
+    :func:`dependency_report`. The BACKLOG meta parser already lower-cases keys.
+    """
+    meta = _meta_of(item)
+    if "dependencies" not in meta:
+        return None
+    raw = (meta.get("dependencies") or "").strip()
+    if raw.lower() in _NONE_TOKENS:
+        return []
+    return _BL_ID_RE.findall(raw)
+
+
+def _normalize_contract(token: str) -> str:
+    """Reduce an interface token to a comparable key: the identifier head before
+    any ``(`` / ``->`` / ``:`` , whitespace-stripped and lower-cased. So
+    ``IRepo.TryDecrement(a,b)->bool`` and ``IRepo.TryDecrement`` compare equal."""
+    head = re.split(r"\(|->|::|:", token, maxsplit=1)[0]
+    return "".join(head.split()).lower()
+
+
+def _contract_tokens(item, rx: re.Pattern) -> set[str]:
+    _, body = _body_of(item)
+    if not body:
+        return set()
+    m = rx.search(body)
+    if not m:
+        return set()
+    raw = m.group(1)
+    parts = re.split(r"[;,\n]", raw)
+    out = set()
+    for p in parts:
+        p = p.strip().lstrip("-*0123456789. \t")
+        if p and p.lower() not in _NONE_TOKENS:
+            out.add(_normalize_contract(p))
+    return out
+
+
+def adjacency(items) -> dict[str, list[str]]:
+    """{bl_id: [declared dep ids]} over all BLs (absent field → [])."""
+    adj: dict[str, list[str]] = {}
+    for it in items:
+        bl_id, _ = _body_of(it)
+        if bl_id:
+            adj[bl_id] = declared_dependencies(it) or []
+    return adj
+
+
+def topological_waves(items) -> list[list[str]]:
+    """Kahn-layer the dependency DAG into execution **waves**: wave[0] are BLs
+    with no (in-graph) dependencies; each later wave depends only on earlier ones.
+
+    Raises ``ValueError`` if the graph has a cycle (the unscheduled remainder is
+    named in the message). Dangling refs (deps to unknown BLs) are ignored here —
+    :func:`dependency_report` flags them separately — so this stays a pure
+    scheduling primitive the wave scheduler (Phase 2) can reuse directly.
+    """
+    adj = adjacency(items)
+    known = set(adj)
+    indeg = {b: len({d for d in deps if d in known}) for b, deps in adj.items()}
+    waves: list[list[str]] = []
+    placed: set[str] = set()
+    while len(placed) < len(adj):
+        layer = sorted(b for b in adj if b not in placed and indeg[b] == 0)
+        if not layer:
+            remaining = sorted(b for b in adj if b not in placed)
+            raise ValueError(f"dependency cycle among {remaining}")
+        waves.append(layer)
+        placed.update(layer)
+        for b in adj:
+            if b not in placed:
+                indeg[b] = len({d for d in adj[b] if d in known and d not in placed})
+    return waves
+
+
+def dependency_report(items) -> dict[str, str]:
+    """R21 DAG validation. Returns ``{bl_id: reason}`` for every BL with a
+    dependency defect (empty ⇒ the DAG is well-formed). Checks, per BL:
+    missing ``**Dependencies:**`` field, dangling refs (dep to a non-existent
+    BL), self-dependency; plus a single ``__cycle__`` entry if the graph is
+    cyclic. All are unambiguous and machine-checkable — zero false-positive risk.
+    """
+    ids = {bl for it in items for bl, _ in [_body_of(it)] if bl}
+    bad: dict[str, str] = {}
+    for it in items:
+        bl_id, _ = _body_of(it)
+        if not bl_id:
+            continue
+        deps = declared_dependencies(it)
+        if deps is None:
+            bad[bl_id] = ("no **Dependencies:** field (declare 'none' or a list of "
+                          "BL-ids this BL builds on — the wave scheduler needs it)")
+            continue
+        dangling = [d for d in deps if d not in ids]
+        if bl_id in deps:
+            bad[bl_id] = "declares itself as a dependency (self-loop)"
+        elif dangling:
+            bad[bl_id] = f"depends on unknown BL-id(s): {', '.join(sorted(set(dangling)))}"
+    if not bad:
+        try:
+            topological_waves(items)
+        except ValueError as e:
+            bad["__cycle__"] = str(e)
+    return bad
+
+
+def contract_report(items) -> dict[str, str]:
+    """R21 contract-coverage validation. For every interface a BL ``**Consumes:**``,
+    that contract must be ``**Exposes:**``d by a BL this one declares as a
+    dependency. Returns ``{bl_id: reason}`` for violations (empty ⇒ coherent).
+
+    Only fires for BLs that actually declare ``**Consumes:**`` — a BL may depend
+    on another purely for ordering (e.g. a migration) without a code interface, so
+    absence of Consumes is never an error. This catches the real defect: consuming
+    an interface that no declared dependency produces (the cross-BL contract gap).
+    """
+    producers: dict[str, str] = {}      # normalized contract -> producing BL
+    for it in items:
+        bl_id, _ = _body_of(it)
+        for tok in _contract_tokens(it, _EXPOSES_RE):
+            producers.setdefault(tok, bl_id)
+    bad: dict[str, str] = {}
+    for it in items:
+        bl_id, _ = _body_of(it)
+        if not bl_id:
+            continue
+        consumes = _contract_tokens(it, _CONSUMES_RE)
+        if not consumes:
+            continue
+        deps = set(declared_dependencies(it) or [])
+        problems = []
+        for tok in sorted(consumes):
+            prod = producers.get(tok)
+            if prod is None:
+                problems.append(f"'{tok}' is exposed by no BL")
+            elif prod != bl_id and prod not in deps:
+                problems.append(f"'{tok}' is exposed by {prod}, which is not a declared dependency")
+        if problems:
+            bad[bl_id] = "consumes interface(s) without a contract link: " + "; ".join(problems)
+    return bad
+
+
 def extract_section(text: str, bl_id: str) -> str | None:
     """Return the heading + body of a single BL section for prompting the engineer."""
     headings = list(BL_HEADING_RE.finditer(text))

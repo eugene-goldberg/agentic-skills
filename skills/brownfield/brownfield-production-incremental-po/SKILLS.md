@@ -62,6 +62,8 @@ Every BL-XXXX must include:
 - **Risk Level** (Low / Medium / High blast radius)
 - **Spike Tasks** (if deep legacy understanding is still needed)
 - **Acceptance** (comprehensive, specific, testable criteria — see below; MANDATORY)
+- **Dependencies** / **Exposes** / **Consumes** (the dependency DAG + interface
+  contracts — see "Dependency graph & interface contracts" below; MANDATORY, R21)
 
 ### Acceptance criteria — the contract (R18, BINDING, no exceptions)
 
@@ -86,6 +88,31 @@ are missing or thin and re-invokes you to fix them. Write them right the first t
    acceptance agent live-tests; mock-only per-BL tests cannot).
 4. **Each criterion is independently testable.** Anything you cannot phrase as a
    pass/fail check is not done — rewrite it until you can.
+
+### Dependency graph & interface contracts (R21, BINDING)
+
+The crew schedules BLs by the **dependency DAG** you declare, and runs independent
+BLs in parallel. That only works if you state, per BL, what it builds on and the
+**interface contracts** it produces/consumes — **contract-first**, so a consuming BL
+can be implemented against the declared contract alone, without seeing the producer's
+code (exactly how human teams parallelize). The validator **REJECTS** a backlog with a
+malformed graph or an un-contracted cross-BL dependency. Every BL MUST carry three
+fields, each on its own line:
+
+- **Dependencies:** either `none`, or a comma-separated list of the **BL-ids this BL
+  builds on** (e.g. `BL-0001, BL-0002`). Reference only BL-ids that exist in THIS
+  backlog; never list a BL as its own dependency; the whole set MUST form a DAG (no
+  cycles). This is what the wave scheduler reads.
+- **Exposes:** the interface(s) this BL PRODUCES that a later BL will use — the exact
+  DTO field, endpoint route, or service/repository method **signature**. `none` if it
+  exposes nothing cross-BL. Example:
+  `IProductRepository.TryDecrementStockAsync(productId, quantity) -> bool; ProductReadDto.availableQuantity`.
+- **Consumes:** the interface(s) this BL DEPENDS ON, named **exactly** as the producing
+  BL Exposes them. Every Consumes entry MUST be Exposed by a BL you list under
+  Dependencies. `none` if it consumes nothing cross-BL.
+
+Keep dependencies minimal and slices conflict-disjoint where possible — the fewer and
+cleaner the cross-BL edges, the more the crew can parallelize.
 
 **Decomposition Rules**:
 - Prefer small, vertical, low-blast-radius slices

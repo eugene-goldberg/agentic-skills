@@ -124,7 +124,9 @@ def _check(repo_root: Path, rel: str, accumulator: dict) -> None:
 
 def _finalize(role: str, acc: dict) -> dict:
     thin = acc.get("thin_criteria") or {}
-    acc["ok"] = not (acc["missing"] or acc["empty"] or thin)
+    dep_errs = acc.get("dependency_errors") or {}      # R21 DAG
+    contract_errs = acc.get("contract_errors") or {}   # R21 contracts
+    acc["ok"] = not (acc["missing"] or acc["empty"] or thin or dep_errs or contract_errs)
     if acc["ok"]:
         acc["summary"] = f"{role}: doctrine artifacts complete"
     else:
@@ -137,13 +139,18 @@ def _finalize(role: str, acc: dict) -> dict:
             parts.append(f"dangling_refs={len(acc['dangling_refs'])}")
         if thin:
             parts.append(f"thin_criteria={len(thin)}")
+        if dep_errs:
+            parts.append(f"dependency_errors={len(dep_errs)}")
+        if contract_errs:
+            parts.append(f"contract_errors={len(contract_errs)}")
         acc["summary"] = f"{role}: doctrine incomplete — " + ", ".join(parts)
     return acc
 
 
 def validate_po(repo_root: Path, feature_slug: str | None = None) -> dict:
     art = feature_artifact_dir(repo_root, feature_slug)
-    acc = {"missing": [], "empty": [], "dangling_refs": [], "thin_criteria": {}}
+    acc = {"missing": [], "empty": [], "dangling_refs": [], "thin_criteria": {},
+           "dependency_errors": {}, "contract_errors": {}}
 
     # A18: when feature_slug is set, BACKLOG.md lives inside the feature dir
     # alongside CODEBASE_CONTEXT.md and SPRINT_PLAN.md. Pre-A18 sprints used
@@ -194,6 +201,17 @@ def validate_po(repo_root: Path, feature_slug: str | None = None) -> dict:
         # doctrine retry loop (the PO re-writes the criteria), so no BL escapes
         # decomposition without a verifiable contract.
         acc["thin_criteria"] = backlog_svc.thin_criteria_report(items)
+
+        # R21 (wave-execution Phase 1): every BL declares a structured dependency
+        # set (the DAG the wave scheduler will read) and an interface contract for
+        # everything it consumes across BLs. The DAG checks (missing field /
+        # dangling ref / self-loop / cycle) are unambiguous and machine-checkable;
+        # the contract check fires only for BLs that declare **Consumes:**. A
+        # defect fails the PO gate → the existing doctrine retry loop re-prompts
+        # the PO (allowed to edit BACKLOG.md). Phase 1 changes NO execution path —
+        # the sequential loop still runs; we only produce + validate the artifact.
+        acc["dependency_errors"] = backlog_svc.dependency_report(items)
+        acc["contract_errors"] = backlog_svc.contract_report(items)
     return _finalize("po", acc)
 
 
@@ -758,10 +776,56 @@ stable IDs `AC-<BL>-<n>` from list position). Then `git add -A` and
 """
 
 
+def build_deps_contracts_fix_prompt(dep_errors: dict, contract_errors: dict) -> str:
+    """R21 delta prompt: the PO's BACKLOG.md has malformed/incomplete dependency
+    declarations or cross-BL interface contracts. Allowed to edit BACKLOG.md."""
+    dep_rows = "\n".join(
+        f"- **{bl}**: {reason}" for bl, reason in sorted(dep_errors.items())) or "- (none)"
+    con_rows = "\n".join(
+        f"- **{bl}**: {reason}" for bl, reason in sorted(contract_errors.items())) or "- (none)"
+    return f"""Your previous PO run produced a BACKLOG.md whose **dependency graph** or
+**interface contracts** are incomplete/inconsistent. The pre-merge validator REJECTED
+it. You are being re-invoked in the SAME worktree. Fix the BACKLOG.md now.
+
+## Dependency-graph problems (R21)
+{dep_rows}
+
+## Interface-contract problems (R21)
+{con_rows}
+
+## Required (R21 — the dependency DAG + contracts are how the crew parallelizes safely)
+For EVERY BL in BACKLOG.md add (or correct) these meta fields, on their own lines:
+
+- `**Dependencies:**` — either `none`, or a comma-separated list of the **BL-ids this BL
+  builds on** (e.g. `BL-0001, BL-0002`). Reference only BL-ids that exist in THIS
+  backlog. No self-references. The set of all dependencies MUST form a DAG (no cycles).
+- `**Exposes:**` — the interface(s) this BL PRODUCES that a later BL will use: the exact
+  DTO field / endpoint route / service-or-repository method signature. Use `none` if it
+  exposes nothing cross-BL. Example: `IProductRepository.TryDecrementStockAsync(productId, quantity) -> bool; ProductReadDto.availableQuantity`.
+- `**Consumes:**` — the interface(s) this BL DEPENDS ON, named EXACTLY as the producing BL
+  Exposes them. Every Consumes entry must be Exposed by a BL you list under Dependencies.
+  Use `none` if it consumes nothing cross-BL.
+
+Define interfaces CONTRACT-FIRST: a consuming BL must be implementable against the
+declared contract alone, without seeing the producer's code. Keep the acceptance criteria
+and all other content intact. Then `git add -A` and
+`git commit -m "po: declare dependency DAG + interface contracts (R21)"`. Do NOT
+amend/rebase (R13). Print the same final JSON shape with the NEW commit_sha.
+"""
+
+
 def build_fix_prompt(role: str, validation: dict, *, bl_id: str | None = None) -> str:
     """Construct the delta prompt for a re-invocation when the validator fails."""
     thin = validation.get("thin_criteria") or {}
-    if role == "po" and thin and not (validation.get("missing") or validation.get("empty")):
+    dep_errs = validation.get("dependency_errors") or {}
+    contract_errs = validation.get("contract_errors") or {}
+    artifacts_missing = bool(validation.get("missing") or validation.get("empty"))
+    if role == "po" and (dep_errs or contract_errs) and not artifacts_missing and not thin:
+        # Pure R21 DAG/contract failure — route to the R21 fix prompt (allowed to
+        # edit BACKLOG.md). Artifacts/criteria, if also broken, are fixed first by
+        # the branches below and R21 is re-checked on the next loop.
+        return build_deps_contracts_fix_prompt(dep_errs, contract_errs)
+    if role == "po" and thin and not artifacts_missing:
         # Pure criteria failure — route to the criteria-specific fix prompt that
         # is allowed to edit BACKLOG.md. (When artifacts are ALSO missing, fall
         # through to the artifact prompt first; criteria get re-checked next loop.)

@@ -193,6 +193,17 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
               "PROPOSAL_LIVE_ACCEPTANCE_LOOP.md"),
     ),
     DoctrineRule(
+        "R21", "every BL declares a structured dependency DAG (the **Dependencies:** "
+               "BL-id list the wave scheduler reads) and the interface contracts it "
+               "**Exposes:**/**Consumes:** across BLs; a missing-field / dangling-ref / "
+               "self-loop / cycle, or a consumed interface no declared dependency "
+               "exposes, fails the PO gate (wave-execution Phase 1)",
+        "post_validation", True,
+        "app.services.backlog:dependency_report",
+        has_test=True, targeted_failure_class="consistency-violation",
+        docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_PARALLEL_WAVE_EXECUTION.md"),
+    ),
+    DoctrineRule(
         "Tier1.5", "pre-modification kill: <min grounded calls before Write/Edit",
         "streaming", True,
         "app.services.claude_agent:stream_agent_task",
@@ -206,7 +217,7 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
 # not yet registered — its enforcement point is to be confirmed first.
 CANONICAL_RULE_IDS = frozenset({
     "R5", "R5b", "R7", "R8", "R9", "R10", "R10.1", "R10.2",
-    "R11", "R12", "R13", "R15", "R16", "R17", "R18", "R19", "R20", "Tier1.5",
+    "R11", "R12", "R13", "R15", "R16", "R17", "R18", "R19", "R20", "R21", "Tier1.5",
 })
 
 
