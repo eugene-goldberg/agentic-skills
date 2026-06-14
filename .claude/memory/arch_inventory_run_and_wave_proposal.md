@@ -50,5 +50,18 @@ sequential loop (the degenerate 1-BL-per-wave case). 7-phase build plan; phase 1
 contracts) delivers value before any parallelism. Inventory would be ~3 waves (~4 reindexes
 not 8, 3 BLs concurrent) ≈ 2× wall-clock cut, no correctness loss.
 
-dev≡main≡origin≡remote(180) @ `e5def05`. Relates to [[arch_live_acceptance_loop]]
-(CONVERGED), [[arch_zero_escape_chain]], [[feedback_baseline_auth_inscope]].
+**Phase 1 SHIPPED + LIVE 2026-06-14 (`efa9da9`).** Operator approved the proposal, "start
+with phase 1." R21 implemented (validation-only, NO execution change — sequential loop
+unchanged): PO declares per-BL `**Dependencies:**` (BL-id DAG) + `**Exposes:**`/`**Consumes:**`
+contracts; `validate_po` enforces via `backlog.dependency_report` (missing-field/dangling-ref/
+self-loop/cycle — zero false-positive risk) + `contract_report` (consumed iface must be
+exposed by a declared dep; fires only when **Consumes:** present); `build_deps_contracts_fix_prompt`
+in the existing PO doctrine-retry loop. `topological_waves` (Kahn) added now as the Phase-2
+scheduler primitive. R21 in doctrine_spec + CLAUDE.md table (parity green) + PO SKILL. 13 new
+tests; full suite **526 passed, 1 skipped**. Deployed to remote + harness restarted (pid
+2052628) so R21 is live. NOT yet exercised by a live PO run — next sprint's PO will be the
+first to produce the DAG/contracts. Phase 2 (wave scheduler) is the next step when approved.
+
+dev≡main≡origin≡remote(180) @ `efa9da9`. Relates to [[arch_live_acceptance_loop]]
+(CONVERGED), [[arch_zero_escape_chain]], [[feedback_baseline_auth_inscope]],
+[[arch_doctrine_contract]] (I-2).
