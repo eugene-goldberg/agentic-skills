@@ -309,6 +309,52 @@ deep reference.
 
 ---
 
+## Development workflow — REMOTE-FIRST (BINDING, operator directive 2026-06-14)
+
+> **All crew/harness code work happens ON the remote crew host `192.168.12.180`,
+> NOT on the Mac.** The remote is the host that actually runs the crew, so its
+> environment (Ubuntu, x86_64, git 2.25.1, dotnet, Ollama, Milvus, Docker) is the
+> ground truth. Developing and testing anywhere else risks "passed here, breaks
+> there" gaps (e.g. the git-2.25 `git init -b` fixture gap that fails on the remote
+> but passes on the Mac).
+
+Three binding rules:
+
+1. **Make all crew/harness code changes directly on the remote `192.168.12.180`.**
+   Edit `~/dev/ai-projects/agentic-skills/...` on the remote (over SSH). Do NOT edit
+   crew/harness source on the Mac and copy it over.
+2. **Create and run all crew/harness tests on the remote `192.168.12.180`.** A change
+   is "tested" only when its tests pass on the remote venv
+   (`cd ~/dev/ai-projects/agentic-skills/webapp/backend && .venv/bin/python -m pytest
+   tests/ -p no:cacheprovider`). The Mac is NOT an acceptable test host for crew/harness
+   code.
+3. **Sync remote → GitHub → Mac (never Mac → remote for code).** Commit on the remote,
+   `git push origin` from the remote, then the Mac `git pull` / `git fetch && reset`.
+   The Mac is a **read-only mirror** of what the remote produced. (The old Mac→bundle→
+   remote flow is retired for crew/harness code.)
+
+**Scope:** "crew/harness code" = everything under `webapp/`, `langgraph_engine/`,
+`skills/`, `rubrics/`, and the test suites. Governance docs (`CLAUDE.md`, `*.md`
+proposals/trackers, `.claude/memory/`) MAY still be authored on the Mac when convenient,
+but flow through the SAME remote→GitHub→Mac sync once the remote can push (so all hosts
+converge on one GitHub-backed history).
+
+**Remote GitHub auth (the enabler for rule 3):** the remote pushes to
+`git@github.com:eugene-goldberg/agentic-skills.git` using a dedicated deploy key at
+`~/.ssh/id_ed25519_ghdeploy` (repo-local `core.sshCommand` points at it; github.com is in
+the remote's `known_hosts`). **The operator must add that key's PUBLIC half to the GitHub
+repo's Deploy keys with WRITE access** for the remote to push — this is the one
+operator-gated step; until it's done, rule 3 is blocked and the interim is remote-commit →
+bundle → Mac-push.
+
+**Editing on the remote (tooling note):** the architect's native Edit/Write tools target
+the Mac filesystem, so remote edits are applied over SSH (whole-file writes for new files;
+precise, uniqueness-checked in-place string replacement for edits — mirroring the Edit
+tool's safety). Read the remote file first, apply the minimal change, then run the remote
+test suite to verify.
+
+---
+
 ## Brownfield boundary
 
 Hard distinction between two kinds of repository:
