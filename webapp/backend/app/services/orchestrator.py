@@ -3724,6 +3724,11 @@ async def run_brief(
                 if _wi != _prev_wave:
                     if _prev_wave is not None:
                         yield _evt("wave.done", wave=_prev_wave)
+                        # Wave Phase 3: ONE reindex at the barrier (replaces the 2
+                        # per-BL reindexes) so the next dependent wave grounds on
+                        # the just-completed wave's merged code.
+                        async for e in _run_indexers(repo_dir, f"reindex_after_wave.{_prev_wave}"):
+                            yield e
                     yield _evt("wave.start", wave=_wi,
                                bls=[i.id for i in _waves[_wi]])
                     _prev_wave = _wi
@@ -3963,12 +3968,17 @@ async def run_brief(
                     continue
                 # A59: Janitor-recovered merge — reindex then fall through to the
                 # normal QA/scorer continuation (same as a clean merge).
-                async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}"):
-                    yield e
+                # Wave Phase 3: in wave mode the post-engineer reindex is deferred
+                # to the wave barrier (1/wave); same-wave BLs are independent.
+                if not wave_execution:
+                    async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}"):
+                        yield e
             else:
-                # Reindex post-engineer (only when engineer actually committed)
-                async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}"):
-                    yield e
+                # Reindex post-engineer (only when engineer actually committed).
+                # Wave Phase 3: deferred to the wave barrier in wave mode.
+                if not wave_execution:
+                    async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}"):
+                        yield e
 
             # QA
             yield _evt("qa.start", bl_id=bl_id)
@@ -4091,9 +4101,11 @@ async def run_brief(
                 yield _evt("bl.done", bl_id=bl_id, outcome="merged_no_qa")
                 continue
 
-            # Reindex post-QA (QA may add characterization tests)
-            async for e in _run_indexers(repo_dir, f"reindex_after_qa.{bl_id}"):
-                yield e
+            # Reindex post-QA (QA may add characterization tests).
+            # Wave Phase 3: deferred to the wave barrier in wave mode.
+            if not wave_execution:
+                async for e in _run_indexers(repo_dir, f"reindex_after_qa.{bl_id}"):
+                    yield e
 
             # Scorer
             yield _evt("scorer.start", bl_id=bl_id)
@@ -4130,6 +4142,10 @@ async def run_brief(
         # Wave-execution Phase 2: close the final wave once the loop drains.
         if wave_execution and _prev_wave is not None:
             yield _evt("wave.done", wave=_prev_wave)
+            # Wave Phase 3: final barrier reindex so acceptance + pattern-profile
+            # ground on the fully assembled feature.
+            async for e in _run_indexers(repo_dir, f"reindex_after_wave.{_prev_wave}"):
+                yield e
 
         terminal_status = "sprint_complete"  # A7: flip from default "aborted"
 
