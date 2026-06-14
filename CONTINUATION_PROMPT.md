@@ -89,13 +89,31 @@ sudo needs an operator password we don't have). Strip banner noise:
   `symbolic-ref`; took the remote suite from 22-failed to green. First remote-first commit.
 
 ## SUGGESTED NEXT STEPS (operator-gated; propose before doing)
-1. **LIVE-PROVE wave Phases 1–3** — the highest-value next move. Run a real brief with
-   `wave_execution=True` (re-run the inventory brief, or a fresh feature) to exercise: the PO
-   producing a valid R21 DAG/contracts at the gate, wave scheduling/events, and the
-   reindex-at-barrier speedup — the honest `[x]` for all three. Watch: PO gate accepts the DAG;
-   `orchestrator.wave.start/done`; `reindex_after_wave.*` (not per-BL); same clean acceptance.
+0. **FIRST ACTION (operator-directed 2026-06-14): deliver the ORDER FULFILLMENT LIFECYCLE
+   feature** on `fullstack-ecommerce-app`. The locked-ready brief is
+   `PROPOSAL_FEATURE_order_fulfillment.md` — a major feature with a real backend state machine
+   + RBAC (admin advances Pending→Processing→Completed; owner cancels while Pending; all
+   authorization server-side) AND two distinct, separately-verifiable UI surfaces (a customer
+   status tracker + Cancel button; an admin order-management console). It is grounded in the
+   live code (the `OrderStatus`/`UserRole` enums + `OrderManagement` service exist but the
+   transition flow does NOT — verified). **Run it with `wave_execution=True`** so it ALSO
+   live-proves the wave program (Phases 1–3) end-to-end in one shot: the PO emits an R21
+   DAG/contracts (the feature decomposes cleanly: status model → admin-advance → owner-cancel →
+   customer tracker UI → admin console UI), the scheduler runs waves, and reindex fires at the
+   barrier. Verify in the run: PO gate accepts the DAG; `orchestrator.wave.start/done`;
+   `reindex_after_wave.*` (not per-BL); `acceptance.loop.accepted` with both the API journeys
+   (admin-advance, non-admin 403, owner-cancel-while-Pending, cross-user cancel 403, illegal
+   transition rejected) and the UI journeys (customer tracker, owner-only Cancel, admin console,
+   admin-only access) green + screenshots; regression checkpoint green. Read the proposal's
+   §"Falsifiable failure predictions" (P1–P5) as the watch-list. If `wave_execution=True`
+   misbehaves, fall back to OFF (sequential) to deliver the feature, then debug the flag
+   separately — do NOT let an unproven flag block the feature.
+1. **LIVE-PROVE wave Phases 1–3** — folded into step 0 above (running order-fulfillment with
+   `wave_execution=True` IS the live proof). The honest `[x]` for P1–P3 lands when that run
+   shows the DAG-gate + wave events + reindex_after_wave + clean acceptance.
 2. **Wave Phase: concurrency>1** (true intra-wave parallelism — the async event-stream merge).
-   The riskiest phase; its own careful implementation + live proof.
+   The riskiest phase; its own careful implementation + live proof. Only after step 0 proves the
+   concurrency=1 scaffolding works live.
 3. **Wave Phase 4**: conflict-resolver agent at the barrier + accept-on-scratch-assembled-branch.
 4. **Reindex incremental / has_index short-circuit into `index_initial`** — independent
    remote-speed win (every run re-indexes ~15min even when the collection is populated).
