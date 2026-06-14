@@ -3432,6 +3432,28 @@ def _dep_order(items: list) -> list:
     return order
 
 
+def _dep_waves(items: list) -> list[list]:
+    """Group BLs into topological execution **waves** (wave-execution Phase 2).
+
+    ``wave[0]`` are BLs with no in-graph dependency; each later wave depends only
+    on earlier ones. BLs WITHIN a wave are independent (per the R21 DAG) and are
+    therefore safe to run concurrently — Phase 2 runs them at **concurrency=1**
+    (the degenerate case, identical per-BL semantics to the sequential loop); a
+    later phase raises the concurrency and moves the reindex to the wave barrier.
+
+    Falls back to a single wave in dependency/source order if the graph has a
+    cycle (the R21 PO gate already rejects cycles, so this is defense-in-depth).
+    Reuses the same ``backlog.topological_waves`` primitive the validator uses, so
+    the schedule the operator sees at the PO gate is exactly the one that runs.
+    """
+    try:
+        id_waves = backlog_svc.topological_waves(items)
+    except Exception:  # noqa: BLE001 — cycle / malformed: degrade to one wave
+        return [_dep_order(items)]
+    by_id = {it.id: it for it in items}
+    return [[by_id[b] for b in wave if b in by_id] for wave in id_waves]
+
+
 def _ensure_on_agent_branch(repo_dir: Path) -> dict:
     """Structural fix (2026-06-06, Ops/Steward proposal §9): put the target
     checkout on the configured ``agent_branch`` at run start.
@@ -3510,6 +3532,14 @@ async def run_brief(
     warm_retrieval: bool = True,  # A56 (operator 2026-06-07): warm the LOCAL
                                   # retrieval backend before the PO so the first
                                   # agent isn't grounding-blind. Flag = rollback.
+    wave_execution: bool = False,  # wave-execution Phase 2 (operator 2026-06-14):
+                                   # schedule BLs by the R21 dependency DAG into
+                                   # topological WAVES and emit wave.start/done
+                                   # boundaries. Phase 2 runs each wave at
+                                   # concurrency=1 (identical per-BL semantics);
+                                   # OFF = today's flat sequential order. Flag =
+                                   # rollback. Parallelism + reindex-at-barrier
+                                   # are later phases that build on this schedule.
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -3636,12 +3666,29 @@ async def run_brief(
             yield _evt("aborted", reason="no BACKLOG.md found after PO phase")
             return
         items = backlog_svc.parse_file(bf)
-        ordered = _dep_order(items)
+        # Wave-execution Phase 2: when enabled, schedule by the R21 dependency DAG
+        # into topological waves (flattened to preserve the existing single-loop
+        # body) and remember each BL's wave index for wave.start/done boundary
+        # events. concurrency=1 within a wave for now → byte-identical per-BL
+        # behaviour; OFF = today's flat dependency order, no wave events at all.
+        if wave_execution:
+            _waves = _dep_waves(items)
+            ordered = [it for w in _waves for it in w]
+        else:
+            _waves = None
+            ordered = _dep_order(items)
         if max_bls is not None:
             ordered = ordered[:max_bls]
+            if _waves is not None:
+                _kept = {it.id for it in ordered}
+                _waves = [w2 for w2 in
+                          ([it for it in w if it.id in _kept] for w in _waves) if w2]
+        _wave_of = ({it.id: wi for wi, w in enumerate(_waves) for it in w}
+                    if _waves is not None else {})
         yield _evt("backlog_parsed", count=len(ordered),
                    bls=[{"id": it.id, "title": it.title,
-                         "deps": str(it.meta.get("dependencies") or "")} for it in ordered])
+                         "deps": str(it.meta.get("dependencies") or "")} for it in ordered],
+                   waves=([[it.id for it in w] for w in _waves] if _waves is not None else None))
         _checkpoint(current_bl=None)  # A7: first checkpoint after PO+parse
 
         # Simple gating model (2026-06-06): the agent-branch HEAD at sprint start
@@ -3661,6 +3708,7 @@ async def run_brief(
         # mid-reindex). Operator passes start_bl="BL-0002" + skip_po=true to
         # resume the scorer for that BL onward.
         _reached_start_bl = start_bl is None
+        _prev_wave = None
         for it in ordered:
             bl_id = it.id
             if not _reached_start_bl:
@@ -3669,6 +3717,16 @@ async def run_brief(
                 else:
                     yield _evt("bl.skipped", bl_id=bl_id, reason=f"before start_bl={start_bl}")
                     continue
+            # Wave-execution Phase 2: emit wave boundaries as the flattened order
+            # crosses from one DAG layer to the next (only when the flag is on).
+            if wave_execution and _wave_of:
+                _wi = _wave_of.get(bl_id)
+                if _wi != _prev_wave:
+                    if _prev_wave is not None:
+                        yield _evt("wave.done", wave=_prev_wave)
+                    yield _evt("wave.start", wave=_wi,
+                               bls=[i.id for i in _waves[_wi]])
+                    _prev_wave = _wi
             per_bl = {"bl_id": bl_id, "title": it.title}
             yield _evt("bl.start", bl_id=bl_id, title=it.title)
             _checkpoint(current_bl=bl_id)  # A7: mark which BL is in flight
@@ -4068,6 +4126,10 @@ async def run_brief(
             bl_outcomes_compact.append({"bl_id": bl_id, "outcome": outcome})
             _checkpoint(current_bl=None)  # A7
             yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
+
+        # Wave-execution Phase 2: close the final wave once the loop drains.
+        if wave_execution and _prev_wave is not None:
+            yield _evt("wave.done", wave=_prev_wave)
 
         terminal_status = "sprint_complete"  # A7: flip from default "aborted"
 

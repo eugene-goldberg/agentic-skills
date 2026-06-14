@@ -62,6 +62,22 @@ tests; full suite **526 passed, 1 skipped**. Deployed to remote + harness restar
 2052628) so R21 is live. NOT yet exercised by a live PO run — next sprint's PO will be the
 first to produce the DAG/contracts. Phase 2 (wave scheduler) is the next step when approved.
 
-dev≡main≡origin≡remote(180) @ `efa9da9`. Relates to [[arch_live_acceptance_loop]]
+**Phase 2 SHIPPED 2026-06-14.** The wave SCHEDULER (operator "proceed with phase 2").
+`orchestrator._dep_waves(items)` groups BLs by the R21 DAG into topological waves
+(reuses `backlog.topological_waves`, degrades to one wave on cycle); `run_brief` gains a
+`wave_execution` flag (DEFAULT OFF = today's flat `_dep_order`) + `RunBriefRequest.wave_execution`;
+the per-BL loop emits `orchestrator.wave.start`/`wave.done` boundary events as the flattened
+order crosses DAG layers, and `backlog_parsed` carries the `waves` shape. **concurrency=1
+within a wave — the proposal's "degenerate case": byte-identical per-BL semantics, the
+delicate per-BL body TOUCHED ZERO; OFF = exactly today.** 6 new tests (test_wave_scheduler.py),
+full suite **532 passed, 1 skipped**. This is pure scaffolding (no runtime win yet) — the
+schedule the operator sees at the PO gate is now the one that runs. **NEXT (Phase 3):
+reindex-AT-the-wave-barrier (1/wave not 2/BL) = the measurable wall-clock win; then raise
+concurrency>1 for true intra-wave parallelism (the async event-stream merge — the genuinely
+risky part, its own phase + live proof). Phase 4: conflict-resolver agent at the barrier +
+accept-on-scratch-assembled-branch.** Flags `wave_execution` (Phase 2) stays OFF until
+live-proven by a real sprint.
+
+dev≡main≡origin≡remote(180) @ `efa9da9`→Phase-2 commit. Relates to [[arch_live_acceptance_loop]]
 (CONVERGED), [[arch_zero_escape_chain]], [[feedback_baseline_auth_inscope]],
 [[arch_doctrine_contract]] (I-2).

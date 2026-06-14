@@ -1222,6 +1222,11 @@ class RunBriefRequest(BaseModel):
     # (retry_reframed / defer / escalate) instead of halting the sprint. DEFAULT OFF
     # until live-proven on a hard feature.
     run_architect: bool = False
+    # Wave-execution Phase 2 (operator 2026-06-14): schedule BLs by the R21
+    # dependency DAG into topological waves + emit wave.start/done boundaries.
+    # Phase 2 runs each wave at concurrency=1 (identical per-BL semantics); OFF =
+    # today's flat sequential order. DEFAULT OFF (rollback) until live-proven.
+    wave_execution: bool = False
     # A48 pre-flight disk-free check (2026-06-01). Default advisory:
     # the check ALWAYS runs and emits an SSE event with the breakdown,
     # but only refuses the run (HTTP 409) when enforce=True. This
@@ -1480,6 +1485,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 warm_retrieval=req.warm_retrieval,
                 acceptance_timeout=req.acceptance_timeout,
                 min_ui_coverage_ratio=req.min_ui_coverage_ratio,
+                wave_execution=req.wave_execution,
             ):
                 # Track current_bl from bl.start so 409 responses can name it.
                 if event.get("phase") == "orchestrator.bl.start":
