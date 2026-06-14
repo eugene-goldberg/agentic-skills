@@ -3514,6 +3514,54 @@ async def _merge_streams(factories, concurrency):
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def _run_wave_concurrent(bl_specs, assembler, concurrency):
+    """Run a wave's BLs concurrently, then assemble their work-branches in fixed
+    BL-id order (PROPOSAL_WAVE_CONCURRENCY.md Strategy A, step 3b - the concurrent
+    wave orchestration the wave loop drives when wave_concurrency > 1).
+
+    `bl_specs`: list of (bl_id, factory) in BL-id (assembly) order. Each `factory`
+      is a zero-arg callable returning an async iterator of the BL events; the BL
+      signals completion by yielding ONE event
+      {"_wave_bl_done": {"bl_id", "work_branch"?, "outcome", ...}} - the structured
+      result, read AFTER its stream ends (NOT the cosmetic interleaving). A BL is
+      eligible for assembly only when outcome == "ready" and a work_branch is given.
+    `assembler`: async fn(bl_id, work_branch) -> merge dict (merge_branch_into_target).
+    `concurrency`: max BLs draining at once (the fan-in cap).
+
+    Yields ("event", bl_id, ev) for live per-BL events as they arrive, then
+    ("assembly", bl_id, merge) per assembled BL, then ("wave_done", None, summary).
+    DETERMINISTIC: assembly runs in `bl_specs` order regardless of which BL finished
+    first; a BL that did not reach outcome=="ready", errored, or whose assembly
+    conflicts is left unassembled and surfaced (no-abort: the caller routes it on).
+    """
+    factories = [f for (_b, f) in bl_specs]
+    idx_to_bid = {i: b for i, (b, _f) in enumerate(bl_specs)}
+    results: dict = {}
+    async for idx, ev in _merge_streams(factories, concurrency):
+        if isinstance(ev, dict) and "_wave_bl_done" in ev:
+            r = ev["_wave_bl_done"]
+            results[r.get("bl_id", idx_to_bid.get(idx))] = r
+        elif isinstance(ev, dict) and "_stream_error" in ev:
+            b = idx_to_bid.get(ev.get("_idx", idx))
+            results[b] = {"bl_id": b, "outcome": "stream_error", "error": ev.get("_stream_error")}
+        else:
+            yield ("event", idx_to_bid.get(idx), ev)
+    assembled = []
+    for bid, _f in bl_specs:
+        r = results.get(bid)
+        work_branch = (r or {}).get("work_branch")
+        if not r or r.get("outcome") != "ready" or not work_branch:
+            assembled.append({"bl_id": bid, "assembled": False,
+                              "reason": (r or {}).get("outcome", "no_result")})
+            continue
+        merge = await assembler(bid, work_branch)
+        assembled.append({"bl_id": bid, "assembled": bool(merge.get("ok")),
+                          "kind": merge.get("kind"),
+                          "conflict_files": merge.get("conflict_files")})
+        yield ("assembly", bid, merge)
+    yield ("wave_done", None, {"results": results, "assembled": assembled})
+
+
 def _ensure_on_agent_branch(repo_dir: Path) -> dict:
     """Structural fix (2026-06-06, Ops/Steward proposal §9): put the target
     checkout on the configured ``agent_branch`` at run start.
