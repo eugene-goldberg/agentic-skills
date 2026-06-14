@@ -1227,6 +1227,10 @@ class RunBriefRequest(BaseModel):
     # Phase 2 runs each wave at concurrency=1 (identical per-BL semantics); OFF =
     # today's flat sequential order. DEFAULT OFF (rollback) until live-proven.
     wave_execution: bool = False
+    # Wave concurrency (PROPOSAL_WAVE_CONCURRENCY.md, Strategy A). Max BLs run
+    # concurrently within a wave. DEFAULT 1 = byte-identical to the live-proven
+    # serial scaffolding; >1 is opt-in and currently inert until the fan-in lands.
+    wave_concurrency: int = Field(1, ge=1, le=16)
     # A48 pre-flight disk-free check (2026-06-01). Default advisory:
     # the check ALWAYS runs and emits an SSE event with the breakdown,
     # but only refuses the run (HTTP 409) when enforce=True. This
@@ -1486,6 +1490,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 acceptance_timeout=req.acceptance_timeout,
                 min_ui_coverage_ratio=req.min_ui_coverage_ratio,
                 wave_execution=req.wave_execution,
+                wave_concurrency=req.wave_concurrency,
             ):
                 # Track current_bl from bl.start so 409 responses can name it.
                 if event.get("phase") == "orchestrator.bl.start":

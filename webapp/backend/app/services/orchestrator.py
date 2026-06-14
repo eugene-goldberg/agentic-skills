@@ -3548,6 +3548,9 @@ async def run_brief(
     warm_retrieval: bool = True,  # A56 (operator 2026-06-07): warm the LOCAL
                                   # retrieval backend before the PO so the first
                                   # agent isn't grounding-blind. Flag = rollback.
+    wave_concurrency: int = 1,  # PROPOSAL_WAVE_CONCURRENCY.md Strategy A: max BLs
+                                # concurrent within a wave. DEFAULT 1 = serial
+                                # scaffolding (live-proven); >1 inert until fan-in.
     wave_execution: bool = False,  # wave-execution Phase 2 (operator 2026-06-14):
                                    # schedule BLs by the R21 dependency DAG into
                                    # topological WAVES and emit wave.start/done
