@@ -40,6 +40,9 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
+import tempfile
+from uuid import uuid4
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -188,6 +191,19 @@ class FindingsLedger:
         if not self.path.exists():
             self.path.touch()
 
+    def _lock_path(self) -> Path:
+        """A STABLE sidecar lock file (never inode-rotated, unlike the data file
+        which ``_write_all_unlocked`` atomically replaces). All writers flock THIS
+        instead of ``self.path``: locking the data file is broken because
+        ``tmp.replace(self.path)`` rotates the inode out from under the flock, so a
+        concurrent writer would lock the unlinked old inode, read a STALE snapshot,
+        and clobber the first writer's findings (the concurrent-append data-loss
+        race — confirmed on git/remote where thread timing exposes it). Lives under
+        the OS temp dir keyed by the resolved data path: host-local, stable for the
+        run, never swept into the committed in-target acceptance evidence."""
+        h = hashlib.sha256(str(self.path.resolve()).encode()).hexdigest()[:16]
+        return Path(tempfile.gettempdir()) / f"findings_ledger_{h}.lock"
+
     def _read_all_unlocked(self) -> list[Finding]:
         if not self.path.exists():
             return []
@@ -206,7 +222,8 @@ class FindingsLedger:
         return out
 
     def _write_all_unlocked(self, findings: Iterable[Finding]) -> None:
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp = self.path.with_suffix(
+            self.path.suffix + f".{os.getpid()}.{uuid4().hex}.tmp")
         with tmp.open("w", encoding="utf-8") as fh:
             for f in findings:
                 fh.write(f.to_jsonl() + "\n")
@@ -236,7 +253,7 @@ class FindingsLedger:
             report_path=report_path,
         )
 
-        with self.path.open("a+", encoding="utf-8") as lockfh:
+        with self._lock_path().open("a+", encoding="utf-8") as lockfh:
             fcntl.flock(lockfh.fileno(), fcntl.LOCK_EX)
             try:
                 current = self._read_all_unlocked()
@@ -272,7 +289,7 @@ class FindingsLedger:
                 f"{sorted(VALID_VERDICTS)}"
             )
         self._ensure_parent()
-        with self.path.open("a+", encoding="utf-8") as lockfh:
+        with self._lock_path().open("a+", encoding="utf-8") as lockfh:
             fcntl.flock(lockfh.fileno(), fcntl.LOCK_EX)
             try:
                 current = self._read_all_unlocked()
@@ -317,7 +334,7 @@ class FindingsLedger:
                 f"{sorted(VALID_DISPATCH_STATES)}"
             )
         self._ensure_parent()
-        with self.path.open("a+", encoding="utf-8") as lockfh:
+        with self._lock_path().open("a+", encoding="utf-8") as lockfh:
             fcntl.flock(lockfh.fileno(), fcntl.LOCK_EX)
             try:
                 current = self._read_all_unlocked()
