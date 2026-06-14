@@ -55,6 +55,18 @@ Canonical statement of the vision: [`THESIS.md`](THESIS.md).
 
 > **There is no time pressure. There is only quality pressure.**
 
+> **BINDING DIRECTIVE (operator 2026-06-14):** *Never make any claim, assumption,
+> assertion, observation, proposal, etc. — unless you have done your homework and
+> have gained a true 95% confidence in what you are about to state.* This governs
+> every output: diagnoses, findings, status reports, "it works", "it's done",
+> proposals, and even casual observations. "Done your homework" means you verified
+> against a re-openable artifact (a command that ran, a file that exists, a test
+> that passed, a log line that says what you claim) — not intuition, plausibility,
+> or pattern-matching. Below 95%, either do the work to get there, or state the
+> claim WITH its confidence and the check that would resolve it ("~70%, verifying X
+> now"). This is the same floor as Rule 6 below, elevated to a standing directive
+> over *all* statements.
+
 Take as much time as you need to research, build evidence, and verify
 before stating any conclusion. A wrong answer arrived at quickly is
 worse than a correct answer arrived at slowly — wrong answers cost
