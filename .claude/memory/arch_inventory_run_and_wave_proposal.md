@@ -78,6 +78,20 @@ risky part, its own phase + live proof). Phase 4: conflict-resolver agent at the
 accept-on-scratch-assembled-branch.** Flags `wave_execution` (Phase 2) stays OFF until
 live-proven by a real sprint.
 
-dev≡main≡origin≡remote(180) @ `efa9da9`→Phase-2 commit. Relates to [[arch_live_acceptance_loop]]
+**Phase 3 SHIPPED 2026-06-14 (`22bb1d0`, remote-first).** Reindex AT the wave barrier
+(1/wave) instead of 2/BL — the measurable wall-clock win, same `wave_execution` flag. The 3
+per-BL reindexes (reindex_after_engineer ×2 incl. A59 path, reindex_after_qa) are guarded by
+`if not wave_execution`; in wave mode ONE `reindex_after_wave.<n>` fires at each barrier
+(between waves so the dependent next wave grounds on the completed wave's merges; + a final
+one for acceptance/pattern-profile). Correctness = R21 invariant (same-wave BLs independent →
+ground on the previous barrier's index). Inventory (4 BLs, 2 waves): 8 reindexes → 2 (~2×
+cut). OFF path unchanged; remote full suite 533 passed. **Reindex-at-barrier behavior `[~]`
+pending a live wave_execution=True sprint** (the natural next milestone: live-prove Phases
+1–3 together on a real brief). Remaining proposal phases: concurrency>1 true intra-wave
+parallelism (the async event-stream merge — riskiest, own phase) + Phase 4 conflict-resolver
++ accept-on-scratch-branch. First substantial REMOTE-FIRST code work (edited+tested+committed
++pushed all on 180; Mac pulled) — also surfaced+fixed the [[arch_findings_ledger_race]].
+
+dev≡main≡origin≡remote(180) @ `22bb1d0`. Relates to [[arch_live_acceptance_loop]]
 (CONVERGED), [[arch_zero_escape_chain]], [[feedback_baseline_auth_inscope]],
 [[arch_doctrine_contract]] (I-2).
