@@ -297,10 +297,25 @@ def _persist_brief_in_worktree(
     return target
 
 
-async def _run_indexers(repo_dir: Path, label: str) -> AsyncIterator[dict]:
-    """Run claude-context + graphify, in parallel. Incremental by provider design."""
-    yield _evt(f"{label}.start")
-    cc_task = asyncio.create_task(run_claude_context_index(repo_dir))
+async def _run_indexers(repo_dir: Path, label: str,
+                        reindex_incremental: bool = False) -> AsyncIterator[dict]:
+    """Run claude-context + graphify, in parallel.
+
+    claude-context op selection (graphify is always its own incremental AST cache):
+    - reindex_incremental OFF -> "index" everywhere (full re-embed; the pre-2026-06-15
+      behaviour, byte-identical rollback).
+    - ON -> index_initial uses "index_baseline" (full embed + establishes the merkle
+      snapshot) and every reindex_after_* barrier uses "reindex" (embeds ONLY files
+      changed since the snapshot; full-index fallback if the collection is missing).
+    """
+    if not reindex_incremental:
+        _cc_op = "index"
+    elif label == "index_initial":
+        _cc_op = "index_baseline"
+    else:
+        _cc_op = "reindex"
+    yield _evt(f"{label}.start", cc_op=_cc_op)
+    cc_task = asyncio.create_task(run_claude_context_index(repo_dir, op=_cc_op))
     gr_task = asyncio.create_task(run_graphify_update(repo_dir))
     cc, gr = await asyncio.gather(cc_task, gr_task, return_exceptions=True)
     yield _evt(
@@ -3698,6 +3713,12 @@ async def run_brief(
                                    # OFF = today's flat sequential order. Flag =
                                    # rollback. Parallelism + reindex-at-barrier
                                    # are later phases that build on this schedule.
+    reindex_incremental: bool = False,  # reindex incremental short-circuit (operator
+                                        # 2026-06-15): ON => index_initial establishes a
+                                        # merkle snapshot (op=index_baseline) and each
+                                        # reindex_after_* barrier embeds ONLY changed files
+                                        # (op=reindex) vs a full re-embed. DEFAULT OFF =
+                                        # byte-identical full-index rollback.
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -3764,7 +3785,7 @@ async def run_brief(
         yield _ensure_on_agent_branch(repo_dir)
 
         # ── Step 2-3: initial indexing ─────────────────────────────────────────
-        async for e in _run_indexers(repo_dir, "index_initial"):
+        async for e in _run_indexers(repo_dir, "index_initial", reindex_incremental=reindex_incremental):
             yield e
 
         # ── Step 3.5: retrieval readiness gate (A56) ───────────────────────────
@@ -4257,13 +4278,13 @@ async def run_brief(
                 # Wave Phase 3: in wave mode the post-engineer reindex is deferred
                 # to the wave barrier (1/wave); same-wave BLs are independent.
                 if not wave_execution:
-                    async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}"):
+                    async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}", reindex_incremental=reindex_incremental):
                         yield e
             else:
                 # Reindex post-engineer (only when engineer actually committed).
                 # Wave Phase 3: deferred to the wave barrier in wave mode.
                 if not wave_execution:
-                    async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}"):
+                    async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}", reindex_incremental=reindex_incremental):
                         yield e
 
             # QA
@@ -4390,7 +4411,7 @@ async def run_brief(
             # Reindex post-QA (QA may add characterization tests).
             # Wave Phase 3: deferred to the wave barrier in wave mode.
             if not wave_execution:
-                async for e in _run_indexers(repo_dir, f"reindex_after_qa.{bl_id}"):
+                async for e in _run_indexers(repo_dir, f"reindex_after_qa.{bl_id}", reindex_incremental=reindex_incremental):
                     yield e
 
             # Scorer
@@ -4515,7 +4536,7 @@ async def run_brief(
                 yield _evt("wave.done", wave=_wi)
                 # Barrier reindex so the next dependent wave (and acceptance)
                 # grounds on the just-assembled wave's merged code.
-                async for e in _run_indexers(repo_dir, f"reindex_after_wave.{_wi}"):
+                async for e in _run_indexers(repo_dir, f"reindex_after_wave.{_wi}", reindex_incremental=reindex_incremental):
                     yield e
                 _checkpoint(current_bl=None)  # A7
             terminal_status = "sprint_complete"
@@ -4538,7 +4559,7 @@ async def run_brief(
                         # Wave Phase 3: ONE reindex at the barrier (replaces the 2
                         # per-BL reindexes) so the next dependent wave grounds on
                         # the just-completed wave's merged code.
-                        async for e in _run_indexers(repo_dir, f"reindex_after_wave.{_prev_wave}"):
+                        async for e in _run_indexers(repo_dir, f"reindex_after_wave.{_prev_wave}", reindex_incremental=reindex_incremental):
                             yield e
                     yield _evt("wave.start", wave=_wi,
                                bls=[i.id for i in _waves[_wi]])
@@ -4558,7 +4579,7 @@ async def run_brief(
             yield _evt("wave.done", wave=_prev_wave)
             # Wave Phase 3: final barrier reindex so acceptance + pattern-profile
             # ground on the fully assembled feature.
-            async for e in _run_indexers(repo_dir, f"reindex_after_wave.{_prev_wave}"):
+            async for e in _run_indexers(repo_dir, f"reindex_after_wave.{_prev_wave}", reindex_incremental=reindex_incremental):
                 yield e
 
         terminal_status = "sprint_complete"  # A7: flip from default "aborted"

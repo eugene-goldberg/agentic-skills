@@ -114,7 +114,7 @@ async def run_graphify_update(repo_path: Path) -> dict:
     return summary
 
 
-async def run_claude_context_index(repo_path: Path) -> dict:
+async def run_claude_context_index(repo_path: Path, op: str = "index") -> dict:
     """Spawn the Node bridge with op=index. Requires env: EMBEDDING_PROVIDER,
     AZURE_OPENAI_*/OPENAI_API_KEY, MILVUS_ADDRESS, MILVUS_TOKEN.
     """
@@ -124,7 +124,7 @@ async def run_claude_context_index(repo_path: Path) -> dict:
             "error": f"bridge.js not found at {BRIDGE_SCRIPT}. "
                      "Run a semantic_search once via the langgraph harness to regenerate it.",
         }
-    cmd = ["node", str(BRIDGE_SCRIPT), json.dumps({"op": "index", "repo": str(repo_path)})]
+    cmd = ["node", str(BRIDGE_SCRIPT), json.dumps({"op": op, "repo": str(repo_path)})]
     code, stdout, stderr = await _run(cmd, cwd=BRIDGE_DIR, timeout=900)
     summary: dict = {"ok": code == 0, "exit_code": code}
     last = stdout.strip().splitlines()
