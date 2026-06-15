@@ -49,6 +49,21 @@ note: `/run-acceptance` is single-shot (no reround); re-runs need a FRESH run_id
 collides on the leaked `agent/accept-*` branch). 8 leaked accept branches + a 26h-old vite proc =
 hygiene debt.
 
-**Still open:** wave concurrency>1 (Strategy A LOCKED, designed in PROPOSAL_WAVE_CONCURRENCY.md,
-NOT built) — the operator wants true intra-wave parallelism; concurrency=1 scaffolding is now
-live-proven so it can be built on a verified base. See [[feedback_remote_first_dev]].
+**Wave concurrency>1 (Strategy A) — BUILT + LIVE-PROVEN `[x]` 2026-06-15** on branch
+`wave-concurrency` @ `3e7efd5` (NOT yet merged to dev/main). Primitives: `_merge_streams` (async
+fan-in), `merge_branch_into_target` (real 3-way barrier merge, git_worktree.py:264),
+`_run_wave_concurrent` (orchestration), `_one_bl_concurrent` + the `_concurrent_wave_mode` dispatch
+in run_brief (orchestrator.py, _run_wave_concurrent CALLED at :4461). Flag `wave_concurrency:int=1`
+(>1 opt-in; serial path byte-identical, 557 tests). LIVE PROOF run-20260615T010822Z-36f623
+(fullstack-ecommerce-app, wave_concurrency=2, 2 independent diag endpoints → 1 wave
+[BL-0001,BL-0002]): both engineers spawned the SAME second (013146Z trace dirs), overlapping
+engineer.start before either done, 2 claude agents ran concurrently, both emitted `work_ready`
+(defer-merge); barrier assembled both ok:true in BL-id order (BL-0001 noop, BL-0002 real 3-way
+merge), 0 conflicts; both merged_full; DiagPing+DiagTime controllers+tests delivered to integration
+@ 07ab2cd (sprint_complete was pending the barrier reindex at report time — terminal formality,
+run_acceptance=False). **OPEN NUANCE to investigate:** BL-0001 assembled as `noop` (already in
+integration) + its commits sit directly on integration while BL-0002 came via a merge commit —
+suggests BL-0001 may not have FULLY deferred its trunk merge (likely the engineer non_ff rebase
+path or QA merge_target lineage landing it early). Harmless here (both delivered, no conflict) but
+could matter under a real file conflict — needs a follow-up + a deliberately-conflicting-pair live
+test before merging concurrency>1 to dev/main. See [[feedback_remote_first_dev]].
