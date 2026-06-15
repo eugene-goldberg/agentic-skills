@@ -298,7 +298,7 @@ def _persist_brief_in_worktree(
 
 
 async def _run_indexers(repo_dir: Path, label: str,
-                        reindex_incremental: bool = False) -> AsyncIterator[dict]:
+                        reindex_incremental: bool = True) -> AsyncIterator[dict]:
     """Run claude-context + graphify, in parallel.
 
     claude-context op selection (graphify is always its own incremental AST cache):
@@ -3713,12 +3713,13 @@ async def run_brief(
                                    # OFF = today's flat sequential order. Flag =
                                    # rollback. Parallelism + reindex-at-barrier
                                    # are later phases that build on this schedule.
-    reindex_incremental: bool = False,  # reindex incremental short-circuit (operator
-                                        # 2026-06-15): ON => index_initial establishes a
-                                        # merkle snapshot (op=index_baseline) and each
-                                        # reindex_after_* barrier embeds ONLY changed files
-                                        # (op=reindex) vs a full re-embed. DEFAULT OFF =
-                                        # byte-identical full-index rollback.
+    reindex_incremental: bool = True,  # reindex incremental short-circuit (operator
+                                       # 2026-06-15): index_initial establishes a merkle
+                                       # snapshot (op=index_baseline) and each
+                                       # reindex_after_* barrier embeds ONLY changed files
+                                       # (op=reindex) vs a full re-embed. DEFAULT ON
+                                       # (live-proven df8c69: 4.4s vs 900s, no silent
+                                       # drop); set False for the full-index rollback.
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 

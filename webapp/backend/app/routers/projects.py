@@ -1233,11 +1233,11 @@ class RunBriefRequest(BaseModel):
     # BL-id-ordered barrier assembly), LIVE-PROVEN 2026-06-15: happy-path,
     # conflicting-pair, and 3-wide/multi-wave scale.
     wave_concurrency: int = Field(1, ge=1, le=16)
-    # Reindex incremental short-circuit (operator 2026-06-15). When True the
-    # claude-context barrier reindexes embed only changed files (op=reindex) after a
-    # full index_baseline at index_initial, instead of a full re-embed each barrier.
-    # DEFAULT OFF = byte-identical full-index behaviour (rollback).
-    reindex_incremental: bool = False
+    # Reindex incremental short-circuit (operator 2026-06-15). The claude-context
+    # barrier reindexes embed only changed files (op=reindex) after a full
+    # index_baseline at index_initial, instead of a full re-embed each barrier.
+    # DEFAULT ON (live-proven); set False for the byte-identical full-index rollback.
+    reindex_incremental: bool = True
     # A48 pre-flight disk-free check (2026-06-01). Default advisory:
     # the check ALWAYS runs and emits an SSE event with the breakdown,
     # but only refuses the run (HTTP 409) when enforce=True. This

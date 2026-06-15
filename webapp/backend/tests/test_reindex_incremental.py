@@ -70,3 +70,16 @@ def test_run_claude_context_index_forwards_op(monkeypatch):
     # default stays "index" (rollback)
     asyncio.run(indexing.run_claude_context_index(Path("/tmp/x")))
     assert json.loads(captured["cmd"][-1])["op"] == "index"
+
+
+def test_reindex_incremental_default_is_on():
+    """Operator 2026-06-15: incremental barrier reindex is the DEFAULT for every crew
+    run. Lock the default ON in all three layers so an accidental flip-back is caught;
+    reindex_incremental=False remains the explicit full-index rollback."""
+    import inspect
+    from app.routers.projects import RunBriefRequest
+    assert inspect.signature(orch.run_brief).parameters["reindex_incremental"].default is True
+    assert inspect.signature(orch._run_indexers).parameters["reindex_incremental"].default is True
+    assert RunBriefRequest.model_fields["reindex_incremental"].default is True
+    # default-constructed request opts into incremental
+    assert RunBriefRequest(brief="x" * 30).reindex_incremental is True
