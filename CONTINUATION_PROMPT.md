@@ -29,10 +29,10 @@ human — grounded, self-correcting, honest, cumulative. Honor `.claude/memory/`
 
 ## VERIFIED CURRENT STATE (checked 2026-06-15)
 - **Git (agentic-skills), all synced Mac ≡ remote ≡ origin/GitHub:**
-  `development` = `main` = **`be37669`** (clean). `wave-concurrency` branch retained at
+  `development` = `main` = **`3ad9c9c`** (clean). `wave-concurrency` branch retained at
   `4265640` (its work is folded into dev/main).
-- **Remote harness**: uvicorn `127.0.0.1:8000`, **pid 2964357** (drifts on restart — re-check
-  `lsof -tnP -iTCP:8000 -sTCP:LISTEN`), on `development`. NO active run. **567 tests pass.**
+- **Remote harness**: uvicorn `127.0.0.1:8000`, **pid 3053123** (drifts on restart — re-check
+  `lsof -tnP -iTCP:8000 -sTCP:LISTEN`), on `development`. NO active run. **568 tests pass.**
 - **Services up**: Milvus (:19530), Ollama (bge-m3, :11434), `ecommerce-pg` (postgres:16 :5433).
 - **Target**: `fullstack-ecommerce-app` on `integration` @ **`07ab2cd`**, clean, throwaway test
   branches pruned. SEPARATE git repo (its own remote; NOT on the agentic-skills GitHub).
@@ -62,8 +62,8 @@ first — a backgrounded curl sharing the SSH stdin pipe races it → empty body
   fix (`6c5f45e`, resolves the BL-0001 noop nuance → kind=merged); conflicting-pair live-proof
   + I-5 `bl_outcomes` reconciliation (`1c7c02f`, → `escalated_assembly_conflict`); 3-wide +
   multi-wave scale (run-…041351Z-fc2e21, 5/5 merged, no resource blowup); FF merge + docs.
-- **`[x]` Reindex incremental short-circuit (`be37669`, flag `reindex_incremental`, DEFAULT
-  OFF)**: bridge op=index_baseline (snapshot-FIRST, then full embed) + op=reindex (incremental
+- **`[x]` Reindex incremental short-circuit (`be37669`; flag `reindex_incremental` **DEFAULT
+  ON** for every crew run, operator 2026-06-15, `3ad9c9c`; set False = full-index rollback)**: bridge op=index_baseline (snapshot-FIRST, then full embed) + op=reindex (incremental
   reindexByChange). Root cause: op=index always re-embedded ALL files; reindexByChange is the
   incremental path the harness never used. LIVE-PROVEN run-20260615T140733Z-df8c69: reindex
   4.4s vs the 900s-capped full embed (~200x), and a real search returns the wave-added
@@ -92,8 +92,8 @@ first — a backgrounded curl sharing the SSH stdin pipe races it → empty body
 
 ## HONEST VERIFICATION LEDGER
 `[x]` wave concurrency #1 scorer fix · `[x]` #2 conflict path + I-5 reconcile · `[x]` #3 scale
-(3-wide+multi-wave, no blowup) · `[x]` #4 merged dev/main · `[x]` #5 reindex incremental
-(df8c69: 4.4s vs 900s + wave .cs files indexed, no silent drop) · 567 tests pass remote ·
+(3-wide+multi-wave, no blowup) · `[x]` #4 merged dev/main · `[x]` #5 reindex incremental DEFAULT ON
+(df8c69: 4.4s vs 900s + wave .cs files indexed, no silent drop) · 568 tests pass remote ·
 `[ ]` index_initial 900s baseline-cap (pre-existing, non-blocking) · `[ ]` §3.3/§3.4 hardening.
 
 ---PROMPT END---

@@ -6,7 +6,8 @@ metadata:
 ---
 
 2026-06-15: SHIPPED the reindex-incremental short-circuit (`be37669`, dev≡main), flag
-`reindex_incremental` DEFAULT OFF (byte-identical full-index rollback). Operator-chosen +
+`reindex_incremental` **DEFAULT ON** for every crew run (operator 2026-06-15, `3ad9c9c`);
+`reindex_incremental=false` is the byte-identical full-index rollback. Operator-chosen +
 operator-gated (high blast radius: the bridge is the shared retrieval indexer for every agent).
 
 **Root cause** (claude-context-core 0.1.13): the bridge `op=index` calls
