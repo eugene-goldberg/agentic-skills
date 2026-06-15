@@ -1,13 +1,10 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-14. Supersedes all prior hand-offs. **Headline: two BINDING
-> WORKFLOW changes landed this session — (1) REMOTE-FIRST dev (all crew/harness code is
-> edited + tested on the remote `192.168.12.180`, synced remote→GitHub→Mac), and (2) a
-> 95%-verified-confidence directive over ALL statements. On capability: the live-acceptance
-> loop is CONVERGED+PROVEN, a 2nd clean feature (inventory/stock) shipped end-to-end, and the
-> operator-approved PARALLEL-WAVE-EXECUTION program has Phases 1–3 shipped (flag-OFF, not yet
-> live-proven). A real data-loss concurrency bug in the findings ledger was found (via
-> remote-first testing) and fixed.**
+> Hand-off written 2026-06-15. Supersedes all prior hand-offs. **Headline: this session
+> (1) delivered the ORDER FULFILLMENT feature 100% live-accepted, (2) live-proved the wave
+> program P1–P3, (3) fixed a real acceptance-reround harness bug, and (4) BUILT and
+> LIVE-PROVED wave concurrency>1 (true intra-wave parallelism) end-to-end. Concurrency lives
+> on branch `wave-concurrency` (NOT yet merged to dev/main) — two follow-ups gate the merge.**
 
 ---PROMPT START---
 
@@ -15,114 +12,91 @@ You are the **architect** of agentic-skills. Read `CLAUDE.md` + `THESIS.md` firs
 a fully autonomous AI crew that ships complex features into real brownfield repos with no
 human — grounded, self-correcting, honest, cumulative. Honor `.claude/memory/`.
 
-## TWO BINDING WORKFLOW DIRECTIVES (operator 2026-06-14) — read these first
+## TWO BINDING WORKFLOW DIRECTIVES (operator 2026-06-14) — still in force
 1. **REMOTE-FIRST development.** ALL crew/harness code (`webapp/`, `langgraph_engine/`,
-   `skills/`, `rubrics/`, tests) is **edited AND tested on the remote crew host
-   `192.168.12.180`**, then synced **remote → GitHub → Mac** (the Mac is a read-only mirror;
-   the old Mac→bundle→remote flow is RETIRED for code). See CLAUDE.md "Development workflow —
-   REMOTE-FIRST" + `.claude/memory/feedback_remote_first_dev.md`. Your Edit/Write tools target
-   the Mac FS, so remote edits go over SSH: Read the remote file (or the identical Mac mirror)
-   → apply a uniqueness-checked python in-place replace ON the remote → run the remote test
-   suite. Governance docs (CLAUDE.md, *.md, memory) MAY be Mac-authored but still flow through
-   GitHub so all hosts converge.
-2. **95% verified confidence before ANY claim.** Never state a claim/assumption/observation/
-   proposal without having done the homework to a true 95% confidence, verified against a
-   re-openable artifact (a command that ran, a file that exists, a test that passed, a log
-   line). Below 95%: state the confidence + the resolving check. CLAUDE.md top of "quality
-   over speed".
+   `skills/`, `rubrics/`, tests) is **edited AND tested on the remote `192.168.12.180`**,
+   then synced **remote → GitHub → Mac** (Mac = read-only mirror). Your Edit/Write target the
+   Mac FS, so remote edits go over SSH: read the file, apply a uniqueness-checked python
+   in-place replace ON the remote (for large/delicate edits, base64-transfer an edit script to
+   `/tmp` and run it — heredocs over SSH single-quotes mangle `'''`/apostrophes/`$`), run the
+   remote suite. See `.claude/memory/feedback_remote_first_dev.md`.
+2. **95% verified confidence before ANY claim.** Verify against a re-openable artifact (a
+   command that ran, a file that exists, a test that passed, a log line). Below 95%: state the
+   confidence + the resolving check. The operator caught real over-claims this session — hold to
+   "is it called yet (grep)?" / "what's the committed SHA + test count?" / "did a live run prove
+   it?" not prose.
 
-## VERIFIED CURRENT STATE (checked 2026-06-14)
-- **Git: Mac ≡ remote ≡ origin (dev≡main) @ `31f9f0e`, all clean.** The remote CAN push to
-  GitHub (deploy key wired — see below).
-- **Remote harness**: uvicorn `127.0.0.1:8000`, **pid 2085993**, health ok (drifts on restart —
-  re-check `lsof -tnP -iTCP:8000 -sTCP:LISTEN`). NO active run.
-- **Services up**: Milvus stack (standalone/minio/etcd, :19530), Ollama (bge-m3, :11434),
-  `ecommerce-pg` (postgres:16 :5433, db `ecommerce_dev`, user/pass `ecommerce`/`ecommerce`).
-- **Target**: `fullstack-ecommerce-app` on branch `integration` @ `3028cce` (inventory feature
-  delivered+accepted). Other target: `project-management-app`. Remote git is **2.25.1**.
-- **Remote full suite: 533 passed, 0 failed** (run `cd ~/dev/ai-projects/agentic-skills/webapp/
-  backend && .venv/bin/python -m pytest tests/ -p no:cacheprovider`; the bare `pytest` recurses
-  into symlinked `repos/` targets and errors — always scope to `tests/`).
+## VERIFIED CURRENT STATE (checked 2026-06-15)
+- **Git (agentic-skills), all synced Mac ≡ remote ≡ origin/GitHub:**
+  - `development` = `main` = **`50f86d5`** (acceptance reround worktree-collision FIX `c8ccc76`
+    + real-git integration test).
+  - **`wave-concurrency` = `f7419e9`** (the whole concurrency build, AHEAD of main; NOT merged).
+    Remote working tree + harness are on this branch. `557` tests pass (serial path byte-identical).
+- **Remote harness**: uvicorn `127.0.0.1:8000`, **pid 2495664** (drifts on restart — re-check
+  `lsof -tnP -iTCP:8000 -sTCP:LISTEN`), on `wave-concurrency` code (`3e7efd5`'s code; the later
+  `f7419e9` was docs/memory only). NO active run.
+- **Services up**: Milvus (:19530), Ollama (bge-m3, :11434), `ecommerce-pg` (postgres:16 :5433).
+- **Target**: `fullstack-ecommerce-app` on branch `integration` @ **`07ab2cd`** (carries the
+  order-fulfillment feature + the 2 diag endpoints from the concurrency live-proof), checkout
+  clean. The target is a SEPARATE git repo (its own remote; NOT on the agentic-skills GitHub).
 
 ## REMOTE ACCESS
-SSH: `ssh -i ~/.ssh/id_ed25519_18012 -o IdentitiesOnly=yes user@192.168.12.180` (user `user`;
-sudo needs an operator password we don't have). Strip banner noise:
-`grep -v "post-quantum\|store now\|may need to be upgraded\|openssh.com"`.
-- **Remote→GitHub auth**: deploy key `~/.ssh/id_ed25519_ghdeploy` (repo `core.sshCommand` set,
-  github.com in known_hosts). Operator added the pubkey to GitHub with write access → remote
-  push works. Remote-first loop: edit on remote → `pytest tests/` on remote → commit on remote
-  → `git push origin` on remote → Mac `git fetch && merge --ff-only origin/development`.
-  **Commit messages on the remote: use `git commit -F <file>` (NO backticks in `-m "..."` — the
-  remote shell command-substitutes them).**
-- **Harness restart** (after deploying code; no active run): `cd ~/dev/ai-projects/agentic-skills/
-  webapp/backend && nohup env PATH="$HOME/.local/bin:$PATH" .venv/bin/python -m uvicorn
-  app.main:app --host 127.0.0.1 --port 8000 >> ~/harness.log 2>&1 & disown`
-- Launch a sprint: `POST /api/projects/fullstack-ecommerce-app/run-brief` (payload =
-  brief + flags). Boot recipe / seeded users / ports: see `arch_live_acceptance_loop` memory.
+SSH: `ssh -i ~/.ssh/id_ed25519_18012 -o IdentitiesOnly=yes user@192.168.12.180`. Strip banner:
+`| grep -v "post-quantum\|store now\|may need to be upgraded\|openssh.com"`. Remote pushes to
+GitHub via deploy key (repo `core.sshCommand` set). Loop: edit on remote → `pytest tests/` on
+remote → commit on remote (`git commit -F <file>`; NO backticks in `-m`) → `git push origin` →
+Mac `git fetch && reset --hard origin/<branch>` (Mac-local governance edits get clobbered by
+reset — commit them on the remote first, as done this session). Harness restart (no active run):
+`cd ~/dev/ai-projects/agentic-skills/webapp/backend && nohup env PATH="$HOME/.local/bin:$PATH"
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 >> ~/harness.log 2>&1 &
+disown` — uvicorn has NO hot-reload; restart after deploying code edits, verify via source grep
+not sha. Run a sprint: `POST /api/projects/<repo>/run-brief` (payload = brief + flags); standalone
+acceptance: `POST /api/projects/<repo>/run-acceptance` (single-shot, needs a FRESH run_id).
 
 ## WHAT SHIPPED THIS SESSION (all verified)
-- **`[x]` Live-acceptance loop CONVERGED** — reviews `run-20260613T202407Z-013ac4`:
-  `acceptance.loop.accepted`, integrity_ok=true, full-app boot 5096/5173, authed submit 201,
-  evidence in-target. (See `arch_live_acceptance_loop`.)
-- **`[x]` Inventory & stock-enforcement feature delivered+accepted** — `run-20260614T025948Z-
-  0c2a26`, 4/4 merged_full, regression green, acceptance accepted, evidence in-target
-  (`3028cce`). The crew solved an un-telegraphed concurrency invariant (atomic
-  `ExecuteUpdateAsync WHERE Quantity>=qty`) unattended. 2nd clean live-acceptance delivery.
-  (`arch_inventory_run_and_wave_proposal`.) Operator scope decision: a crew MAY surgically fix
-  a genuine BLOCKING baseline defect (`feedback_baseline_auth_inscope`).
-- **`[x]` PARALLEL-WAVE-EXECUTION program, Phases 1–3 shipped** (operator-approved;
-  `PROPOSAL_PARALLEL_WAVE_EXECUTION.md`). All behind `wave_execution` flag, **DEFAULT OFF**:
-  - **P1 (R21)**: PO emits per-BL `**Dependencies:**` DAG + `**Exposes:**`/`**Consumes:**`
-    contracts; `validate_po` enforces (DAG well-formedness + contract coverage); fix-prompt in
-    the PO retry loop. (`backlog.dependency_report`/`contract_report`/`topological_waves`,
-    doctrine_spec R21, PO SKILL, CLAUDE.md table.)
-  - **P2 (scheduler)**: `orchestrator._dep_waves` groups BLs into topological waves; emits
-    `wave.start`/`wave.done`; concurrency=1 (degenerate, byte-identical per-BL semantics).
-  - **P3 (reindex-at-barrier)**: per-BL reindexes guarded off in wave mode; ONE
-    `reindex_after_wave.<n>` per barrier → 2/BL becomes 1/wave (inventory 8→2 reindexes).
-  - **`[~]` NOT live-proven**: the flag has never run a real sprint. Phases 1–3 are
-    unit-tested + OFF-path-regression-tested (533 passed) only.
-- **`[x]` findings-ledger data-loss race FIXED** (`8e7d5ed`) — flock was on the inode-rotated
-  data file → concurrent appends lost findings; now flock a stable sidecar `_lock_path()`. NOT
-  a flake (memory corrected: `arch_findings_ledger_race`). Matters under wave parallelism.
-- **`[x]` git-2.25 fixture portability FIXED** (`a46990e`) — `git init -b` → `init` +
-  `symbolic-ref`; took the remote suite from 22-failed to green. First remote-first commit.
+- **`[x]` ORDER FULFILLMENT feature 100% LIVE-ACCEPTED** — run-20260614T143621Z-0b7c91 (5 BLs,
+  state machine + RBAC + customer tracker UI + admin console UI). Acceptance found 2 real UI bugs,
+  auto-fixed them, then a harness reround bug forced an escalation → FIXED (`c8ccc76`) → re-run
+  `reacc2` integrity_ok=true, 11/11 journeys. A55-class baseline-lint false-red hand-fixed (target
+  `cf20499`). integration @ delivered. See `.claude/memory/arch_order_fulfillment_wave_proof.md`.
+- **`[x]` Wave program P1+P2+P3 LIVE-PROVEN** — the order-fulfillment run ran with
+  `wave_execution=True`: R21 DAG gate, 4 waves, 4 barrier reindexes (1/wave, 0 per-BL), regression
+  green.
+- **`[x]` Acceptance-reround worktree-collision bug FIXED** (`c8ccc76`, on dev/main) —
+  `_accept_worktree_task_id` (round-unique branch) + real-git integration test. End-to-end reround
+  `[~]` (mechanism proven; a natural reround not yet observed clean).
+- **`[x]` WAVE CONCURRENCY>1 BUILT + LIVE-PROVEN** (branch `wave-concurrency` @ `f7419e9`, Strategy
+  A). Primitives: `_merge_streams` (async fan-in), `merge_branch_into_target` (real 3-way barrier
+  merge, `git_worktree.py:264`), `_run_wave_concurrent` (orchestration), `_one_bl_concurrent` +
+  the `_concurrent_wave_mode` dispatch in `run_brief` (`orchestrator.py`; `_run_wave_concurrent`
+  CALLED at ~`:4461`). Flag `wave_concurrency:int=1` (>1 opt-in; serial byte-identical). LIVE PROOF
+  run-20260615T010822Z-36f623 (`wave_concurrency=2`, 2 independent diag endpoints → 1 wave
+  [BL-0001,BL-0002]): both engineers spawned the SAME second, overlapping, 2 concurrent agents,
+  both `work_ready` (defer-merge); assembled both ok in BL-id order (0 conflicts); both
+  merged_full; delivered to integration; `sprint_complete`; checkout clean back on `integration`.
+  **Only BL-0001+BL-0002 verified concurrent — happy-path, disjoint, 2-wide, single wave, one run.**
 
-## SUGGESTED NEXT STEPS (operator-gated; propose before doing)
-0. **FIRST ACTION (operator-directed 2026-06-14): deliver the ORDER FULFILLMENT LIFECYCLE
-   feature** on `fullstack-ecommerce-app`. The locked-ready brief is
-   `PROPOSAL_FEATURE_order_fulfillment.md` — a major feature with a real backend state machine
-   + RBAC (admin advances Pending→Processing→Completed; owner cancels while Pending; all
-   authorization server-side) AND two distinct, separately-verifiable UI surfaces (a customer
-   status tracker + Cancel button; an admin order-management console). It is grounded in the
-   live code (the `OrderStatus`/`UserRole` enums + `OrderManagement` service exist but the
-   transition flow does NOT — verified). **Run it with `wave_execution=True`** so it ALSO
-   live-proves the wave program (Phases 1–3) end-to-end in one shot: the PO emits an R21
-   DAG/contracts (the feature decomposes cleanly: status model → admin-advance → owner-cancel →
-   customer tracker UI → admin console UI), the scheduler runs waves, and reindex fires at the
-   barrier. Verify in the run: PO gate accepts the DAG; `orchestrator.wave.start/done`;
-   `reindex_after_wave.*` (not per-BL); `acceptance.loop.accepted` with both the API journeys
-   (admin-advance, non-admin 403, owner-cancel-while-Pending, cross-user cancel 403, illegal
-   transition rejected) and the UI journeys (customer tracker, owner-only Cancel, admin console,
-   admin-only access) green + screenshots; regression checkpoint green. Read the proposal's
-   §"Falsifiable failure predictions" (P1–P5) as the watch-list. If `wave_execution=True`
-   misbehaves, fall back to OFF (sequential) to deliver the feature, then debug the flag
-   separately — do NOT let an unproven flag block the feature.
-1. **LIVE-PROVE wave Phases 1–3** — folded into step 0 above (running order-fulfillment with
-   `wave_execution=True` IS the live proof). The honest `[x]` for P1–P3 lands when that run
-   shows the DAG-gate + wave events + reindex_after_wave + clean acceptance.
-2. **Wave Phase: concurrency>1** (true intra-wave parallelism — the async event-stream merge).
-   The riskiest phase; its own careful implementation + live proof. Only after step 0 proves the
-   concurrency=1 scaffolding works live.
-3. **Wave Phase 4**: conflict-resolver agent at the barrier + accept-on-scratch-assembled-branch.
-4. **Reindex incremental / has_index short-circuit into `index_initial`** — independent
-   remote-speed win (every run re-indexes ~15min even when the collection is populated).
+## OPEN FOLLOW-UPS (gate the `wave-concurrency` → dev/main merge)
+1. **BL-0001 noop/early-merge NUANCE (investigate first).** In the proof, BL-0001 assembled as
+   `kind:noop` (already in integration) and its commits sit DIRECTLY on integration while BL-0002
+   came via a merge commit — suggests BL-0001 may not have FULLY deferred its trunk merge (likely
+   the engineer non_ff rebase path or QA `merge_target_override` lineage landing it early). Harmless
+   on disjoint BLs, but under a real file conflict it could matter. Root-cause in `_one_bl_concurrent`
+   + `_engineer_flow(defer_merge)` rebase path + `_qa_or_scorer_flow(merge_target_override)`.
+2. **Conflicting-pair live test** — run a `wave_concurrency=2` sprint with two BLs that edit the
+   SAME file/line, prove `merge_branch_into_target` reports `conflict` + the BL routes to no-abort +
+   siblings still assemble + trunk stays deterministic. This is the untested half of Strategy A.
+3. **Scale** — a 3+ BL wave and/or multi-wave concurrent run (concurrency cap = `min(wave,flag,
+   cpu//2)`); confirm no resource blowup.
+4. **THEN merge `wave-concurrency` → development → main** (FF), restart harness, update CLAUDE.md
+   R-table/doc-index for `wave_concurrency`.
+5. Lower priority: reindex incremental/has_index short-circuit; leaked `agent/accept-*` branches +
+   stale vite procs hygiene; the A55-class diff-scope-acceptance-lint crew fix.
 
 ## HONEST VERIFICATION LEDGER
-`[x]` live-acceptance CONVERGED · `[x]` inventory delivered+accepted · `[x]` wave P1–P3
-code-complete + 533 remote tests green (OFF path) · `[x]` findings-ledger race fixed
-(5/5) · `[x]` git-2.25 fix (remote green) · `[x]` remote-first loop proven end-to-end ·
-`[x]` 95% directive + remote-first in CLAUDE.md · `[~]` wave_execution=True NEVER run a
-live sprint (the standing next milestone) · `[~]` concurrency>1 parallelism unbuilt.
+`[x]` order-fulfillment 100% accepted · `[x]` wave P1–P3 proven · `[x]` reround worktree fix
+(c8ccc76, real-git tested) · `[x]` concurrency>1 BUILT + LIVE-PROVEN happy-path (run-…36f623, 2
+disjoint BLs) · `[~]` concurrency conflict-path NOT tested · `[~]` concurrency scale (3+ / multi-
+wave) NOT tested · `[~]` BL-0001 full-defer nuance OPEN · `[ ]` concurrency NOT merged to dev/main.
 
 ---PROMPT END---
