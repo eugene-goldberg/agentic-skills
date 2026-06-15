@@ -37,10 +37,13 @@ search; unit-green is not enough. [[feedback_honest_verification]]
 embed (~200x); a real search of the live Milvus collection returns the wave-added
 DiagAlpha/DiagBetaController.cs (+ their tests) as INDEXED relativePaths → no silent drop.
 
-**PRE-EXISTING follow-up surfaced (NOT fixed here):** index_initial's full `indexCodebase` of
+**PRE-EXISTING follow-up (NOW FIXED 2026-06-15, `14a1d1b`):** index_initial's full `indexCodebase` of
 fullstack-ecommerce-app (~280 files) EXCEEDS the 900s timeout on CPU bge-m3 and is TRUNCATED →
 the baseline index is PARTIAL on every run (flag on or off). This is THE likely reason agents
 sometimes "ground blind". Orthogonal to the incremental reindex (which reliably indexes the wave
 delta). Fix options: raise/stream the index_initial budget, batch embeds, or GPU embeddings.
 See [[arch_retrieval_has_index_shortcircuit]] (has_index guards the SEARCH path, not
 index_initial/reindex) and [[arch_ollama_embed_string_hang]]. [[feedback_remote_first_dev]]
+
+
+**FIX (operator-approved, `14a1d1b`): marker-gated complete baseline + 3h op-aware timeout.** op=index_baseline: if a baseline-complete marker exists AND the collection has rows -> reindexByChange (fast incremental); else snapshot-FIRST + full indexCodebase, writing `~/.context/baseline_complete/<collection>.json` ONLY on a verified status:completed (a timeout writes no marker -> retries; a capped partial embed is never mistaken for complete; has_rows guards a Milvus wipe). indexing.run_claude_context_index timeout is op-aware: INDEX_BASELINE_TIMEOUT_S default 10800 (3h) for index/index_baseline, 900 for reindex/search (REINDEX_TIMEOUT_S). LIVE-PROVEN on fullstack-ecommerce-app: 1st index_baseline completed the FULL embed in 2478s (~41min, 409 files / 2708 chunks) + wrote the marker; 2nd index_baseline = 2s incremental (mode:incremental_baseline_complete); complete baseline searchable (Product/Order controllers etc.). One-time ~41min full embed per repo (≤3h), then 2s incremental forever. 569 tests.

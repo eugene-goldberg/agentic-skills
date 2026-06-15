@@ -29,10 +29,10 @@ human — grounded, self-correcting, honest, cumulative. Honor `.claude/memory/`
 
 ## VERIFIED CURRENT STATE (checked 2026-06-15)
 - **Git (agentic-skills), all synced Mac ≡ remote ≡ origin/GitHub:**
-  `development` = `main` = **`3ad9c9c`** (clean). `wave-concurrency` branch retained at
+  `development` = `main` = **`14a1d1b`** (clean). `wave-concurrency` branch retained at
   `4265640` (its work is folded into dev/main).
 - **Remote harness**: uvicorn `127.0.0.1:8000`, **pid 3053123** (drifts on restart — re-check
-  `lsof -tnP -iTCP:8000 -sTCP:LISTEN`), on `development`. NO active run. **568 tests pass.**
+  `lsof -tnP -iTCP:8000 -sTCP:LISTEN`), on `development`. NO active run. **569 tests pass.**
 - **Services up**: Milvus (:19530), Ollama (bge-m3, :11434), `ecommerce-pg` (postgres:16 :5433).
 - **Target**: `fullstack-ecommerce-app` on `integration` @ **`07ab2cd`**, clean, throwaway test
   branches pruned. SEPARATE git repo (its own remote; NOT on the agentic-skills GitHub).
@@ -72,7 +72,7 @@ first — a backgrounded curl sharing the SSH stdin pipe races it → empty body
   fixed by snapshot-FIRST ordering. See `.claude/memory/arch_reindex_incremental.md`.
 
 ## OPEN FOLLOW-UPS (none block shipped work)
-1. **`index_initial` 900s baseline-cap (PRE-EXISTING, surfaced this session).** A full
+1. **[RESOLVED 2026-06-15, `14a1d1b`] `index_initial` 900s baseline-cap** — FIXED via marker-gated complete baseline + 3h op-aware timeout (live-proven: 41min full embed once per repo, then 2s incremental; complete baseline searchable). Was: A full
    `indexCodebase` of `fullstack-ecommerce-app` (~280 files) EXCEEDS the 900s Python indexer
    timeout on CPU bge-m3 and is truncated → the baseline index is PARTIAL (some baseline files
    unembedded) on EVERY run, flag on or off. Orthogonal to the incremental reindex (which
