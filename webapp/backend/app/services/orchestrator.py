@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -54,6 +55,7 @@ from app.services.git_worktree import (
     fast_forward_target,
     get_commit_sha,
     has_new_commits,
+    merge_branch_into_target,
     remove_worktree,
     reset_target_to,
     rev_parse,
@@ -469,6 +471,10 @@ async def _engineer_flow(
     task_id: str | None = None,
     inject_lessons: bool = False,
     inject_global_lessons: bool = False,
+    defer_merge: bool = False,  # wave-concurrency Strategy A: gate-pass leaves the
+                                # work on wt.branch (which survives worktree removal)
+                                # instead of FF-merging into agent_branch; the wave
+                                # barrier assembles work-branches in BL-id order.
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
@@ -591,6 +597,18 @@ async def _engineer_flow(
                             "gate_attempt": gate_attempt,
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail")}},
                            "engineer", bl_id, trace=trace)
+            if validation["ok"] and gate.get("ok") and defer_merge:
+                # wave-concurrency Strategy A: the gate PASSED but we do NOT
+                # integrate into agent_branch here. The engineer's commits live on
+                # wt.branch, which SURVIVES the finally worktree removal; the wave
+                # barrier assembles work-branches deterministically in BL-id order.
+                yield _ptag({"type": "_meta", "phase": "work_ready",
+                            "branch": wt.branch, "bl_id": bl_id},
+                           "engineer", bl_id, trace=trace)
+                yield {"_orchestrator_outcome": True, "role": "engineer", "bl_id": bl_id,
+                       "merged": False, "deferred_ready": True, "work_branch": wt.branch,
+                       "no_op": no_op}
+                return
             if validation["ok"] and gate.get("ok"):
                 merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
                 # If transient (lock race, etc.), one retry with a short sleep
@@ -703,9 +721,20 @@ async def _qa_or_scorer_flow(
     inject_lessons: bool = False,
     inject_global_lessons: bool = False,
     bl_base_ref: str | None = None,
+    base_branch_override: str | None = None,  # wave-concurrency: fork the QA/scorer
+                                              # worktree from the engineer's work_branch
+                                              # (not agent_branch) so it sees that BL's work.
+    merge_target_override: str | None = None,  # wave-concurrency: QA FF-merges its tests
+                                               # back into the work_branch, NOT agent_branch.
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
+    # wave-concurrency Strategy A: in concurrent mode the QA/scorer worktree forks
+    # from (and the doctrine diff is computed against) the engineer's work_branch,
+    # and QA FF-merges back into that same work_branch. Default (overrides None) ⇒
+    # the serial behaviour is byte-identical (both resolve to cfg.agent_branch).
+    _base_ref = base_branch_override or cfg.agent_branch
+    _merge_target = merge_target_override or cfg.agent_branch
     bf = backlog_svc.find_backlog(repo_dir, feature_slug=feature_slug)
     section = backlog_svc.extract_section(bf.read_text(encoding="utf-8"), bl_id)
     if role == "qa":
@@ -730,7 +759,7 @@ async def _qa_or_scorer_flow(
     gate: dict | None = None
     gate_attempt = 0
     try:
-        wt = await create_worktree(repo_dir, base_ref=cfg.agent_branch)
+        wt = await create_worktree(repo_dir, base_ref=_base_ref)
         trace = TraceWriter(repo=repo_name, role=role, bl_id=bl_id, task_id=wt.task_id)
         yield _ptag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
                     "branch": wt.branch, "bl_id": bl_id, "role": role,
@@ -742,10 +771,10 @@ async def _qa_or_scorer_flow(
             yield _tag(event, role, bl_id)
 
         if role == "qa":
-            validation = doctrine_svc.validate_qa(wt.path, bl_id, base_ref=cfg.agent_branch,
+            validation = doctrine_svc.validate_qa(wt.path, bl_id, base_ref=_base_ref,
                                                   retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
         else:
-            validation = doctrine_svc.validate_scorer(wt.path, bl_id, base_ref=cfg.agent_branch,
+            validation = doctrine_svc.validate_scorer(wt.path, bl_id, base_ref=_base_ref,
                                                      retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
         attempt = 0
         # No-abort doctrine: deep doctrine-fix loop (was a shallow cap of 2).
@@ -758,10 +787,10 @@ async def _qa_or_scorer_flow(
                                                   trace=trace, **rk):
                 yield _tag(event, role, bl_id)
             if role == "qa":
-                validation = doctrine_svc.validate_qa(wt.path, bl_id, base_ref=cfg.agent_branch,
+                validation = doctrine_svc.validate_qa(wt.path, bl_id, base_ref=_base_ref,
                                                       retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
             else:
-                validation = doctrine_svc.validate_scorer(wt.path, bl_id, base_ref=cfg.agent_branch,
+                validation = doctrine_svc.validate_scorer(wt.path, bl_id, base_ref=_base_ref,
                                                          retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
         yield _ptag({"type": "_meta", "phase": "doctrine_check",
                     "kind": "complete" if validation["ok"] else "give_up",
@@ -800,7 +829,7 @@ async def _qa_or_scorer_flow(
                                                       timeout_seconds=max(300, timeout // 2),
                                                       trace=trace, **rk):
                     yield _tag(event, role, bl_id)
-                validation = doctrine_svc.validate_qa(wt.path, bl_id, base_ref=cfg.agent_branch,
+                validation = doctrine_svc.validate_qa(wt.path, bl_id, base_ref=_base_ref,
                                                       retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
                 if not validation["ok"]:
                     break
@@ -812,30 +841,30 @@ async def _qa_or_scorer_flow(
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "failing_tests", "reason", "post_tail", "uncovered_criteria")}},
                            role, bl_id, trace=trace)
             if validation["ok"] and gate.get("ok"):
-                merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+                merge = await fast_forward_target(repo_dir, wt.branch, target_ref=_merge_target)
                 if not merge.get("ok") and merge.get("kind") == "error":
                     await asyncio.sleep(2)
-                    merge_retry = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+                    merge_retry = await fast_forward_target(repo_dir, wt.branch, target_ref=_merge_target)
                     if merge_retry.get("ok"):
                         merge = merge_retry
                 # A1: same non_ff auto-rebase as the engineer flow — operator
                 # commits race QA worktrees too.
                 if not merge.get("ok") and merge.get("kind") == "non_ff":
                     yield _ptag({"type": "_meta", "phase": "merge_rebase_attempt",
-                                "branch": wt.branch, "target_ref": cfg.agent_branch},
+                                "branch": wt.branch, "target_ref": _merge_target},
                                role, bl_id, trace=trace)
-                    rebase = await _rebase_in_worktree(wt.path, cfg.agent_branch)
+                    rebase = await _rebase_in_worktree(wt.path, _merge_target)
                     if rebase.get("ok"):
                         yield _ptag({"type": "_meta", "phase": "merge_rebase_succeeded",
                                     "branch": wt.branch}, role, bl_id, trace=trace)
                         gate2 = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
-                                                                   target_ref=cfg.agent_branch, run_id=run_id)
+                                                                   target_ref=_merge_target, run_id=run_id)
                         yield _ptag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
                                     **{k: gate2.get(k) for k in ("ok","kind","regressions","failing_tests","reason","post_tail")}},
                                    role, bl_id, trace=trace)
                         if gate2.get("ok"):
                             merge = await fast_forward_target(repo_dir, wt.branch,
-                                                              target_ref=cfg.agent_branch)
+                                                              target_ref=_merge_target)
                         else:
                             merge = {"ok": False, "kind": "non_ff_gate_failed_post_rebase",
                                      "error": gate2.get("reason")}
@@ -864,10 +893,10 @@ async def _qa_or_scorer_flow(
             # gate-FREE fast-forward (mirrors the QA merge mechanics minus the
             # gate + post-rebase gate re-run, which a read-only branch can't
             # regress).
-            merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+            merge = await fast_forward_target(repo_dir, wt.branch, target_ref=_merge_target)
             if not merge.get("ok") and merge.get("kind") == "error":
                 await asyncio.sleep(2)
-                merge_retry = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+                merge_retry = await fast_forward_target(repo_dir, wt.branch, target_ref=_merge_target)
                 if merge_retry.get("ok"):
                     merge = merge_retry
             # A1: same non_ff auto-rebase as the QA/engineer flows — QA worktrees
@@ -875,13 +904,13 @@ async def _qa_or_scorer_flow(
             # the scorer changes no source, so nothing can regress.
             if not merge.get("ok") and merge.get("kind") == "non_ff":
                 yield _ptag({"type": "_meta", "phase": "merge_rebase_attempt",
-                            "branch": wt.branch, "target_ref": cfg.agent_branch},
+                            "branch": wt.branch, "target_ref": _merge_target},
                            role, bl_id, trace=trace)
-                rebase = await _rebase_in_worktree(wt.path, cfg.agent_branch)
+                rebase = await _rebase_in_worktree(wt.path, _merge_target)
                 if rebase.get("ok"):
                     yield _ptag({"type": "_meta", "phase": "merge_rebase_succeeded",
                                 "branch": wt.branch}, role, bl_id, trace=trace)
-                    merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+                    merge = await fast_forward_target(repo_dir, wt.branch, target_ref=_merge_target)
                 else:
                     yield _ptag({"type": "_meta", "phase": "merge_rebase_failed",
                                 "error": rebase.get("error"), "branch": wt.branch},
@@ -3820,8 +3849,156 @@ async def run_brief(
         # resume the scorer for that BL onward.
         _reached_start_bl = start_bl is None
         _prev_wave = None
-        async def _one_bl(it):
+
+        async def _one_bl_concurrent(it):
+            """wave-concurrency Strategy A intra-wave BL body. Runs engineer
+            (defer_merge) → QA → scorer on an ISOLATED branch lineage; emits the
+            same live events + bl.start/bl.done the serial body emits, but does NOT
+            integrate into agent_branch (the wave barrier does that in BL-id order)
+            and NEVER yields _wave_abort (a failing BL is surfaced, not aborted).
+            Always yields exactly ONE {"_wave_bl_done": {...}} as its final event.
+            """
             bl_id = it.id
+            per_bl = {"bl_id": bl_id, "title": it.title}
+            yield _evt("bl.start", bl_id=bl_id, title=it.title)
+            # wave_base: the agent_branch SHA at BL start (the common fork point for
+            # every BL in this wave). The QA diff base for the BL's own tests.
+            try:
+                wave_base = await rev_parse(repo_dir, repo_config_svc.load(repo_dir).agent_branch)
+            except Exception:  # noqa: BLE001
+                wave_base = None
+
+            # ── Engineer (defer_merge: leaves work on its work_branch) ──
+            yield _evt("engineer.start", bl_id=bl_id)
+            eng_outcome = None
+            try:
+                async for e in _engineer_flow(repo_dir, repo_name, bl_id,
+                                               timeout_per_role, retrieval_kwargs_builder,
+                                               run_id=run_id, feature_slug=feature_slug,
+                                               inject_lessons=inject_lessons,
+                                               inject_global_lessons=inject_global_lessons,
+                                               defer_merge=True):
+                    if "_orchestrator_outcome" in e:
+                        eng_outcome = e
+                        continue
+                    yield e
+            except Exception as exc:  # noqa: BLE001 — wedge-proof (mirror serial body)
+                yield _evt("engineer.error", bl_id=bl_id,
+                           error=f"{type(exc).__name__}: {exc}"[:500])
+                eng_outcome = {"role": "engineer", "bl_id": bl_id,
+                               "merged": False, "no_op": False, "engineer_error": True}
+            per_bl["engineer"] = eng_outcome or {"merged": False}
+            yield _evt("engineer.done", **(eng_outcome or {"bl_id": bl_id}))
+
+            eng_no_op = bool(eng_outcome and eng_outcome.get("no_op"))
+            eng_ready = bool(eng_outcome and eng_outcome.get("deferred_ready"))
+            work_branch = (eng_outcome or {}).get("work_branch")
+
+            # Engineer no_op: nothing to assemble; surface as no_op (not eligible).
+            if eng_no_op:
+                per_bl["qa"] = {"merged": False}
+                summary["bls"].append(per_bl)
+                bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "no_op"})
+                yield _evt("bl.done", bl_id=bl_id, outcome="no_op")
+                yield {"_wave_bl_done": {"bl_id": bl_id, "outcome": "no_op"}}
+                return
+
+            # Engineer did NOT reach a green gate (escalated / harness error) — the
+            # engineer never integrated, so no rollback is needed. Surface honestly
+            # and DO NOT abort siblings (no _wave_abort in concurrent mode).
+            if not eng_ready or not work_branch:
+                _dossier = (eng_outcome or {}).get("dossier") or {
+                    "role": "engineer", "bl_id": bl_id,
+                    "harness_error": (eng_outcome or {}).get("engineer_error", False),
+                }
+                per_bl["qa"] = {"merged": False}
+                summary["bls"].append(per_bl)
+                bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "engineer_escalated"})
+                escalated_bls.append({"bl_id": bl_id, "role": "engineer",
+                                      "reason": (f"engineer could not reach a green gate for {bl_id} "
+                                                 f"after exhaustive investigate→fix→re-test attempts")})
+                yield _evt("bl.escalated", bl_id=bl_id, role="engineer",
+                           reason=(f"engineer could not reach a green gate for {bl_id} "
+                                   f"(wave-concurrent — surfaced, siblings continue)"),
+                           dossier=_dossier)
+                yield _evt("bl.done", bl_id=bl_id, outcome="engineer_escalated")
+                yield {"_wave_bl_done": {"bl_id": bl_id, "outcome": "engineer_escalated"}}
+                return
+
+            # ── QA (forks from + merges back into the engineer's work_branch) ──
+            yield _evt("qa.start", bl_id=bl_id)
+            qa_outcome = None
+            async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "qa",
+                                               timeout_per_role, retrieval_kwargs_builder,
+                                               run_id=run_id, feature_slug=feature_slug,
+                                               inject_lessons=inject_lessons,
+                                               inject_global_lessons=inject_global_lessons,
+                                               bl_base_ref=wave_base,
+                                               base_branch_override=work_branch,
+                                               merge_target_override=work_branch):
+                if "_orchestrator_outcome" in e:
+                    qa_outcome = e
+                    continue
+                yield e
+            per_bl["qa"] = qa_outcome or {"merged": False}
+            yield _evt("qa.done", **(qa_outcome or {"bl_id": bl_id}))
+
+            qa_doc_ok = bool(qa_outcome and qa_outcome.get("doctrine_ok"))
+            qa_merged = bool(qa_outcome and qa_outcome.get("merged"))
+
+            # ── Scorer (read-only; forks from work_branch to read the BL's work) ──
+            yield _evt("scorer.start", bl_id=bl_id)
+            score_outcome = None
+            async for e in _qa_or_scorer_flow(repo_dir, repo_name, bl_id, "scorer",
+                                               timeout_per_role, retrieval_kwargs_builder,
+                                               run_id=run_id, feature_slug=feature_slug,
+                                               inject_lessons=inject_lessons,
+                                               inject_global_lessons=inject_global_lessons,
+                                               base_branch_override=work_branch):
+                if "_orchestrator_outcome" in e:
+                    score_outcome = e
+                    continue
+                yield e
+            per_bl["scorer"] = score_outcome or {}
+            yield _evt("scorer.done", **(score_outcome or {"bl_id": bl_id}))
+            score_doc_ok = bool(score_outcome and score_outcome.get("doctrine_ok"))
+
+            # Same worst-role outcome label as the serial body (engineer already
+            # passed its gate here; "merged" reflects the WORK_BRANCH state).
+            if not qa_doc_ok or not qa_merged:
+                outcome = "merged_no_qa"
+            elif not score_doc_ok:
+                outcome = "merged_no_score"
+            else:
+                outcome = "merged_full"
+            summary["bls"].append(per_bl)
+            bl_outcomes_compact.append({"bl_id": bl_id, "outcome": outcome})
+            yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
+
+            # Assembly eligibility: engineer green + QA passed doctrine AND merged
+            # its tests into the work_branch. merged_no_qa is NOT assembly-eligible
+            # (QA reinforcement did not land) — surface, do not assemble.
+            if qa_doc_ok and qa_merged:
+                yield {"_wave_bl_done": {"bl_id": bl_id, "work_branch": work_branch,
+                                         "outcome": "ready"}}
+            else:
+                yield {"_wave_bl_done": {"bl_id": bl_id, "outcome": outcome}}
+            return
+
+        async def _one_bl(it, concurrent: bool = False):
+            bl_id = it.id
+            if concurrent:
+                # wave-concurrency Strategy A: isolated per-BL lineage. The engineer
+                # runs with defer_merge=True (work stays on its work_branch, which
+                # survives worktree removal); QA/scorer fork from that work_branch and
+                # QA FF-merges its tests back into it. This body NEVER touches
+                # agent_branch and NEVER yields _wave_abort — a failing BL is surfaced
+                # via the _wave_bl_done outcome and must not abort its siblings. The
+                # wave barrier (driven by _run_wave_concurrent) assembles ready
+                # work_branches into agent_branch deterministically in BL-id order.
+                async for ev in _one_bl_concurrent(it):
+                    yield ev
+                return
             per_bl = {"bl_id": bl_id, "title": it.title}
             yield _evt("bl.start", bl_id=bl_id, title=it.title)
             _checkpoint(current_bl=bl_id)  # A7: mark which BL is in flight
@@ -4229,7 +4406,94 @@ async def run_brief(
             _checkpoint(current_bl=None)  # A7
             yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
 
-        for it in ordered:
+        # wave-concurrency Strategy A (operator 2026-06-14): when the operator
+        # opts into BOTH wave scheduling AND concurrency>1, iterate the DAG WAVES
+        # and run each multi-BL wave's BLs CONCURRENTLY on isolated branch
+        # lineages, then assemble their work-branches into agent_branch in fixed
+        # BL-id order at the wave barrier (deterministic, interleaving-independent).
+        # A single-BL wave runs the ordinary serial _one_bl path. The flattened
+        # serial loop below is UNCHANGED and still drives wave_concurrency<=1 (and
+        # wave_execution off) byte-identically.
+        _concurrent_wave_mode = (wave_execution and wave_concurrency
+                                 and wave_concurrency > 1 and _waves is not None)
+        if _concurrent_wave_mode:
+            # Honor start_bl: build the set of BLs to actually run (resume support).
+            _run_ids = {it.id for it in ordered}
+            if start_bl is not None:
+                _seen = False
+                _run_ids = set()
+                for it in ordered:
+                    if it.id == start_bl:
+                        _seen = True
+                    if _seen:
+                        _run_ids.add(it.id)
+            _aborted = False
+            for _wi, _wave in enumerate(_waves):
+                _wave_bls = [it for it in _wave if it.id in _run_ids]
+                if not _wave_bls:
+                    continue
+                yield _evt("wave.start", wave=_wi, bls=[i.id for i in _wave_bls])
+                if len(_wave_bls) == 1:
+                    # Degenerate wave → ordinary serial path (handles _wave_abort).
+                    async for ev in _one_bl(_wave_bls[0]):
+                        if isinstance(ev, dict) and "_wave_abort" in ev:
+                            terminal_status = ev["_wave_abort"]
+                            _aborted = True
+                            break
+                        yield ev
+                    if _aborted:
+                        return
+                else:
+                    # Concurrent intra-wave execution + deterministic BL-id-order
+                    # barrier assembly. effective_concurrency caps fan-in at the
+                    # smaller of wave size, the operator cap, and half the cores.
+                    _eff = min(len(_wave_bls), wave_concurrency,
+                               max(1, (os.cpu_count() or 2) // 2))
+                    _by_id = {it.id: it for it in _wave_bls}
+                    _bl_specs = [(it.id, (lambda _it=it: _one_bl(_it, concurrent=True)))
+                                 for it in sorted(_wave_bls, key=lambda x: x.id)]
+
+                    async def _assembler(bid, work_branch, _wi=_wi):
+                        _acfg = repo_config_svc.load(repo_dir)
+                        return await merge_branch_into_target(
+                            repo_dir, work_branch, target_ref=_acfg.agent_branch)
+
+                    async for _tag, _bid, _payload in _run_wave_concurrent(
+                            _bl_specs, _assembler, _eff):
+                        if _tag == "event":
+                            yield _payload
+                        elif _tag == "assembly":
+                            yield _evt("bl.assembled", bl_id=_bid,
+                                       ok=_payload.get("ok"), kind=_payload.get("kind"),
+                                       merged_sha=_payload.get("merged_sha"),
+                                       conflict_files=_payload.get("conflict_files"),
+                                       error=_payload.get("error"))
+                            if not _payload.get("ok"):
+                                # No-abort: a conflict/error at assembly is surfaced
+                                # (the BL's work survives on its work_branch) and
+                                # rolled into the escalated roll-up; siblings already
+                                # assembled stay on the trunk.
+                                escalated_bls.append({"bl_id": _bid, "role": "assembly",
+                                                      "reason": (f"{_bid} passed its per-BL gate but "
+                                                                 f"could not assemble into "
+                                                                 f"{repo_config_svc.load(repo_dir).agent_branch}: "
+                                                                 f"{_payload.get('kind')} "
+                                                                 f"{_payload.get('error') or ''}".strip())})
+                                yield _evt("bl.escalated", bl_id=_bid, role="assembly",
+                                           reason=(f"{_bid} could not assemble "
+                                                   f"({_payload.get('kind')})"),
+                                           conflict_files=_payload.get("conflict_files"))
+                        elif _tag == "wave_done":
+                            pass
+                yield _evt("wave.done", wave=_wi)
+                # Barrier reindex so the next dependent wave (and acceptance)
+                # grounds on the just-assembled wave's merged code.
+                async for e in _run_indexers(repo_dir, f"reindex_after_wave.{_wi}"):
+                    yield e
+                _checkpoint(current_bl=None)  # A7
+            terminal_status = "sprint_complete"
+        else:
+         for it in ordered:
             bl_id = it.id
             if not _reached_start_bl:
                 if bl_id == start_bl:
