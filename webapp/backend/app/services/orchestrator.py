@@ -3591,6 +3591,24 @@ async def _run_wave_concurrent(bl_specs, assembler, concurrency):
     yield ("wave_done", None, {"results": results, "assembled": assembled})
 
 
+def _reconcile_unassembled_outcome(
+    bl_outcomes_compact: list[dict], bid: str, kind: str | None,
+) -> bool:
+    """I-5 truthful aggregation (wave-concurrency Strategy A). In the concurrent
+    path a BL's per-BL outcome (merged_full / merged_no_qa / merged_no_score) is
+    labelled from WORK_BRANCH readiness and recorded BEFORE the BL-id-ordered
+    assembly barrier runs. If that barrier then reports a conflict/error the BL
+    never reached the trunk, so the recorded label is a lie. Rewrite the matching
+    bl_outcomes entry to ``escalated_assembly_<kind>`` so the persisted roll-up
+    matches escalated_bls. Returns True if an entry was corrected."""
+    label = f"escalated_assembly_{kind or 'fail'}"
+    for bo in bl_outcomes_compact:
+        if bo.get("bl_id") == bid:
+            bo["outcome"] = label
+            return True
+    return False
+
+
 def _ensure_on_agent_branch(repo_dir: Path) -> dict:
     """Structural fix (2026-06-06, Ops/Steward proposal §9): put the target
     checkout on the configured ``agent_branch`` at run start.
@@ -4480,6 +4498,14 @@ async def run_brief(
                                                                  f"{repo_config_svc.load(repo_dir).agent_branch}: "
                                                                  f"{_payload.get('kind')} "
                                                                  f"{_payload.get('error') or ''}".strip())})
+                                # I-5 truthful aggregation: the per-BL outcome was
+                                # labelled from work_branch readiness BEFORE the
+                                # assembly barrier ran; a conflict/error here means
+                                # the BL did NOT reach the trunk, so reconcile its
+                                # bl_outcomes entry (else an unassembled BL is
+                                # mislabelled merged_* in the persisted roll-up).
+                                _reconcile_unassembled_outcome(
+                                    bl_outcomes_compact, _bid, _payload.get("kind"))
                                 yield _evt("bl.escalated", bl_id=_bid, role="assembly",
                                            reason=(f"{_bid} could not assemble "
                                                    f"({_payload.get('kind')})"),
