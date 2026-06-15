@@ -1229,7 +1229,9 @@ class RunBriefRequest(BaseModel):
     wave_execution: bool = False
     # Wave concurrency (PROPOSAL_WAVE_CONCURRENCY.md, Strategy A). Max BLs run
     # concurrently within a wave. DEFAULT 1 = byte-identical to the live-proven
-    # serial scaffolding; >1 is opt-in and currently inert until the fan-in lands.
+    # serial scaffolding; >1 is opt-in intra-wave concurrency (Strategy A fan-in +
+    # BL-id-ordered barrier assembly), LIVE-PROVEN 2026-06-15: happy-path,
+    # conflicting-pair, and 3-wide/multi-wave scale.
     wave_concurrency: int = Field(1, ge=1, le=16)
     # A48 pre-flight disk-free check (2026-06-01). Default advisory:
     # the check ALWAYS runs and emits an SSE event with the breakdown,
