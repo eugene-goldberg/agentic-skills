@@ -67,3 +67,23 @@ suggests BL-0001 may not have FULLY deferred its trunk merge (likely the enginee
 path or QA merge_target lineage landing it early). Harmless here (both delivered, no conflict) but
 could matter under a real file conflict — needs a follow-up + a deliberately-conflicting-pair live
 test before merging concurrency>1 to dev/main. See [[feedback_remote_first_dev]].
+
+
+**UPDATE 2026-06-15 — concurrency>1 follow-ups CLOSED + MERGED to dev/main `4265640`.**
+The BL-0001 noop nuance was root-caused: the scorer in `_one_bl_concurrent` was invoked WITHOUT
+`merge_target_override`, so `_qa_or_scorer_flow` defaulted its merge target to the trunk and the
+scorecard FF-merge landed BL work on the trunk mid-wave. Fix `6c5f45e` (pass
+`merge_target_override=work_branch` to the scorer, symmetric with QA; AST guard); BL-0001 now
+assembles `kind:merged` via the barrier, not noop. Conflicting-pair LIVE-PROVEN
+(run-20260615T024030Z-bcef22 + clean re-proof …033033Z-1dc152): two same-wave BLs both create
+`ConflictProbe.cs` -> BL-0002 real git add/add `kind:conflict` -> `bl.escalated(role=assembly)`
+no-abort, trunk=alpha only (deterministic), BL-0002 work preserved on its branch, sprint_complete
+(not aborted). That run exposed + FIXED an I-5 bug (`bl_outcomes` mislabeled the conflicted BL
+`merged_full`) via extracted+unit-tested `_reconcile_unassembled_outcome` ->
+`escalated_assembly_conflict` (1c7c02f). Scale LIVE-PROVEN (run-…041351Z-fc2e21): 5 disjoint BLs,
+`wave_concurrency=3`, wave0 3-wide + wave1 2-wide multi-wave, 5/5 merged_full, 0 escalations,
+52GB free / load ~6 of 12 cores (no resource blowup). Merged FF wave-concurrency->development->
+main @ `4265640`; docs updated (projects.py stale comment, CLAUDE.md R21 row). OPEN (non-blocking):
+assembly-conflict auto-repair-loop scope decision (surface+escalate is the correct floor;
+Concurrency_Assessment_01.md raises it); reindex latency (full op=index per barrier); one stale
+vite proc + leaked accept-…05b6e9 worktree to reap. See [[feedback_remote_first_dev]].
