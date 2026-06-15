@@ -125,7 +125,16 @@ async def run_claude_context_index(repo_path: Path, op: str = "index") -> dict:
                      "Run a semantic_search once via the langgraph harness to regenerate it.",
         }
     cmd = ["node", str(BRIDGE_SCRIPT), json.dumps({"op": op, "repo": str(repo_path)})]
-    code, stdout, stderr = await _run(cmd, cwd=BRIDGE_DIR, timeout=900)
+    # Op-aware timeout: a first-ever FULL baseline embed (index/index_baseline) of a
+    # large repo on CPU bge-m3 can take well beyond the fast-path budget; give it a
+    # generous, configurable ceiling (default 3h) so it runs to completion ONCE (the
+    # baseline-complete marker then routes subsequent runs to the fast incremental
+    # path). reindex/search/has_index keep the short budget.
+    if op in ("index", "index_baseline"):
+        _timeout = int(os.environ.get("INDEX_BASELINE_TIMEOUT_S", "10800"))
+    else:
+        _timeout = int(os.environ.get("REINDEX_TIMEOUT_S", "900"))
+    code, stdout, stderr = await _run(cmd, cwd=BRIDGE_DIR, timeout=_timeout)
     summary: dict = {"ok": code == 0, "exit_code": code}
     last = stdout.strip().splitlines()
     if last:

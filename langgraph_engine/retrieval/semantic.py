@@ -31,6 +31,9 @@ BRIDGE_SCRIPT_NAME = "bridge.js"
 BRIDGE_SCRIPT = """\
 import { Context, OpenAIEmbedding, MilvusVectorDatabase, Embedding, FileSynchronizer } from '@zilliz/claude-context-core';
 import { AzureOpenAI, OpenAI } from 'openai';
+import { homedir } from 'os';
+import { join } from 'path';
+import { promises as fsp } from 'fs';
 
 const cmd = JSON.parse(process.argv[2]);
 
@@ -145,21 +148,54 @@ try {
   if (cmd.op === 'index') {
     result = await context.indexCodebase(cmd.repo, null, cmd.force === true);
   } else if (cmd.op === 'index_baseline') {
-    // Establish the merkle snapshot baseline FIRST (fast - hashing only, embeds
-    // nothing) so a timeout during the subsequent full embed can NEVER lose it;
-    // THEN full-embed the baseline. The indexer runs under a wall-clock timeout, so
-    // doing the snapshot LAST (post-embed) silently dropped it whenever the embed
-    // hit the cap, leaving op=reindex to see 0 changes and skip the wave's files
-    // (observed live: run-...132221Z-e5aa54). Snapshot-first makes the wave delta
-    // reliably indexed even when the baseline embed is truncated by the timeout
-    // (baseline completeness under the cap is a separate, pre-existing concern).
-    let snap = 'established_pre_embed';
+    // Marker-gated baseline index. A complete full embed of a large repo can exceed
+    // the indexer wall-clock budget, and a CAPPED (partial) embed must never be
+    // mistaken for complete. So switch to the fast incremental path ONLY after a full
+    // embed has VERIFIABLY finished (indexCodebase status 'completed'), recorded by a
+    // baseline-complete marker file. The marker check also requires the collection to
+    // still have rows (guards a Milvus wipe) - else re-baseline. Until the marker
+    // exists, every run re-attempts the full (snapshot-first) embed.
+    const collectionName = context.getCollectionName(cmd.repo);
+    const markerDir = join(homedir(), '.context', 'baseline_complete');
+    const markerPath = join(markerDir, collectionName + '.json');
+    let markerExists = false;
+    try { await fsp.access(markerPath); markerExists = true; } catch (_) { markerExists = false; }
+    let hasRows = false;
     try {
-      await FileSynchronizer.deleteSnapshot(cmd.repo);
-      await context.reindexByChange(cmd.repo);
-    } catch (e) { snap = 'snapshot_error: ' + String(e?.message || e); }
-    result = await context.indexCodebase(cmd.repo, null, cmd.force === true);
-    result = Object.assign({}, result, { snapshot: snap });
+      if (await vectorDatabase.hasCollection(collectionName)) {
+        const q = await vectorDatabase.query(collectionName, '', ['id'], 1);
+        hasRows = !!(q && q.length);
+      }
+    } catch (_) { hasRows = false; }
+    if (markerExists && hasRows) {
+      // Baseline verified-complete on a prior run -> incremental sync only (fast).
+      result = await context.reindexByChange(cmd.repo);
+      result = Object.assign({}, result, { mode: 'incremental_baseline_complete' });
+    } else {
+      // First-ever / previously-incomplete / collection wiped -> snapshot-FIRST (so a
+      // timeout cannot lose it) then full embed. Mark complete ONLY if the embed
+      // actually finished (a timeout kills the process -> no marker -> retry next run).
+      let snap = 'established_pre_embed';
+      try {
+        await FileSynchronizer.deleteSnapshot(cmd.repo);
+        await context.reindexByChange(cmd.repo);
+      } catch (e) { snap = 'snapshot_error: ' + String(e?.message || e); }
+      result = await context.indexCodebase(cmd.repo, null, cmd.force === true);
+      result = Object.assign({}, result, { snapshot: snap });
+      if (result && result.status === 'completed') {
+        try {
+          await fsp.mkdir(markerDir, { recursive: true });
+          await fsp.writeFile(markerPath, JSON.stringify({
+            repo: cmd.repo, collection: collectionName,
+            indexedFiles: result.indexedFiles, totalChunks: result.totalChunks,
+            completedAt: new Date().toISOString(),
+          }), 'utf-8');
+          result = Object.assign({}, result, { baseline: 'completed_marked' });
+        } catch (e) { result = Object.assign({}, result, { baseline_marker_error: String(e?.message || e) }); }
+      } else {
+        result = Object.assign({}, result, { baseline: 'incomplete_no_marker' });
+      }
+    }
   } else if (cmd.op === 'reindex') {
     // Incremental: embed ONLY files changed since the snapshot baseline. Safety
     // fallback to a full index + baseline when the collection does not exist yet

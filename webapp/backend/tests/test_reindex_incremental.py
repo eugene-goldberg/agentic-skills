@@ -83,3 +83,29 @@ def test_reindex_incremental_default_is_on():
     assert RunBriefRequest.model_fields["reindex_incremental"].default is True
     # default-constructed request opts into incremental
     assert RunBriefRequest(brief="x" * 30).reindex_incremental is True
+
+
+def test_index_ops_get_generous_timeout(monkeypatch):
+    """index/index_baseline (full baseline embed) get the generous 3h-default ceiling
+    so the one-time full index completes; reindex/search keep the short budget. Both
+    env-configurable."""
+    captured = {}
+
+    async def fake_run(cmd, cwd=None, timeout=None):
+        captured["timeout"] = timeout
+        return (0, json.dumps({"ok": True, "result": {}}), "")
+
+    monkeypatch.setattr(indexing, "_run", fake_run)
+    monkeypatch.delenv("INDEX_BASELINE_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("REINDEX_TIMEOUT_S", raising=False)
+    asyncio.run(indexing.run_claude_context_index(Path("/tmp/x"), op="index_baseline"))
+    assert captured["timeout"] == 10800
+    asyncio.run(indexing.run_claude_context_index(Path("/tmp/x"), op="index"))
+    assert captured["timeout"] == 10800
+    asyncio.run(indexing.run_claude_context_index(Path("/tmp/x"), op="reindex"))
+    assert captured["timeout"] == 900
+    asyncio.run(indexing.run_claude_context_index(Path("/tmp/x"), op="search"))
+    assert captured["timeout"] == 900
+    monkeypatch.setenv("INDEX_BASELINE_TIMEOUT_S", "12345")
+    asyncio.run(indexing.run_claude_context_index(Path("/tmp/x"), op="index_baseline"))
+    assert captured["timeout"] == 12345
