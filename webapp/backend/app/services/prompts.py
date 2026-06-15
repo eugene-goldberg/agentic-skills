@@ -382,12 +382,22 @@ def select_family(target_status_result: dict | None) -> str:
 
 def build_po(family: str, brief: str, project_name: str | None, repo_root: _Path,
              feature_slug: str | None = None, inject_lessons: bool = False,
-             inject_global_lessons: bool = False) -> str:
+             inject_global_lessons: bool = False, contract_first: bool = False) -> str:
     if family == "brownfield":
+        art = _resolve_art_dir(repo_root, feature_slug)
         return _bf.build_po_prompt_brownfield(brief, project_name,
-                                              artifact_dir=_resolve_art_dir(repo_root, feature_slug),
-                                              lessons_block=_lessons_block(repo_root, feature_slug, inject_lessons, inject_global_lessons))
+                                              artifact_dir=art,
+                                              lessons_block=_lessons_block(repo_root, feature_slug, inject_lessons, inject_global_lessons),
+                                              contract_block=(_bf.po_contract_instruction(art) if contract_first else ""))
     return build_po_prompt(brief, project_name)
+
+
+def build_stub_materializer(family: str, contract_text: str, repo_root: _Path,
+                            repo_summary: str = "", feature_slug: str | None = None) -> str:
+    """Contract-First Phase 1 (decision c): the Engineer-as-materializer prompt."""
+    return _bf.build_stub_materializer_prompt_brownfield(
+        contract_text, repo_summary=repo_summary,
+        artifact_dir=_resolve_art_dir(repo_root, feature_slug))
 
 
 def build_engineer(family: str, bl_id: str, bl_section: str, repo_root: _Path,

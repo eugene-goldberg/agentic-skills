@@ -1238,6 +1238,11 @@ class RunBriefRequest(BaseModel):
     # index_baseline at index_initial, instead of a full re-embed each barrier.
     # DEFAULT ON (live-proven); set False for the byte-identical full-index rollback.
     reindex_incremental: bool = True
+    # Contract-First Phase 1 (operator 2026-06-15): PO authors an OpenAPI 3.1
+    # contract; the Engineer-as-materializer turns it into compilable C# stubs
+    # gated by R22 (structural validation + per-operation conformance + dotnet
+    # build) BEFORE any slice runs. Additive; DEFAULT OFF = byte-identical rollback.
+    contract_first: bool = False
     # A48 pre-flight disk-free check (2026-06-01). Default advisory:
     # the check ALWAYS runs and emits an SSE event with the breakdown,
     # but only refuses the run (HTTP 409) when enforce=True. This
@@ -1499,6 +1504,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
                 wave_execution=req.wave_execution,
                 wave_concurrency=req.wave_concurrency,
                 reindex_incremental=req.reindex_incremental,
+                contract_first=req.contract_first,
             ):
                 # Track current_bl from bl.start so 409 responses can name it.
                 if event.get("phase") == "orchestrator.bl.start":

@@ -346,12 +346,14 @@ async def _po_flow(
     feature_slug: str | None = None,
     inject_lessons: bool = False,
     inject_global_lessons: bool = False,
+    contract_first: bool = False,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
     prompt = prompts_svc.build_po(family, brief, project_name, repo_dir, feature_slug=feature_slug,
                                   inject_lessons=inject_lessons,
-                                  inject_global_lessons=inject_global_lessons)
+                                  inject_global_lessons=inject_global_lessons,
+                                  contract_first=contract_first)
     if inject_lessons and run_id:
         lessons_svc.record_injection(
             run_id, "po",
@@ -3702,6 +3704,12 @@ async def run_brief(
     warm_retrieval: bool = True,  # A56 (operator 2026-06-07): warm the LOCAL
                                   # retrieval backend before the PO so the first
                                   # agent isn't grounding-blind. Flag = rollback.
+    contract_first: bool = False,  # Contract-First Phase 1 (operator 2026-06-15):
+                                   # PO authors an OpenAPI 3.1 contract; the
+                                   # Engineer-as-materializer turns it into compilable
+                                   # C# stubs gated by R22 (structural validation +
+                                   # per-operation conformance + dotnet build) BEFORE
+                                   # any slice runs. Additive; DEFAULT OFF = rollback.
     wave_concurrency: int = 1,  # PROPOSAL_WAVE_CONCURRENCY.md Strategy A: max BLs
                                 # concurrent within a wave. DEFAULT 1 = serial
                                 # scaffolding (live-proven); >1 inert until fan-in.
@@ -3813,7 +3821,8 @@ async def run_brief(
                                     timeout_per_role, retrieval_kwargs_builder,
                                     run_id=run_id, brief_hash=brief_hash,
                                     feature_slug=feature_slug, inject_lessons=inject_lessons,
-                                    inject_global_lessons=inject_global_lessons):
+                                    inject_global_lessons=inject_global_lessons,
+                                    contract_first=contract_first):
                 if "_orchestrator_outcome" in e:
                     summary["po"] = e
                     po_ok = e.get("doctrine_ok", False)
@@ -3870,6 +3879,17 @@ async def run_brief(
                          "deps": str(it.meta.get("dependencies") or "")} for it in ordered],
                    waves=([[it.id for it in w] for w in _waves] if _waves is not None else None))
         _checkpoint(current_bl=None)  # A7: first checkpoint after PO+parse
+
+        # Contract-First Phase 1 (R22, operator 2026-06-15): materialize the PO's
+        # OpenAPI contract into compilable C# stubs BEFORE any slice runs. Additive +
+        # flag-gated — with contract_first=False this whole block is skipped and the
+        # path is byte-identical to today.
+        if contract_first:
+            async for _ce in _contract_flow(repo_dir, repo_name, run_id=run_id,
+                                             feature_slug=feature_slug,
+                                             timeout=timeout_per_role,
+                                             retrieval_kwargs_builder=retrieval_kwargs_builder):
+                yield _ce
 
         # Simple gating model (2026-06-06): the agent-branch HEAD at sprint start
         # (after PO import, before BL-0001) is the baseline for the ONE full-suite
@@ -4844,3 +4864,197 @@ async def run_brief(
             _archive_traces_since(repo_name, run_started_at, run_id)
         except Exception:
             pass
+
+
+# ───────────────────── Contract-First Phase 1 (R22) ─────────────────────
+# PROPOSAL_CONTRACT_FIRST_DECOMPOSITION.md. Decision A: the PO authors a raw
+# OpenAPI 3.1 contract (HTTP seam, B1). Decision (c): the Engineer-as-
+# materializer turns it into compilable C# stubs. The R22 gate below is the
+# load-bearing guarantee (the agent-based path trades a tool's byte-determinism
+# for "compiles + conforms"): structural contract validation + per-operation
+# conformance + a real `dotnet build`, driving a no-abort fix loop.
+
+
+async def _dotnet_build(wt_path: "Path", project: str | None = None, timeout: int = 600) -> dict:
+    """Run `dotnet build` (targeting the solution/project when known) in the
+    worktree. R22's 'stubs compile' proof."""
+    cmd = ["dotnet", "build"] + ([project] if project else []) + ["--nologo"]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(wt_path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        )
+    except FileNotFoundError:
+        return {"ok": False, "kind": "no_dotnet", "tail": "dotnet not on PATH"}
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        return {"ok": False, "kind": "timeout", "tail": f"dotnet build exceeded {timeout}s"}
+    text = out.decode("utf-8", "replace") if out else ""
+    ok = proc.returncode == 0
+    return {"ok": ok, "kind": "build" if ok else "build_failed",
+            "returncode": proc.returncode, "tail": "\n".join(text.splitlines()[-30:])}
+
+
+async def _changed_cs_corpus(wt_path: "Path", base_ref: str) -> str:
+    """Concatenate the C# files the materializer added/changed vs base_ref —
+    the corpus the R22 conformance check scans (not the whole repo)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "diff", "--name-only", f"{base_ref}...HEAD",
+            cwd=str(wt_path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await proc.communicate()
+    except Exception:
+        return ""
+    parts: list[str] = []
+    for rel in out.decode("utf-8", "replace").splitlines():
+        if not rel.endswith(".cs"):
+            continue
+        p = wt_path / rel
+        if p.exists():
+            try:
+                parts.append(p.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                pass
+    return "\n".join(parts)
+
+
+def _build_target(cfg, wt_path: "Path"):
+    """The solution/project `dotnet build` should target. Prefer a .sln/.csproj
+    named in the repo's test_cmd; else a shallow search; else None (bare build)."""
+    tc = getattr(cfg, "test_cmd", None) or []
+    for tok in tc:
+        if isinstance(tok, str) and (tok.endswith(".sln") or tok.endswith(".csproj")):
+            return tok
+    try:
+        cands = [wt_path] + [p for p in sorted(wt_path.iterdir())
+                             if p.is_dir() and p.name not in {".git", "node_modules", "bin", "obj"}]
+    except OSError:
+        cands = [wt_path]
+    for d in cands[:25]:
+        for sln in sorted(d.glob("*.sln")):
+            return str(sln.relative_to(wt_path))
+    return None
+
+
+async def _r22_gate(wt_path: "Path", base_ref: str, spec_text: str, timeout: int,
+                    project: str | None = None) -> dict:
+    """R22 gate: structural contract validation + per-operation conformance of
+    the generated stubs + a real `dotnet build`. ok only when all three pass."""
+    from app.services import contract as contract_svc
+    stub_text = await _changed_cs_corpus(wt_path, base_ref)
+    rep = contract_svc.contract_report(spec_text, stub_text)
+    build = await _dotnet_build(wt_path, project=project, timeout=timeout)
+    return {
+        "ok": bool(rep["ok"] and build["ok"]),
+        "validation_errors": rep["validation_errors"],
+        "unconformant": rep["unconformant"],
+        "build_ok": build["ok"],
+        "build_kind": build["kind"],
+        "build_tail": build.get("tail", ""),
+    }
+
+
+def _r22_fix_prompt(gate: dict) -> str:
+    parts = ["The R22 contract-materialization gate FAILED. Root-cause and fix, then commit a NEW commit:"]
+    if not gate.get("build_ok"):
+        parts.append(
+            f"- `dotnet build` FAILED ({gate.get('build_kind')}). Compile-error tail:\n"
+            f"{gate.get('build_tail', '')}\nFix EVERY compile error so the solution builds."
+        )
+    if gate.get("unconformant"):
+        parts.append(
+            "- These contract operations are NOT represented in your stubs — add a stub "
+            "referencing each (by operationId, or its route path): "
+            + "; ".join(gate["unconformant"])
+        )
+    if gate.get("validation_errors"):
+        parts.append("- Contract structural errors: " + "; ".join(gate["validation_errors"]))
+    parts.append("Additive stubs only — no business logic, no behavior changes, no test changes.")
+    return "\n".join(parts)
+
+
+async def _contract_flow(repo_dir: "Path", repo_name: str, *, run_id: str | None = None,
+                         feature_slug: str | None = None, timeout: int = 900,
+                         retrieval_kwargs_builder=None):
+    """Contract-First Phase 1 (R22, decision c). Read the PO-authored OpenAPI 3.1
+    contract; spawn the Engineer-as-materializer to write compilable C# stubs;
+    run the R22 gate in a no-abort loop until it is green; FF-merge to
+    agent_branch. Emits orchestrator.contract.{start,skipped,materialized,done,
+    escalated}. Only invoked when contract_first=True (else byte-identical)."""
+    from app.services import contract as contract_svc
+    cfg = repo_config_svc.load(repo_dir)
+    family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
+    art = repo_dir / feature_artifact_dir(repo_dir, feature_slug)
+    contract_path = art / "contract" / "openapi.yaml"
+    yield _evt("contract.start", contract=str(contract_path))
+
+    if not contract_path.exists():
+        # contract_first is opt-in; a PO that authored no contract has nothing to
+        # materialize. Non-fatal skip (Phase 1 does not force every feature to
+        # carry an HTTP contract).
+        yield _evt("contract.skipped", reason="no contract/openapi.yaml authored by PO")
+        return
+
+    spec_text = contract_path.read_text(encoding="utf-8")
+    pre = contract_svc.contract_report(spec_text)
+    if not pre["ok"]:
+        yield _evt("contract.escalated", reason="contract failed structural validation",
+                   validation_errors=pre["validation_errors"])
+        return
+
+    prompt = prompts_svc.build_stub_materializer(family, spec_text, repo_dir, feature_slug=feature_slug)
+    wt = None
+    trace = None
+    try:
+        wt = await create_worktree(repo_dir, base_ref=cfg.agent_branch)
+        trace = TraceWriter(repo=repo_name, role="engineer", task_id=wt.task_id)
+        yield _ptag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
+                    "branch": wt.branch, "role": "contract", "trace_dir": str(trace.dir)},
+                   "contract", trace=trace)
+        rk = retrieval_kwargs_builder(wt, "engineer", None, trace)
+        build_target = _build_target(cfg, wt.path)
+        async for ev in stream_agent_task(prompt, wt.path, timeout_seconds=timeout,
+                                          trace=trace, min_pregrounding=3, **rk):
+            yield _tag(ev, "contract")
+
+        gate = await _r22_gate(wt.path, cfg.agent_branch, spec_text, timeout, project=build_target)
+        yield _ptag({"type": "_meta", "phase": "contract_gate", **gate}, "contract", trace=trace)
+        attempt = 0
+        while not gate["ok"] and attempt < MAX_FIX_ATTEMPTS:
+            attempt += 1
+            fix = _r22_fix_prompt(gate)
+            async for ev in stream_agent_task(fix, wt.path, timeout_seconds=max(300, timeout // 2),
+                                              trace=trace, **rk):
+                yield _tag(ev, "contract")
+            gate = await _r22_gate(wt.path, cfg.agent_branch, spec_text, timeout, project=build_target)
+            yield _ptag({"type": "_meta", "phase": "contract_gate", "attempt": attempt, **gate},
+                       "contract", trace=trace)
+
+        if not gate["ok"]:
+            yield _evt("contract.escalated", reason="R22 gate not green after fixes",
+                       validation_errors=gate["validation_errors"],
+                       unconformant=gate["unconformant"], build_ok=gate["build_ok"])
+            return
+
+        merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+        if not merge.get("ok") and merge.get("kind") == "error":
+            await asyncio.sleep(2)
+            merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+        if not merge.get("ok"):
+            yield _evt("contract.escalated", reason=f"stub merge failed: {merge.get('kind')}",
+                       error=merge.get("error"))
+            return
+
+        yield _evt("contract.materialized", branch=wt.branch)
+        yield _evt("contract.done", ok=True)
+    finally:
+        if wt is not None:
+            await remove_worktree(repo_dir, wt)

@@ -204,6 +204,17 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
         docs=("SKILLS.md", "CLAUDE.md", "PROPOSAL_PARALLEL_WAVE_EXECUTION.md"),
     ),
     DoctrineRule(
+        "R22", "a feature's interface contract is materialized as compilable "
+               "C# stubs (OpenAPI 3.1 HTTP seam) before any consuming slice "
+               "runs; the contract must structurally validate and the crew-"
+               "authored stubs must dotnet-build green AND conform to every "
+               "contract operation (Contract-First Decomposition Phase 1)",
+        "orchestrator", True,
+        "app.services.contract:contract_report",
+        has_test=True, targeted_failure_class="starvation",
+        docs=("CLAUDE.md", "PROPOSAL_CONTRACT_FIRST_DECOMPOSITION.md"),
+    ),
+    DoctrineRule(
         "Tier1.5", "pre-modification kill: <min grounded calls before Write/Edit",
         "streaming", True,
         "app.services.claude_agent:stream_agent_task",
@@ -217,7 +228,7 @@ DOCTRINE_SPEC: tuple[DoctrineRule, ...] = (
 # not yet registered — its enforcement point is to be confirmed first.
 CANONICAL_RULE_IDS = frozenset({
     "R5", "R5b", "R7", "R8", "R9", "R10", "R10.1", "R10.2",
-    "R11", "R12", "R13", "R15", "R16", "R17", "R18", "R19", "R20", "R21", "Tier1.5",
+    "R11", "R12", "R13", "R15", "R16", "R17", "R18", "R19", "R20", "R21", "R22", "Tier1.5",
 })
 
 

@@ -111,7 +111,7 @@ Rules:
 # ─────────────────────────────── PO (Brownfield) ───────────────────────────
 
 
-def build_po_prompt_brownfield(brief: str, project_name: str | None = None, artifact_dir: str = "_brownfield", lessons_block: str = "") -> str:
+def build_po_prompt_brownfield(brief: str, project_name: str | None = None, artifact_dir: str = "_brownfield", lessons_block: str = "", contract_block: str = "") -> str:
     name = project_name or "Project"
     skills_md = _load_skill("po")
     body = f"""You are a Brownfield Agile Product Owner. The operational doctrine below is your binding rulebook; you must follow it literally.
@@ -267,6 +267,7 @@ Halt conditions (do NOT commit):
     # CODEBASE_CONTEXT.md and SPRINT_PLAN_C1.md.
     if "/features/" in artifact_dir:
         body = body.replace(".agile-v/BACKLOG.md", f"{artifact_dir}/BACKLOG.md")
+    body += contract_block  # Contract-First Phase 1: PO authors the OpenAPI contract
     return body
 
 
@@ -644,3 +645,85 @@ You are SCORING only. Do NOT modify production code or tests.
     if artifact_dir != "_brownfield":
         body = body.replace("_brownfield/", f"{artifact_dir}/").replace("`_brownfield`", f"`{artifact_dir}`")
     return body
+
+
+# ───────────────────── Contract-First Phase 1 (R22) ─────────────────────
+# Decision A: PO authors a raw OpenAPI 3.1 contract (HTTP seam, B1).
+# Decision (c): the Engineer materializes it into compilable C# stubs.
+
+
+def po_contract_instruction(artifact_dir: str = "_brownfield") -> str:
+    """The block appended to the PO prompt when ``contract_first`` is ON: the
+    PO additionally authors the feature's OpenAPI 3.1 HTTP contract."""
+    path = f"{artifact_dir}/contract/openapi.yaml"
+    return f"""
+
+# ───────────────── CONTRACT-FIRST (R22 — contract_first ON) ─────────────────
+
+In addition to the backlog, you MUST author the feature's HTTP API **contract**
+as a single OpenAPI **3.1** document at:
+
+    {path}
+
+This is the agreed interface the implementation slices build against in
+parallel (frontend against a mocked client; backend implementing the
+endpoints). Derive it from the BLs you just designed — every HTTP endpoint a
+BL **Exposes:** becomes a path + operation here. Rules:
+- `openapi: 3.1.0`, a real `info.title` / `info.version`, a non-empty `paths`.
+- Give EVERY operation a unique, descriptive `operationId` (the materializer
+  and the R22 conformance gate key on it).
+- Model request/response bodies as `components.schemas` and `$ref` them.
+- Cover ONLY the feature's HTTP seam (the endpoints the BLs add/change), not
+  the whole existing API.
+Write valid YAML. The contract is structurally validated and every operation
+in it MUST be materialized as a compilable stub before any slice runs.
+"""
+
+
+def build_stub_materializer_prompt_brownfield(contract_text: str,
+                                              repo_summary: str = "",
+                                              artifact_dir: str = "_brownfield") -> str:
+    """Engineer-in-CONTRACT-MATERIALIZATION-mode (decision c): turn the agreed
+    OpenAPI 3.1 contract into compilable C# server stubs — nothing implemented,
+    but the solution builds and every contract operation is represented."""
+    repo_block = f"\n## Current repo summary\n{repo_summary}\n" if repo_summary.strip() else ""
+    tmpl = """You are a Brownfield Engineer operating in CONTRACT MATERIALIZATION mode.
+
+Your ONE job: turn the agreed OpenAPI 3.1 contract below into **compilable C#
+server stubs** committed to this repo. NOTHING is implemented yet — but the
+solution MUST build and every contract operation MUST be represented.
+__REPO__
+__RETRIEVAL__
+
+## The contract (OpenAPI 3.1)
+```yaml
+__CONTRACT__
+```
+
+## What to produce — idiomatic to THIS repo (ground FIRST)
+Before writing, ground in the codebase (use retrieval) to match existing
+conventions: namespaces, folder layout, base controller class, DI registration
+style, DTO/record conventions, nullable settings. Then, for the contract:
+- **DTOs / models**: one C# `record` (or class) per `components.schemas` entry,
+  in the repo's models namespace/folder.
+- **A service interface** (e.g. `I<Feature>Service`) with one method per
+  operation, named after its `operationId`.
+- **Controller skeleton(s)**: ASP.NET Core controller(s) mapping each operation
+  (route + HTTP method from the contract) to an action whose body is
+  `throw new NotImplementedException();` and which references the matching
+  `operationId` (in the method name and/or an XML-doc comment).
+- **DI registration**: register the interface -> stub binding so the app wires up.
+
+## Hard requirements (the R22 gate checks these — no-abort until green)
+1. `dotnet build` of the solution MUST succeed (the stubs compile).
+2. EVERY operation in the contract MUST be referenced in the generated stubs
+   (by its `operationId`, or its route path if it declares none).
+3. Do NOT implement business logic, do NOT alter existing behavior, do NOT add
+   or change tests — additive stubs only, behind the interface/DI.
+4. Commit your stubs as a NEW commit on this branch.
+
+Write the files, run `dotnet build` yourself to confirm green, fix any compile
+errors, and commit. The harness independently re-validates (R22)."""
+    return (tmpl.replace("__REPO__", repo_block)
+                .replace("__RETRIEVAL__", RETRIEVAL_HINT_BROWNFIELD)
+                .replace("__CONTRACT__", contract_text))
