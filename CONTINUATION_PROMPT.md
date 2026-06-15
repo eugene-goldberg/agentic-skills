@@ -3,7 +3,7 @@
 > Hand-off written 2026-06-15 (evening). Supersedes all prior hand-offs. **Headline: the
 > indexing line is COMPLETE — reindex incremental is DEFAULT ON and the index_initial 900s
 > baseline-cap is FIXED (marker-gated complete baseline + 3h op-aware timeout), all live-proven.
-> A real full Product-Q&A sprint is IN-FLIGHT on the C# ecommerce target validating it end-to-end.
+> (The Product-Q&A validation sprint was killed + cleaned at operator request; harness idle, target pristine.)
 > The operator approved the NEXT architectural line: the Contract-First Decomposition + Stub
 > Materialization Program (`PROPOSAL_CONTRACT_FIRST_DECOMPOSITION.md`), Phase 0 done, Phase 1
 > pending operator go.**
@@ -32,32 +32,24 @@ self-correcting, honest, cumulative, **and (next line) parallel like a real team
 ## VERIFIED CURRENT STATE (checked 2026-06-15 ~18:30 UTC)
 - **Git (agentic-skills), Mac ≡ remote ≡ origin/GitHub:** `development` = `main` = **`dc22ef2`** (clean).
   `wave-concurrency` retained at `4265640` (fully merged; historical).
-- **Remote harness:** uvicorn `127.0.0.1:8000`, **pid 3169305** (DRIFTS on restart — re-check
-  `lsof -tnP -iTCP:8000 -sTCP:LISTEN`), running code at `dc22ef2`. **AN ACTIVE RUN IS IN FLIGHT** (see
-  below) — do NOT restart the harness or reset the target until it terminates.
+- **Remote harness:** uvicorn `127.0.0.1:8000`, **pid 3197156** (DRIFTS on restart — re-check
+  `lsof -tnP -iTCP:8000 -sTCP:LISTEN`), running code at `3197a83`. **NO active run — idle.**
 - **Services:** Milvus (:19530), Ollama (bge-m3, :11434, 100% CPU — no GPU on host), `ecommerce-pg`
   (postgres:16 :5433). 572 tests pass on the remote venv (as of `17e7090`).
-- **Target `fullstack-ecommerce-app`:** branch `integration`, head **`3504858`** (ADVANCING — the
-  in-flight Q&A sprint is committing to it; pristine pre-sprint tip was `07ab2cd`). Baseline index
+- **Target `fullstack-ecommerce-app`:** branch `integration`, head **`07ab2cd`** (PRISTINE — the Q&A sprint was killed + cleaned). Baseline index
   marker present (`~/.context/baseline_complete/hybrid_code_chunks_92e66084.json`, 409 files/2708
   chunks) so `index_initial` runs incremental/fast.
 
-## ⏳ IN-FLIGHT — Product Q&A sprint (CHECK THIS FIRST)
-- **Run:** `run-20260615T175833Z-083f51`. **Log:** `~/qa_sprint2.log` (SSE). **Watcher:** background
-  task `bokz71zjt` blocks until terminal then dumps backlog/outcomes/acceptance (cap ~4h).
-- **What it is:** a real full new-feature sprint (production defaults: PO decomposition, acceptance
-  ON, reindex_incremental ON, inject_lessons ON, `wave_execution` OFF). Feature = customer Q&A +
-  admin answers on a product (additive, mirrors Reviews; auth-gated writes for the acceptance loop).
-  Backlog = **4 BLs, a strict linear chain** (persistence → read API → write API → UI), so it runs
-  **sequentially** (no parallelism possible for this DAG — this is the motivating example for the
-  Contract-First line below). Last seen: BL-0001 `engineer.done`, no abort.
-- **Its PURPOSE:** validate the new indexing + full crew loop end-to-end. The new indexing already
-  PROVED itself live here: `index_initial` ran `cc_op=index_baseline` **incremental** (marker) and
-  finished in seconds (not a 41-min full embed). **First action next session:** read `bokz71zjt`
-  output / `~/qa_sprint2.log` for the terminal verdict (per-BL outcomes, acceptance, integrity_ok).
-  If it delivered + acceptance-clean, the indexing line is DONE-proven; if it hit a blocker,
-  investigate per no-abort doctrine. When finished, restore the target if desired
-  (`git reset --hard 07ab2cd` + prune `agent/*`) — but ONLY after it terminates.
+## Product-Q&A validation sprint — KILLED + CLEANED (operator 2026-06-15)
+The full Q&A sprint (`run-20260615T175833Z-083f51`) was launched to validate the new indexing
+in a real end-to-end sprint, then **killed at operator request** and fully cleaned up: harness
+SIGTERM'd + restarted idle, agent/index/curl procs reaped, target reset to `07ab2cd`, agent
+branches + worktrees + `.agent-worktrees` pruned, run state archived. **The new indexing was
+already PROVEN live in it** — `index_initial` ran `cc_op=index_baseline` INCREMENTAL (marker
+present) and finished in seconds, and the PO grounded fine (8 calls). So the indexing line is
+DONE + live-validated. (The sprint also surfaced + we fixed the R21 `;`-split parser bug,
+`17e7090`.) Nothing is in flight now.
+
 
 ## WHAT SHIPPED THIS SESSION (all verified, all on `dc22ef2`)
 - **`[x]` Wave-concurrency follow-ups #1–4 MERGED** (earlier `4265640`): scorer mid-wave trunk-leak
@@ -105,8 +97,7 @@ Phase 4 = live proof.** Additive + `contract_first` flag default OFF. **Phase 1 
 
 ## HONEST LEDGER
 `[x]` reindex incremental DEFAULT ON (live-proven) · `[x]` baseline-cap fixed (marker+3h, live-proven
-41min-once→2s) · `[x]` R21 `;`-split fix · `[x]` Contract-First PROPOSAL committed (Phase 0) · `[~]`
-Q&A sprint IN-FLIGHT (validating indexing; check `bokz71zjt`) · `[ ]` Contract-First Phase 1 (pending
+41min-once→2s) · `[x]` R21 `;`-split fix · `[x]` Contract-First PROPOSAL committed (Phase 0) · `[x]` indexing line proven live in the Q&A sprint (then killed + cleaned per operator) · `[ ]` Contract-First Phase 1 (pending
 operator go) · `[ ]` R21 markdown hardening (non-blocking).
 
 ---PROMPT END---
