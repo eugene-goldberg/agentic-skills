@@ -3954,7 +3954,8 @@ async def run_brief(
                                                run_id=run_id, feature_slug=feature_slug,
                                                inject_lessons=inject_lessons,
                                                inject_global_lessons=inject_global_lessons,
-                                               base_branch_override=work_branch):
+                                               base_branch_override=work_branch,
+                                               merge_target_override=work_branch):  # wave-concurrency: scorer persists its scorecard to the BL work_branch (NOT agent_branch); the BL-id-ordered assembly barrier carries it to the trunk — restores full defer-merge (was leaking BL work onto the trunk mid-wave, making BL-0001 assemble as noop)
                 if "_orchestrator_outcome" in e:
                     score_outcome = e
                     continue
