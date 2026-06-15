@@ -132,3 +132,33 @@ def test_r21_registered_and_resolvable():
     assert "R21" in ds.CANONICAL_RULE_IDS
     # I-2: the check_ref must resolve to a real callable
     assert callable(ds.resolve_check(rule))
+
+
+# ── R21 parser brittleness regression (Q&A sprint abort, 2026-06-15) ───────────
+
+def test_contract_brace_field_list_not_split():
+    # Producer Exposes an entity contract whose brace body uses ; as field
+    # separators; consumer references it by short name. Must MATCH (no error) -
+    # the body's ; must not shatter the token. (Was: false contract_error -> abort.)
+    items = _backlog(
+        _bl("0001", "none", exposes="ProductQuestion{id; productId; text; createdAt}"),
+        _bl("0002", "BL-0001", consumes="ProductQuestion"))
+    assert bl.contract_report(items) == {}
+
+
+def test_contract_method_arglist_comma_not_split():
+    # Method arg-list commas must not shatter the token either.
+    items = _backlog(
+        _bl("0001", "none", exposes="IQaService.AddAnswer(questionId, text, adminUserId) -> AnswerDto"),
+        _bl("0002", "BL-0001", consumes="IQaService.AddAnswer"))
+    assert bl.contract_report(items) == {}
+
+
+def test_top_level_separators_still_split_multiple_contracts():
+    # Two distinct top-level contracts separated by ; - both parsed; a genuinely
+    # unmatched consume must still be flagged.
+    items = _backlog(
+        _bl("0001", "none", exposes="Question{id; text}; Answer{id; body}"),
+        _bl("0002", "BL-0001", consumes="Question; Nonexistent.Thing"))
+    rep = bl.contract_report(items)
+    assert "BL-0002" in rep

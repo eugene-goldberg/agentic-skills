@@ -213,8 +213,33 @@ def _normalize_contract(token: str) -> str:
     """Reduce an interface token to a comparable key: the identifier head before
     any ``(`` / ``->`` / ``:`` , whitespace-stripped and lower-cased. So
     ``IRepo.TryDecrement(a,b)->bool`` and ``IRepo.TryDecrement`` compare equal."""
-    head = re.split(r"\(|->|::|:", token, maxsplit=1)[0]
+    head = re.split(r"\(|->|::|:|\{|\[", token, maxsplit=1)[0]
     return "".join(head.split()).lower()
+
+
+def _split_top_level(raw: str) -> list[str]:
+    """Split a contract block on top-level ``;`` ``,`` or newline ONLY — never on a
+    separator nested inside ``()`` ``[]`` ``{}``. Entity field-lists and method
+    arg-lists legitimately contain ``;``/``,`` (e.g. ``Question{id; text}``,
+    ``Repo.Try(a, b)``); splitting blindly shattered them into broken tokens and
+    produced false R21 contract_errors (a Q&A sprint aborted on this)."""
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for ch in raw:
+        if ch in "([{":
+            depth += 1
+            buf.append(ch)
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+            buf.append(ch)
+        elif ch in ";,\n" and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    parts.append("".join(buf))
+    return parts
 
 
 def _contract_tokens(item, rx: re.Pattern) -> set[str]:
@@ -225,7 +250,7 @@ def _contract_tokens(item, rx: re.Pattern) -> set[str]:
     if not m:
         return set()
     raw = m.group(1)
-    parts = re.split(r"[;,\n]", raw)
+    parts = _split_top_level(raw)
     out = set()
     for p in parts:
         p = p.strip().lstrip("-*0123456789. \t")
