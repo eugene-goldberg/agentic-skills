@@ -296,6 +296,21 @@ def topological_waves(items) -> list[list[str]]:
     return waves
 
 
+def dag_width(items) -> int:
+    """Max wave width (parallelism degree) of the dependency DAG — the size of the
+    widest topological wave. 1 ⇒ fully serial (one BL per wave); ≥2 ⇒ the schedule
+    can fan out. 0 for an empty backlog. A cyclic (unschedulable) DAG returns 1 —
+    :func:`dependency_report` flags the cycle separately. Contract-First Phase B
+    fan-out metric (emitted on ``backlog_parsed``)."""
+    if not items:
+        return 0
+    try:
+        waves = topological_waves(items)
+    except ValueError:
+        return 1
+    return max((len(w) for w in waves), default=0)
+
+
 def dependency_report(items) -> dict[str, str]:
     """R21 DAG validation. Returns ``{bl_id: reason}`` for every BL with a
     dependency defect (empty ⇒ the DAG is well-formed). Checks, per BL:

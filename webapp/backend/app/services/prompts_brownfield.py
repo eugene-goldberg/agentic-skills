@@ -677,6 +677,22 @@ BL **Exposes:** becomes a path + operation here. Rules:
   the whole existing API.
 Write valid YAML. The contract is structurally validated and every operation
 in it MUST be materialized as a compilable stub before any slice runs.
+
+## Decompose for PARALLELISM (contract-first — this is the point)
+The contract above is the agreed seam, so slices DO NOT depend on each other's
+merged code — they depend on the CONTRACT. Decompose accordingly:
+- Carve the feature into **file-disjoint VERTICAL slices** (each its own files),
+  NOT horizontal layers. A persistence→service→endpoints layer-chain serialises
+  to one-BL-per-wave and wastes the parallel crew — avoid it.
+- Every cross-slice interface a slice **Consumes:** MUST be in the contract/stubs
+  (the materialiser builds them first). Then a consuming slice builds against the
+  stub immediately, concurrently with the producer.
+- Set **Dependencies: none** for a slice UNLESS it needs true execution ORDERING
+  (e.g. a DB migration that must run first). Do NOT add a Dependency merely
+  because you Consume a sibling's interface — the contract already provides it
+  (adding one needlessly serialises the wave).
+- Aim for a backlog whose dependency DAG **fans out**: most slices in wave 0,
+  with ordering edges only where genuinely required.
 """
 
 

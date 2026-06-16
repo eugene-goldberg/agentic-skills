@@ -3874,10 +3874,20 @@ async def run_brief(
                           ([it for it in w if it.id in _kept] for w in _waves) if w2]
         _wave_of = ({it.id: wi for wi, w in enumerate(_waves) for it in w}
                     if _waves is not None else {})
-        yield _evt("backlog_parsed", count=len(ordered),
+        _dag_width = backlog_svc.dag_width(items)  # Phase B fan-out metric
+        yield _evt("backlog_parsed", count=len(ordered), dag_width=_dag_width,
                    bls=[{"id": it.id, "title": it.title,
                          "deps": str(it.meta.get("dependencies") or "")} for it in ordered],
                    waves=([[it.id for it in w] for w in _waves] if _waves is not None else None))
+        if contract_first and _dag_width <= 1 and len(items) > 1:
+            # Contract-First Phase B: a serial DAG under contract_first means the PO
+            # decomposed by layers, not contract-bound vertical slices — the parallel
+            # crew is starved. Advisory (non-blocking) so a genuinely-serial feature
+            # is never false-failed; the metric makes the regression observable.
+            yield _evt("contract_first.fanout_advisory", dag_width=_dag_width,
+                       n_bls=len(items),
+                       note=("contract_first decomposition is serial (DAG width<=1); "
+                             "expected a width>=2 fan-out for a parallelizable feature"))
         _checkpoint(current_bl=None)  # A7: first checkpoint after PO+parse
 
         # Contract-First Phase 1 (R22, operator 2026-06-15): materialize the PO's

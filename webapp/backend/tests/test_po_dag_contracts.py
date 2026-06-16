@@ -193,3 +193,28 @@ def test_contract_first_flag_off_byte_identical():
                      _bl("0003", "none", exposes="OrderSvc.place"))
     assert bl.contract_report(items) == bl.contract_report(items, contract_first=False)
     assert "BL-0002" in bl.contract_report(items)
+
+
+# ── Contract-First Phase B: DAG-width fan-out metric ──
+
+def test_dag_width_linear_is_one():
+    items = _backlog(_bl("0001", "none"), _bl("0002", "BL-0001"),
+                     _bl("0003", "BL-0002"))
+    assert bl.dag_width(items) == 1
+
+
+def test_dag_width_fanout_diamond():
+    # 0001 -> {0002, 0003} -> 0004  => widest wave = 2
+    items = _backlog(_bl("0001", "none"),
+                     _bl("0002", "BL-0001"), _bl("0003", "BL-0001"),
+                     _bl("0004", "BL-0002, BL-0003"))
+    assert bl.dag_width(items) == 2
+
+
+def test_dag_width_all_parallel():
+    items = _backlog(_bl("0001", "none"), _bl("0002", "none"), _bl("0003", "none"))
+    assert bl.dag_width(items) == 3
+
+
+def test_dag_width_empty_is_zero():
+    assert bl.dag_width([]) == 0
