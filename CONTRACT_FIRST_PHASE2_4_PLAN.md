@@ -113,6 +113,6 @@ exercises the real endpoints and catches any mock drift. Capture as `[x]` live-p
 - [x] Phase A — dependency semantics (keystone) — **DONE, tested green on remote
   (597 passed, 0 regressions; 3 new tests in `test_po_dag_contracts.py`). UNCOMMITTED.**
 - [x] Phase B — PO doctrine + fan-out metric — **DONE, tested green on remote (603 passed; dag_width metric + fanout advisory + PO decomposition doctrine; 6 new tests).**
-- [ ] Phase C — engineer stubs/mocks
+- [x] Phase C — engineer stubs/mocks — **DONE, tested green on remote (605 passed; contract_first engineer block: build against stubs, mock unmerged collaborators, file-disjoint; threaded build_engineer + _engineer_flow x3 call sites; 2 new tests).**
 - [ ] Phase D — barrier binding
 - [ ] Phase E — live proof

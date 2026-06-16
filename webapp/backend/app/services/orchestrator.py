@@ -492,13 +492,16 @@ async def _engineer_flow(
                                 # work on wt.branch (which survives worktree removal)
                                 # instead of FF-merging into agent_branch; the wave
                                 # barrier assembles work-branches in BL-id order.
+    contract_first: bool = False,  # Phase C: per-BL engineer builds against the
+                                   # materialized contract stubs + mocks collaborators.
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
     section = _resolve_engineer_section(repo_dir, bl_id, feature_slug, section_override)
     prompt = prompts_svc.build_engineer(family, bl_id, section, repo_dir, feature_slug=feature_slug,
                                         inject_lessons=inject_lessons,
-                                        inject_global_lessons=inject_global_lessons)
+                                        inject_global_lessons=inject_global_lessons,
+                                        contract_first=contract_first)
     if inject_lessons and run_id:
         lessons_svc.record_injection(
             run_id, "engineer",
@@ -3947,7 +3950,7 @@ async def run_brief(
                                                run_id=run_id, feature_slug=feature_slug,
                                                inject_lessons=inject_lessons,
                                                inject_global_lessons=inject_global_lessons,
-                                               defer_merge=True):
+                                               defer_merge=True, contract_first=contract_first):
                     if "_orchestrator_outcome" in e:
                         eng_outcome = e
                         continue
@@ -4094,7 +4097,7 @@ async def run_brief(
                                                timeout_per_role, retrieval_kwargs_builder,
                                                run_id=run_id, feature_slug=feature_slug,
                                                inject_lessons=inject_lessons,
-                                               inject_global_lessons=inject_global_lessons):
+                                               inject_global_lessons=inject_global_lessons, contract_first=contract_first):
                     if "_orchestrator_outcome" in e:
                         eng_outcome = e
                         continue
@@ -4252,7 +4255,7 @@ async def run_brief(
                                                       run_id=run_id, feature_slug=feature_slug,
                                                       section_override=_reframed,
                                                       inject_lessons=inject_lessons,
-                                                      inject_global_lessons=inject_global_lessons):
+                                                      inject_global_lessons=inject_global_lessons, contract_first=contract_first):
                             if "_orchestrator_outcome" in e:
                                 _re_out = e
                                 continue

@@ -402,11 +402,13 @@ def build_stub_materializer(family: str, contract_text: str, repo_root: _Path,
 
 def build_engineer(family: str, bl_id: str, bl_section: str, repo_root: _Path,
                    repo_summary: str = "", feature_slug: str | None = None,
-                   inject_lessons: bool = False, inject_global_lessons: bool = False) -> str:
+                   inject_lessons: bool = False, inject_global_lessons: bool = False,
+                   contract_first: bool = False) -> str:
     if family == "brownfield":
         return _bf.build_engineer_prompt_brownfield(bl_id, bl_section, repo_summary,
                                                     artifact_dir=_resolve_art_dir(repo_root, feature_slug),
-                                                    lessons_block=_lessons_block(repo_root, feature_slug, inject_lessons, inject_global_lessons))
+                                                    lessons_block=_lessons_block(repo_root, feature_slug, inject_lessons, inject_global_lessons),
+                                                    contract_first=contract_first)
     return build_engineer_prompt(bl_id, bl_section, repo_summary)
 
 

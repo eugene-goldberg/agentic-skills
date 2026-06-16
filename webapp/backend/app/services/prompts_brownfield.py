@@ -274,16 +274,50 @@ Halt conditions (do NOT commit):
 # ─────────────────────────────── Engineer (Brownfield) ─────────────────────
 
 
-def build_engineer_prompt_brownfield(bl_id: str, bl_section: str, repo_summary: str = "", artifact_dir: str = "_brownfield", lessons_block: str = "") -> str:
+def _engineer_contract_block(artifact_dir: str = "_brownfield") -> str:
+    """Contract-First Phase C: the per-BL engineer block (injected only when
+    contract_first is ON). The contract + compilable C# stubs already exist in the
+    repo (materialized + merged before this wave), so this slice builds against the
+    agreed interface and MOCKS collaborators its siblings are building concurrently."""
+    path = f"{artifact_dir}/contract/openapi.yaml"
+    return f"""
+# ───────────────── CONTRACT-FIRST SLICE (contract_first ON) ─────────────────
+
+This BL is ONE vertical slice in a contract-first PARALLEL wave. The feature's
+OpenAPI contract and compilable C# **stubs** for every contract operation/interface
+ALREADY EXIST in this repo (materialized + merged before this wave). Read the
+contract first:
+
+    {path}
+
+Build against the CONTRACT, not against your siblings' code:
+- Implement THIS slice's real behaviour by replacing the `NotImplementedException`
+  stub bodies for the interface(s)/operation(s) THIS BL **Exposes:** with real code.
+  Do NOT touch stubs that belong to other slices.
+- Any interface your slice **Consumes:** that is not yet implemented is being built
+  CONCURRENTLY by a sibling slice (not yet merged). Do NOT call into its files or
+  wait on it. Code against the contract INTERFACE (the stub compiles), and in your
+  unit tests inject a **mock/fake** of that interface — never the real sibling impl.
+- Stay **file-disjoint**: edit only your slice's own files + your own tests. Do not
+  rewrite shared wiring (DI registration / Program.cs / routing) beyond the single
+  registration of your own real impl — the wave barrier binds the assembly.
+- Your per-BL gate runs ONLY your tests (against mocks) — that is by design; the
+  no-mock whole-feature integration is verified once at acceptance.
+"""
+
+
+def build_engineer_prompt_brownfield(bl_id: str, bl_section: str, repo_summary: str = "", artifact_dir: str = "_brownfield", lessons_block: str = "", contract_first: bool = False) -> str:
     repo_block = (
         f"\n## Current repo summary\n{repo_summary}\n" if repo_summary.strip() else ""
     )
     skills_md = _load_skill("engineer")
+    contract_block = _engineer_contract_block(artifact_dir) if contract_first else ""
     body = f"""You are a Brownfield Production Incremental Engineer implementing ONE backlog item on an existing real-world codebase. The operational doctrine below is your binding rulebook; you must follow it literally.
 
 ## Backlog item to implement
 {bl_section}
 {repo_block}
+{contract_block}
 
 # ────────────────────────── DOCTRINE (SKILLS.md, binding) ──────────────────────────
 
