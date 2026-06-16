@@ -78,9 +78,24 @@ impl", and the PO planned slices appending to Program.cs. **Fix (prompt/doctrine
 flag-gated):** engineer OVERWRITES its interface module `<X>Module.cs` in place and
 MUST NOT touch Program.cs/Startup.cs/FeatureModules.cs/.sln/.csproj; materializer makes
 the single `AddFeatureModules()` call the ONE Program.cs touch; PO doctrine forbids a
-shared composition root. 619 tests. `[ ]` **proof 3** to validate clean 2-module assembly.
+shared composition root. 619 tests.
 
-Next: operator decision on flag-flip; proof 3 (clean multi-module) pending.
+**Proof 3 — multi-module assembly PROVEN (2026-06-16, run-20260616T160924Z-df7e63):**
+re-ran `analytics-stats-cf` on the tightened code. **dag_width=2, BOTH slices
+merged_full with ZERO `escalated_assembly_conflict`** (proof-2 failure gone),
+**`contract_bind.done` chose 2 REAL modules** (ProductStatisticsManagement +
+CategoryStatisticsService) + dotnet build green, acceptance self-healed →
+integrity_ok=true → sprint_complete. So clean 2-real-module parallel assembly is
+now LIVE-PROVEN. **RESIDUAL (cross-layer DI), `[ ]` open:** one slice still added
+`builder.Services.AddProductStatistics();` to `Program.cs` because its real impl
+needs an **Infrastructure-layer repository** the Service-layer `<X>Module.cs` can't
+register across the layering boundary. No conflict here (only one slice needed it),
+but two cross-layer slices could re-conflict. Fix: extend the convention so a slice
+registers its FULL dependency chain (incl. Infra repos — e.g. a second per-slice
+module in the Infrastructure layer) inside its own files, keeping Program.cs 100%
+slice-untouched.
+
+Next: operator decision on flag-flip; cross-layer-DI residual fix is the open item.
 
 All flag-gated behind `contract_first` (default OFF). See [[arch_target_ecommerce]]
 (C#/.NET substrate), [[feedback_remote_first_dev]].

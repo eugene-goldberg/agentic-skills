@@ -128,3 +128,6 @@ interface module `<X>Module.cs` in place and MUST NOT edit `Program.cs`/`Startup
 `AddFeatureModules()` call the ONE and only Program.cs touch; the PO doctrine forbids
 a shared composition root. Removes the only shared file at width>=2. 619 tests.
 `[ ]` proof 3 to validate clean 2-real-module assembly.
+
+`[x]` **proof 3 — multi-module assembly PROVEN** (run-20260616T160924Z-df7e63, 2026-06-16): dag_width=2, BOTH slices merged_full with ZERO escalated_assembly_conflict (proof-2 failure gone), contract_bind.done chose 2 REAL modules + dotnet build green, acceptance self-healed -> integrity_ok=true -> sprint_complete.
+`[ ]` **RESIDUAL (cross-layer DI):** one slice still added `builder.Services.AddProductStatistics();` to Program.cs because its real impl needs an Infrastructure-layer repository the Service-layer module cannot register across the layering boundary. No conflict here (only one slice needed it), but two cross-layer slices could re-conflict. Fix: extend the module convention so a slice registers its FULL dependency chain (incl. Infrastructure repos, e.g. a second per-slice module in the Infrastructure layer) inside its own files, keeping Program.cs 100% slice-untouched.
