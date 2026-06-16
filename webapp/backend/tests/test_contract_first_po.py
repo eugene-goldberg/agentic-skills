@@ -45,3 +45,19 @@ def test_build_engineer_dispatcher_threads_contract_first(tmp_path):
                                   contract_first=False)
     assert "CONTRACT-FIRST SLICE" in on
     assert "CONTRACT-FIRST SLICE" not in off
+
+
+# ── Contract-First Phase D: materializer + engineer emit the DI module convention ──
+
+def test_materializer_emits_module_and_aggregator_convention():
+    p = pb.build_stub_materializer_prompt_brownfield("openapi: 3.1.0\ninfo:\n  title: X")
+    assert "@contract-module" in p
+    assert "@contract-aggregator:begin" in p
+    assert "kind=stub" in p
+    assert "AddFeatureModules" in p
+
+
+def test_engineer_block_emits_real_module_convention():
+    blk = pb._engineer_contract_block()
+    assert "@contract-module" in blk and "kind=real" in blk
+    assert "IServiceCollection" in blk and "Module" in blk

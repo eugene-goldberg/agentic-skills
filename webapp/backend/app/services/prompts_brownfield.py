@@ -301,6 +301,17 @@ Build against the CONTRACT, not against your siblings' code:
 - Stay **file-disjoint**: edit only your slice's own files + your own tests. Do not
   rewrite shared wiring (DI registration / Program.cs / routing) beyond the single
   registration of your own real impl — the wave barrier binds the assembly.
+- Register your real impl in its OWN `<X>Module.cs` (do NOT edit the aggregator or
+  another slice's module), using the SAME `interface=<IFullName>` token the contract
+  stub used so the wave binder can match stub<->real:
+
+      // @contract-module interface=<IFullName> impl=<YourRealClass> kind=real
+      public static class <X>Module
+      {{
+          public static IServiceCollection Add<X>Module(this IServiceCollection services)
+              => services.AddScoped<<IFullName>, <YourRealClass>>();
+      }}
+
 - Your per-BL gate runs ONLY your tests (against mocks) — that is by design; the
   no-mock whole-feature integration is verified once at acceptance.
 """
@@ -762,7 +773,28 @@ style, DTO/record conventions, nullable settings. Then, for the contract:
   (route + HTTP method from the contract) to an action whose body is
   `throw new NotImplementedException();` and which references the matching
   `operationId` (in the method name and/or an XML-doc comment).
-- **DI registration**: register the interface -> stub binding so the app wires up.
+- **DI registration (Phase D module convention — REQUIRED for the wave binder)**:
+  put EACH interface's stub binding in its OWN file `<X>Module.cs` (next to the stub),
+  whose FIRST line is this exact marker, plus one extension method:
+
+      // @contract-module interface=<IFullName> impl=<StubClass> kind=stub
+      public static class <X>Module
+      {
+          public static IServiceCollection Add<X>Module(this IServiceCollection services)
+              => services.AddScoped<<IFullName>, <StubClass>>();
+      }
+
+  Then ONE aggregator file `FeatureModules.cs` exposing `AddFeatureModules(this
+  IServiceCollection)` whose body carries a region the wave binder OWNS:
+
+      // @contract-aggregator:begin
+      services.Add<X>Module();   // one call per module
+      // @contract-aggregator:end
+
+  and call `services.AddFeatureModules()` ONCE from the app composition root
+  (Program.cs / Startup). The `interface=<IFullName>` token must be stable — each
+  implementing slice re-registers the SAME interface with `kind=real`, and the wave
+  binder swaps stub->real by matching that token and regenerates the aggregator.
 
 ## Hard requirements (the R22 gate checks these — no-abort until green)
 1. `dotnet build` of the solution MUST succeed (the stubs compile).

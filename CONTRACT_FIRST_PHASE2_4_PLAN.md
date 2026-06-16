@@ -114,5 +114,5 @@ exercises the real endpoints and catches any mock drift. Capture as `[x]` live-p
   (597 passed, 0 regressions; 3 new tests in `test_po_dag_contracts.py`). UNCOMMITTED.**
 - [x] Phase B — PO doctrine + fan-out metric — **DONE, tested green on remote (603 passed; dag_width metric + fanout advisory + PO decomposition doctrine; 6 new tests).**
 - [x] Phase C — engineer stubs/mocks — **DONE, tested green on remote (605 passed; contract_first engineer block: build against stubs, mock unmerged collaborators, file-disjoint; threaded build_engineer + _engineer_flow x3 call sites; 2 new tests).**
-- [ ] Phase D — barrier binding
+- [x] Phase D — barrier binding (Option A: per-slice DI module + binder composes) — **DONE, tested green on remote (616 passed; contract_bind.py pure core parse/plan/render/compute + 9 tests; _contract_bind orchestrator step: worktree -> compose real DI modules + drop stubs + regenerate aggregator + dotnet build + FF-merge, no-abort escalate, wired before acceptance; materializer+engineer module conventions; 11 new tests). Pure core unit-proven; live binding awaits Phase E.**
 - [ ] Phase E — live proof

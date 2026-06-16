@@ -4706,6 +4706,13 @@ async def run_brief(
         # doctrine_meta + closure_check. Advisory only (§E.1 Q3): exceptions
         # are surfaced as acceptance.error and never abort the sprint.
         # Default off until §E.1 Q6 calibration (3 smoke runs) flips it on.
+        if contract_first:
+            # Contract-First Phase D: bind the assembled slices (stub->real DI +
+            # aggregator) and prove the composed solution builds, BEFORE acceptance.
+            async for _be in _contract_bind(repo_dir, repo_name, run_id=run_id,
+                                            feature_slug=feature_slug,
+                                            timeout=timeout_per_role):
+                yield _be
         if run_acceptance:
             # ── Live-acceptance convergence loop (PROPOSAL_LIVE_ACCEPTANCE_LOOP) ──
             # The customer-acceptance standard: boot the WHOLE app, exercise every
@@ -4992,6 +4999,92 @@ def _r22_fix_prompt(gate: dict) -> str:
         parts.append("- Contract structural errors: " + "; ".join(gate["validation_errors"]))
     parts.append("Additive stubs only — no business logic, no behavior changes, no test changes.")
     return "\n".join(parts)
+
+
+async def _changed_cs_files(wt_path: "Path", base_ref: str) -> dict:
+    """Map {relpath: text} for the C# files added/changed vs base_ref — the feature
+    corpus the Phase-D binder composes (keyed variant of _changed_cs_corpus)."""
+    files: dict = {}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "diff", "--name-only", f"{base_ref}...HEAD", cwd=str(wt_path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await proc.communicate()
+    except Exception:
+        return files
+    for rel in out.decode("utf-8", "replace").splitlines():
+        if not rel.endswith(".cs"):
+            continue
+        p = wt_path / rel
+        if p.exists():
+            try:
+                files[rel] = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                pass
+    return files
+
+
+async def _contract_bind(repo_dir: "Path", repo_name: str, *, run_id: str | None = None,
+                         feature_slug: str | None = None, timeout: int = 900):
+    """Contract-First Phase D — barrier BINDING (Option A: per-slice DI module +
+    binder composes). After all slices are assembled on agent_branch, compose the
+    final DI wiring: prefer each interface's REAL module over its stub, drop the
+    superseded stub modules, regenerate the composition aggregator, and prove the
+    assembly with a real `dotnet build`. No-abort: any conflict / build failure
+    surfaces orchestrator.contract_bind.escalated (siblings stay merged; trunk
+    deterministic). Only invoked when contract_first=True (else byte-identical)."""
+    from app.services import contract_bind as bind_svc
+    cfg = repo_config_svc.load(repo_dir)
+    yield _evt("contract_bind.start")
+    wt = None
+    try:
+        wt = await create_worktree(repo_dir, base_ref=cfg.agent_branch)
+        files = await _changed_cs_files(wt.path, cfg.main_ref)
+        if not any("@contract-module" in (t or "") for t in files.values()):
+            yield _evt("contract_bind.skipped",
+                       reason="no @contract-module DI modules in the feature corpus")
+            return
+        res = bind_svc.compute_binding(files)
+        if not res["ok"]:
+            yield _evt("contract_bind.escalated", reason="binding plan has conflicts",
+                       conflicts=res["conflicts"])
+            return
+        for rel in res["drop_paths"]:
+            try:
+                (wt.path / rel).unlink()
+            except OSError:
+                pass
+        (wt.path / res["aggregator_path"]).write_text(res["new_aggregator_text"],
+                                                       encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=str(wt.path), capture_output=True)
+        subprocess.run(["git", "commit", "-m",
+                        "bind(contract-first): compose real DI modules + drop superseded stubs"],
+                       cwd=str(wt.path), capture_output=True)
+        build_target = _build_target(cfg, wt.path)
+        build = await _dotnet_build(wt.path, project=build_target, timeout=timeout)
+        if not build["ok"]:
+            yield _evt("contract_bind.escalated",
+                       reason="assembled solution failed dotnet build",
+                       build_kind=build["kind"], build_tail=build.get("tail", ""),
+                       chosen=res["chosen"])
+            return
+        merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+        if not merge.get("ok"):
+            await asyncio.sleep(2)
+            merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
+        if not merge.get("ok"):
+            yield _evt("contract_bind.escalated",
+                       reason=f"bind merge failed: {merge.get('kind')}", error=merge.get("error"))
+            return
+        yield _evt("contract_bind.done", ok=True, chosen=res["chosen"],
+                   dropped=res["drop_paths"], method_calls=res["method_calls"])
+    finally:
+        if wt is not None:
+            try:
+                await remove_worktree(repo_dir, wt)
+            except Exception:
+                pass
 
 
 async def _contract_flow(repo_dir: "Path", repo_name: str, *, run_id: str | None = None,
