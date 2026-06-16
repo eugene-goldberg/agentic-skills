@@ -100,10 +100,17 @@ each per-interface `<X>Module.cs` + the aggregator in the **composition-root / h
 project** (the one containing `Program.cs` — only project that references every layer), so
 a slice registers its FULL dependency chain (service impl + Infra repos) in its OWN module;
 engineer forbidden to leak cross-layer registration into `Program.cs`. 620 tests, flag-off
-byte-identical. `[~]` doctrine shipped, **`[ ]` proof 4 (two cross-layer slices) pending**
-to live-validate clean assembly + Program.cs 100% slice-untouched.
+byte-identical. **Proof 4 — cross-layer fix LIVE-PROVEN (2026-06-16, run-20260616T191203Z-71e4bf,
+`catalog-insights-cf`, TWO slices each needing its OWN Infrastructure repository):** dag_width=2,
+both slices merged_full, asm_conflict=0, contract_bind 2 REAL modules, **`Program.cs` touched by
+EXACTLY ONE commit (the materializer's `AddFeatureModules()`) — zero slice edits**, both repos
+registered in their own modules, acceptance integrity_ok=true on the FIRST pass (0 rerounds) →
+sprint_complete. The cross-layer residual is CLOSED. `[x]`
 
-dev≡main FF'd @ c143de6. Next: operator decision on flag-flip; proof 4 is the open item.
+**Contract-First program FULLY COMPLETE + PROVEN (A–E + tightening + cross-layer).** 4 live proofs:
+P1 single-interface clean, P2 dual surfaced the Program.cs conflict, P3 dual clean (proved tightening,
+left cross-layer residual), P4 dual-cross-layer clean (proved cross-layer fix). Next: operator
+decision on flipping `contract_first` default ON (still OFF).
 
 All flag-gated behind `contract_first` (default OFF). See [[arch_target_ecommerce]]
 (C#/.NET substrate), [[feedback_remote_first_dev]].

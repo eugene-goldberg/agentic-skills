@@ -140,4 +140,4 @@ that references every layer), so a slice registers its **FULL dependency chain**
 impl + any Infrastructure-layer repository) inside its OWN module; the engineer doctrine
 forbids leaking any cross-layer registration into `Program.cs`. Keeps `Program.cs` 100%
 slice-untouched even when a real impl needs an Infra repo. 620 tests; flag-off
-byte-identical. `[ ]` **proof 4** (two cross-layer slices) to live-validate clean assembly.
+byte-identical. `[x]` **proof 4 — cross-layer fix LIVE-PROVEN** (run-20260616T191203Z-71e4bf, catalog-insights-cf, two slices each with its OWN Infrastructure repository): dag_width=2, both merged_full, asm_conflict=0, contract_bind 2 REAL modules, **Program.cs touched by EXACTLY 1 commit (materializer AddFeatureModules only, zero slice edits)**, both repos registered in their own modules, acceptance integrity_ok=true first pass (0 rerounds) -> sprint_complete. Cross-layer residual CLOSED. **Program A-E + tightening + cross-layer FULLY PROVEN (4 live proofs).**
