@@ -5035,6 +5035,7 @@ async def _contract_bind(repo_dir: "Path", repo_name: str, *, run_id: str | None
     surfaces orchestrator.contract_bind.escalated (siblings stay merged; trunk
     deterministic). Only invoked when contract_first=True (else byte-identical)."""
     from app.services import contract_bind as bind_svc
+    import subprocess
     cfg = repo_config_svc.load(repo_dir)
     yield _evt("contract_bind.start")
     wt = None
