@@ -64,8 +64,23 @@ pure merge, no stub→real binding; (5) no fan-out/DAG-width metric; (6) no live
   subprocess.run but subprocess was never module-level imported → NameError → aborted
   → fixed with a function-local import.
 
-**PROGRAM COMPLETE (A–E).** All flag-gated `contract_first` default OFF. Next: operator
-decision on flipping the flag / FF dev→main.
+**PROGRAM COMPLETE (A–E); dev≡main FF'd @ 5f84f0b.**
+
+**Proof 2 + convention tightening (`084dd8b`, 2026-06-16):** ran a SECOND live proof
+(run-20260616T133430Z-30b454, `analytics-stats-cf`, TWO interface-exposing slices) to
+exercise multi-module binding. dag_width=2 + both interfaces materialized, but BL-0002
+hit **`escalated_assembly_conflict`** at the wave barrier because **both slices edited
+the shared `Program.cs`** → binder composed 1 real + 1 stub; acceptance self-heal
+recovered BL-0002 → integrity_ok=true → sprint_complete. So the feature shipped, but
+**clean 2-real-module parallel assembly is NOT yet proven.** Root cause: the engineer
+block allowed editing shared wiring "beyond the single registration of your own real
+impl", and the PO planned slices appending to Program.cs. **Fix (prompt/doctrine,
+flag-gated):** engineer OVERWRITES its interface module `<X>Module.cs` in place and
+MUST NOT touch Program.cs/Startup.cs/FeatureModules.cs/.sln/.csproj; materializer makes
+the single `AddFeatureModules()` call the ONE Program.cs touch; PO doctrine forbids a
+shared composition root. 619 tests. `[ ]` **proof 3** to validate clean 2-module assembly.
+
+Next: operator decision on flag-flip; proof 3 (clean multi-module) pending.
 
 All flag-gated behind `contract_first` (default OFF). See [[arch_target_ecommerce]]
 (C#/.NET substrate), [[feedback_remote_first_dev]].
