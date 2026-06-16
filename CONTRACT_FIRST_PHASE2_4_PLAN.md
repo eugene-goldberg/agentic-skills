@@ -116,3 +116,15 @@ exercises the real endpoints and catches any mock drift. Capture as `[x]` live-p
 - [x] Phase C — engineer stubs/mocks — **DONE, tested green on remote (605 passed; contract_first engineer block: build against stubs, mock unmerged collaborators, file-disjoint; threaded build_engineer + _engineer_flow x3 call sites; 2 new tests).**
 - [x] Phase D — barrier binding (Option A: per-slice DI module + binder composes) — **DONE, tested green on remote (616 passed; contract_bind.py pure core parse/plan/render/compute + 9 tests; _contract_bind orchestrator step: worktree -> compose real DI modules + drop stubs + regenerate aggregator + dotnet build + FF-merge, no-abort escalate, wired before acceptance; materializer+engineer module conventions; 11 new tests). Pure core unit-proven; live binding awaits Phase E.**
 - [x] Phase E — live proof — **LIVE-PROVEN 2026-06-16 (run-20260616T035453Z-9ef193, fullstack-ecommerce-app / catalog-extras-cf): dag_width=2 fan-out, contract.materialized (R22), concurrent wave both BLs merged_full, contract_bind.done ok=true (real impl bound + dotnet build green), regression checkpoint, acceptance self-healed 11 anomalies via reround -> loop.accepted + integrity_ok=true -> sprint_complete. Surfaced+fixed 2 bugs: login-shell PATH (operational) + _contract_bind missing local import subprocess.**
+
+
+## Post-E hardening (proof-2 finding, 2026-06-16)
+Proof 2 (dual-interface `analytics-stats-cf`) shipped via acceptance self-heal but
+surfaced a real gap: both slices edited the shared `Program.cs`, so BL-0002 hit
+`escalated_assembly_conflict` at the wave barrier (binder composed 1 real + 1 stub).
+**Convention tightening (prompt/doctrine, flag-gated):** the engineer OVERWRITES its
+interface module `<X>Module.cs` in place and MUST NOT edit `Program.cs`/`Startup.cs`/
+`FeatureModules.cs`/`.sln`/`.csproj`; the materializer makes the single
+`AddFeatureModules()` call the ONE and only Program.cs touch; the PO doctrine forbids
+a shared composition root. Removes the only shared file at width>=2. 619 tests.
+`[ ]` proof 3 to validate clean 2-real-module assembly.

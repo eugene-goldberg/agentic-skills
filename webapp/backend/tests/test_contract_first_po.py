@@ -61,3 +61,25 @@ def test_engineer_block_emits_real_module_convention():
     blk = pb._engineer_contract_block()
     assert "@contract-module" in blk and "kind=real" in blk
     assert "IServiceCollection" in blk and "Module" in blk
+
+
+# ── Convention tightening (proof-2 finding): slices must not touch the composition root ──
+
+def test_engineer_block_forbids_composition_root_edits():
+    blk = pb._engineer_contract_block()
+    assert "MUST NOT edit" in blk and "Program.cs" in blk
+    assert "FeatureModules.cs" in blk          # aggregator named as off-limits
+    assert "OVERWRITE THAT SAME FILE" in blk   # overwrite-in-place model
+    # the old loophole phrasing must be gone
+    assert "beyond the single registration of your own real impl" not in blk
+
+
+def test_materializer_single_program_cs_touch():
+    p = pb.build_stub_materializer_prompt_brownfield("openapi: 3.1.0\ninfo:\n  title: X")
+    assert "ONE and ONLY edit to Program.cs" in p
+
+
+def test_po_doctrine_no_shared_composition_root():
+    po = pb.po_contract_instruction()
+    assert "No shared composition root" in po
+    assert "Program.cs" in po

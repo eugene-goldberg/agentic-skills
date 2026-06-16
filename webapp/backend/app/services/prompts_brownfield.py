@@ -298,12 +298,18 @@ Build against the CONTRACT, not against your siblings' code:
   CONCURRENTLY by a sibling slice (not yet merged). Do NOT call into its files or
   wait on it. Code against the contract INTERFACE (the stub compiles), and in your
   unit tests inject a **mock/fake** of that interface — never the real sibling impl.
-- Stay **file-disjoint**: edit only your slice's own files + your own tests. Do not
-  rewrite shared wiring (DI registration / Program.cs / routing) beyond the single
-  registration of your own real impl — the wave barrier binds the assembly.
-- Register your real impl in its OWN `<X>Module.cs` (do NOT edit the aggregator or
-  another slice's module), using the SAME `interface=<IFullName>` token the contract
-  stub used so the wave binder can match stub<->real:
+- Stay **file-disjoint** — this is what lets the wave assemble without conflicts.
+  Edit ONLY: (a) your slice's own impl/controller files, (b) your interface's module
+  file `<X>Module.cs`, and (c) your own tests. You MUST NOT edit any shared,
+  materializer/binder-owned file: **`Program.cs` / `Startup.cs`** (the composition
+  root), **`FeatureModules.cs`** (the aggregator), the **`.sln`**, any **`.csproj`**,
+  or another slice's module. Two slices both editing `Program.cs` is THE cause of
+  barrier assembly conflicts — never do it. Your module is composed automatically;
+  do NOT register it anywhere else.
+- Your interface already has a stub module file at `<X>Module.cs` (the materializer
+  wrote it). **OVERWRITE THAT SAME FILE IN PLACE** with your real impl — same path,
+  same class, same `Add<X>Module` method name, same `interface=<IFullName>` token —
+  flipping only `kind=stub` to `kind=real`:
 
       // @contract-module interface=<IFullName> impl=<YourRealClass> kind=real
       public static class <X>Module
@@ -311,6 +317,10 @@ Build against the CONTRACT, not against your siblings' code:
           public static IServiceCollection Add<X>Module(this IServiceCollection services)
               => services.AddScoped<<IFullName>, <YourRealClass>>();
       }}
+
+  Because you OVERWRITE the existing file (never add a second module, never touch the
+  aggregator or Program.cs), there is no duplicate registration / ambiguous-extension
+  conflict, and the aggregator call the materializer already wired keeps resolving.
 
 - Your per-BL gate runs ONLY your tests (against mocks) — that is by design; the
   no-mock whole-feature integration is verified once at acceptance.
@@ -729,6 +739,11 @@ merged code — they depend on the CONTRACT. Decompose accordingly:
 - Carve the feature into **file-disjoint VERTICAL slices** (each its own files),
   NOT horizontal layers. A persistence→service→endpoints layer-chain serialises
   to one-BL-per-wave and wastes the parallel crew — avoid it.
+- **No shared composition root.** Slices must NOT co-edit `Program.cs`/`Startup.cs`,
+  the `.sln`, or the DI aggregator — those are wired ONCE by the contract materializer
+  and owned by the wave binder; each slice registers its impl only in its own module
+  file. Two slices editing `Program.cs` is the #1 cause of barrier assembly conflicts
+  — decompose so no slice needs to touch the composition root.
 - Every cross-slice interface a slice **Consumes:** MUST be in the contract/stubs
   (the materialiser builds them first). Then a consuming slice builds against the
   stub immediately, concurrently with the producer.
@@ -792,9 +807,15 @@ style, DTO/record conventions, nullable settings. Then, for the contract:
       // @contract-aggregator:end
 
   and call `services.AddFeatureModules()` ONCE from the app composition root
-  (Program.cs / Startup). The `interface=<IFullName>` token must be stable — each
-  implementing slice re-registers the SAME interface with `kind=real`, and the wave
-  binder swaps stub->real by matching that token and regenerates the aggregator.
+  (Program.cs / Startup) — this is the ONE and ONLY edit to Program.cs for the whole
+  feature. The implementing slices must NEVER touch Program.cs, the aggregator, the
+  `.sln`, or each other's module. Give EACH interface its OWN `<X>Module.cs` (one
+  interface per file) so a single slice can own it end-to-end: the slice that
+  implements that interface OVERWRITES that same file in place, flipping `kind=stub`
+  to `kind=real` (same path / class / `Add<X>Module` method / `interface=<IFullName>`
+  token). Overwrite-in-place — never a second module, never a Program.cs edit by a
+  slice — is what keeps the slices file-disjoint so the wave assembles cleanly; the
+  binder then regenerates the aggregator region and dotnet-builds to prove it.
 
 ## Hard requirements (the R22 gate checks these — no-abort until green)
 1. `dotnet build` of the solution MUST succeed (the stubs compile).
