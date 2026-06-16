@@ -327,10 +327,18 @@ def dependency_report(items) -> dict[str, str]:
     return bad
 
 
-def contract_report(items) -> dict[str, str]:
+def contract_report(items, contract_first: bool = False) -> dict[str, str]:
     """R21 contract-coverage validation. For every interface a BL ``**Consumes:**``,
     that contract must be ``**Exposes:**``d by a BL this one declares as a
     dependency. Returns ``{bl_id: reason}`` for violations (empty ⇒ coherent).
+
+    Contract-First (Phase A, 2026-06-15): when ``contract_first`` is True, an
+    interface a BL ``**Consumes:**`` that ANY BL ``**Exposes:**`` is satisfied by
+    the materialized contract/stub seam (R22 proves the stubs compile + conform
+    BEFORE any slice runs), so it NO LONGER requires the consumer to declare the
+    producer as a ``**Dependencies:**`` edge — the keystone that lets the wave
+    scheduler (which keys only on Dependencies) fan contract-bound slices out.
+    Only a Consumed interface NO BL exposes (a real contract gap) still fails.
 
     Only fires for BLs that actually declare ``**Consumes:**`` — a BL may depend
     on another purely for ordering (e.g. a migration) without a code interface, so
@@ -356,7 +364,7 @@ def contract_report(items) -> dict[str, str]:
             prod = producers.get(tok)
             if prod is None:
                 problems.append(f"'{tok}' is exposed by no BL")
-            elif prod != bl_id and prod not in deps:
+            elif not contract_first and prod != bl_id and prod not in deps:
                 problems.append(f"'{tok}' is exposed by {prod}, which is not a declared dependency")
         if problems:
             bad[bl_id] = "consumes interface(s) without a contract link: " + "; ".join(problems)

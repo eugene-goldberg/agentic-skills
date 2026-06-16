@@ -147,7 +147,8 @@ def _finalize(role: str, acc: dict) -> dict:
     return acc
 
 
-def validate_po(repo_root: Path, feature_slug: str | None = None) -> dict:
+def validate_po(repo_root: Path, feature_slug: str | None = None,
+                contract_first: bool = False) -> dict:
     art = feature_artifact_dir(repo_root, feature_slug)
     acc = {"missing": [], "empty": [], "dangling_refs": [], "thin_criteria": {},
            "dependency_errors": {}, "contract_errors": {}}
@@ -211,7 +212,7 @@ def validate_po(repo_root: Path, feature_slug: str | None = None) -> dict:
         # the PO (allowed to edit BACKLOG.md). Phase 1 changes NO execution path —
         # the sequential loop still runs; we only produce + validate the artifact.
         acc["dependency_errors"] = backlog_svc.dependency_report(items)
-        acc["contract_errors"] = backlog_svc.contract_report(items)
+        acc["contract_errors"] = backlog_svc.contract_report(items, contract_first=contract_first)
     return _finalize("po", acc)
 
 

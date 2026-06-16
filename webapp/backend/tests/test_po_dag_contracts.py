@@ -162,3 +162,34 @@ def test_top_level_separators_still_split_multiple_contracts():
         _bl("0002", "BL-0001", consumes="Question; Nonexistent.Thing"))
     rep = bl.contract_report(items)
     assert "BL-0002" in rep
+
+
+# ── Contract-First Phase A: contract-satisfied consume needs no dependency edge ──
+
+def test_contract_first_consume_without_dep_ok():
+    # BL-0002 consumes BL-0003 exposed interface but declares Dependencies: none.
+    # Flag-OFF: the serializing error (must be flagged). Flag-ON: the contract/stub
+    # seam satisfies it -> NO error -> the wave scheduler can fan the slices out.
+    items = _backlog(_bl("0001", "none"),
+                     _bl("0002", "none", consumes="OrderSvc.place"),
+                     _bl("0003", "none", exposes="OrderSvc.place"))
+    assert "BL-0002" in bl.contract_report(items)                  # flag-OFF: flagged
+    assert bl.contract_report(items, contract_first=True) == {}     # flag-ON: clean
+
+
+def test_contract_first_consume_of_nonexistent_still_flagged():
+    # A consumed interface NO BL exposes is a real contract gap -> still fails
+    # even under contract_first (the stub seam cannot provide it).
+    items = _backlog(_bl("0001", "none"),
+                     _bl("0002", "none", consumes="Nonexistent.Thing"))
+    assert "BL-0002" in bl.contract_report(items, contract_first=True)
+
+
+def test_contract_first_flag_off_byte_identical():
+    # Default (flag-OFF) behaviour unchanged: undeclared-dependency consume flagged,
+    # and explicit contract_first=False == the no-arg call.
+    items = _backlog(_bl("0001", "none"),
+                     _bl("0002", "BL-0001", consumes="OrderSvc.place"),
+                     _bl("0003", "none", exposes="OrderSvc.place"))
+    assert bl.contract_report(items) == bl.contract_report(items, contract_first=False)
+    assert "BL-0002" in bl.contract_report(items)

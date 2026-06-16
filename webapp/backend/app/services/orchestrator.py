@@ -396,7 +396,7 @@ async def _po_flow(
         async for event in stream_agent_task(prompt, wt.path, timeout_seconds=timeout, trace=trace, **rk):
             yield _tag(event, "po")
         # doctrine
-        validation = doctrine_svc.validate_po(wt.path, feature_slug=feature_slug)
+        validation = doctrine_svc.validate_po(wt.path, feature_slug=feature_slug, contract_first=contract_first)
         attempt = 0
         while not validation["ok"] and attempt < 2:
             attempt += 1
@@ -406,7 +406,7 @@ async def _po_flow(
             async for event in stream_agent_task(fix, wt.path, timeout_seconds=max(300, timeout // 2),
                                                   trace=trace, **rk):
                 yield _tag(event, "po")
-            validation = doctrine_svc.validate_po(wt.path, feature_slug=feature_slug)
+            validation = doctrine_svc.validate_po(wt.path, feature_slug=feature_slug, contract_first=contract_first)
         yield _ptag({"type": "_meta", "phase": "doctrine_check",
                     "kind": "complete" if validation["ok"] else "give_up",
                     "attempts": attempt, "summary": validation["summary"]}, "po", trace=trace)
