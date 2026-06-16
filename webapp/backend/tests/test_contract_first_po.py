@@ -83,3 +83,14 @@ def test_po_doctrine_no_shared_composition_root():
     po = pb.po_contract_instruction()
     assert "No shared composition root" in po
     assert "Program.cs" in po
+
+
+# ── Cross-layer DI (proof-3 residual): slice registers full chain in its own module ──
+
+def test_convention_covers_cross_layer_di():
+    mat = pb.build_stub_materializer_prompt_brownfield("openapi: 3.1.0\ninfo:\n  title: X")
+    eng = pb._engineer_contract_block()
+    assert "composition-root / host project" in mat   # modules live where every layer is referenceable
+    assert "FULL dependency chain" in mat and "FULL dependency chain" in eng
+    assert "Infrastructure-layer" in eng              # register infra repo in the module...
+    assert "not an excuse to edit `Program.cs`" in eng.replace("NOT", "not")  # ...never Program.cs

@@ -321,6 +321,14 @@ Build against the CONTRACT, not against your siblings' code:
   Because you OVERWRITE the existing file (never add a second module, never touch the
   aggregator or Program.cs), there is no duplicate registration / ambiguous-extension
   conflict, and the aggregator call the materializer already wired keeps resolving.
+- Register your FULL dependency chain INSIDE `<X>Module.cs`. It lives in the
+  composition-root / host project, so it CAN reference every layer: register the
+  service impl AND any **Infrastructure-layer** repository/dependency your impl needs
+  (e.g. `services.AddScoped<IFooRepository, FooRepository>();`) right here in your
+  module. A cross-layer dependency is NOT an excuse to edit `Program.cs` — if your
+  service needs a repo, wire that repo in your own module. (This is the proof-3
+  residual: a slice that registers its repo in Program.cs re-introduces the shared-file
+  barrier conflict at width >=2.)
 
 - Your per-BL gate runs ONLY your tests (against mocks) — that is by design; the
   no-mock whole-feature integration is verified once at acceptance.
@@ -789,8 +797,13 @@ style, DTO/record conventions, nullable settings. Then, for the contract:
   `throw new NotImplementedException();` and which references the matching
   `operationId` (in the method name and/or an XML-doc comment).
 - **DI registration (Phase D module convention — REQUIRED for the wave binder)**:
-  put EACH interface's stub binding in its OWN file `<X>Module.cs` (next to the stub),
-  whose FIRST line is this exact marker, plus one extension method:
+  put EACH interface's stub binding in its OWN file `<X>Module.cs` **inside the
+  composition-root / host project** — the project that contains `Program.cs`/`Startup`
+  (the ONLY project that references every layer, so a module there can register a
+  slice's FULL dependency chain: its service impl AND any Infrastructure-layer
+  repositories it needs, with no cross-layer leak into Program.cs). Each module's
+  FIRST line is this exact marker, plus one extension method that registers everything
+  that interface's impl requires:
 
       // @contract-module interface=<IFullName> impl=<StubClass> kind=stub
       public static class <X>Module
@@ -816,6 +829,9 @@ style, DTO/record conventions, nullable settings. Then, for the contract:
   token). Overwrite-in-place — never a second module, never a Program.cs edit by a
   slice — is what keeps the slices file-disjoint so the wave assembles cleanly; the
   binder then regenerates the aggregator region and dotnet-builds to prove it.
+  Because the modules live in the host project, the implementing slice registers its
+  real service AND its Infrastructure repository inside its OWN `<X>Module.cs` —
+  nothing cross-layer ever needs to leak into Program.cs.
 
 ## Hard requirements (the R22 gate checks these — no-abort until green)
 1. `dotnet build` of the solution MUST succeed (the stubs compile).

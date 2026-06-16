@@ -95,7 +95,15 @@ registers its FULL dependency chain (incl. Infra repos — e.g. a second per-sli
 module in the Infrastructure layer) inside its own files, keeping Program.cs 100%
 slice-untouched.
 
-Next: operator decision on flag-flip; cross-layer-DI residual fix is the open item.
+**Cross-layer DI residual — doctrine FIX shipped (2026-06-16):** materializer now places
+each per-interface `<X>Module.cs` + the aggregator in the **composition-root / host
+project** (the one containing `Program.cs` — only project that references every layer), so
+a slice registers its FULL dependency chain (service impl + Infra repos) in its OWN module;
+engineer forbidden to leak cross-layer registration into `Program.cs`. 620 tests, flag-off
+byte-identical. `[~]` doctrine shipped, **`[ ]` proof 4 (two cross-layer slices) pending**
+to live-validate clean assembly + Program.cs 100% slice-untouched.
+
+dev≡main FF'd @ c143de6. Next: operator decision on flag-flip; proof 4 is the open item.
 
 All flag-gated behind `contract_first` (default OFF). See [[arch_target_ecommerce]]
 (C#/.NET substrate), [[feedback_remote_first_dev]].

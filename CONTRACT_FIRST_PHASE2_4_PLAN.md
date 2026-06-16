@@ -131,3 +131,13 @@ a shared composition root. Removes the only shared file at width>=2. 619 tests.
 
 `[x]` **proof 3 — multi-module assembly PROVEN** (run-20260616T160924Z-df7e63, 2026-06-16): dag_width=2, BOTH slices merged_full with ZERO escalated_assembly_conflict (proof-2 failure gone), contract_bind.done chose 2 REAL modules + dotnet build green, acceptance self-healed -> integrity_ok=true -> sprint_complete.
 `[ ]` **RESIDUAL (cross-layer DI):** one slice still added `builder.Services.AddProductStatistics();` to Program.cs because its real impl needs an Infrastructure-layer repository the Service-layer module cannot register across the layering boundary. No conflict here (only one slice needed it), but two cross-layer slices could re-conflict. Fix: extend the module convention so a slice registers its FULL dependency chain (incl. Infrastructure repos, e.g. a second per-slice module in the Infrastructure layer) inside its own files, keeping Program.cs 100% slice-untouched.
+
+
+### Cross-layer DI residual — doctrine FIX shipped (2026-06-16)
+The materializer now places each per-interface `<X>Module.cs` + the aggregator in the
+**composition-root / host project** (the project containing `Program.cs` — the only one
+that references every layer), so a slice registers its **FULL dependency chain** (service
+impl + any Infrastructure-layer repository) inside its OWN module; the engineer doctrine
+forbids leaking any cross-layer registration into `Program.cs`. Keeps `Program.cs` 100%
+slice-untouched even when a real impl needs an Infra repo. 620 tests; flag-off
+byte-identical. `[ ]` **proof 4** (two cross-layer slices) to live-validate clean assembly.
