@@ -40,12 +40,21 @@ pure merge, no stub→real binding; (5) no fan-out/DAG-width metric; (6) no live
   concurrently (never the real unmerged impl), file-disjoint, per-BL gate = own tests vs
   mocks. Threaded through `prompts.build_engineer` + `_engineer_flow` (sig + 3 call
   sites). 605 passed.
+- `[x]` Phase D — `03b07e8`. **Option A chosen by operator** (per-slice DI module + binder
+  composes). `contract_bind.py` pure core (parse `// @contract-module interface= impl=
+  kind=<stub|real>` markers → plan_binding prefers real over stub per interface, drops
+  superseded stubs, flags conflicts → render_aggregator rewrites the
+  `// @contract-aggregator:begin/end` region → compute_binding). `_contract_bind`
+  orchestrator step (after BLs, before acceptance, contract_first-gated): worktree →
+  compose real modules + drop stubs + regen aggregator → commit → `dotnet build` →
+  FF-merge; no-abort `contract_bind.escalated` on conflict/build-fail (siblings stay
+  merged), clean skip when no DI modules. Materializer+engineer emit the module
+  convention. 616 passed. **Pure core unit-proven; live binding awaits Phase E.**
 
 **REMAINING:** `[ ]`
-Phase D (barrier BINDING — swap stub→real DI + assemble shared wiring + dotnet build;
-highest complexity, several valid designs — operator design input warranted); `[ ]`
 Phase E (live proof: full contract-first sprint, no max_bls cap, run_acceptance ON,
-width≥2 wave + ≥2 concurrent engineers + acceptance catches mock drift).
+width≥2 wave + ≥2 concurrent engineers + binding swaps stub→real + acceptance catches
+mock drift).
 
 All flag-gated behind `contract_first` (default OFF). See [[arch_target_ecommerce]]
 (C#/.NET substrate), [[feedback_remote_first_dev]].
