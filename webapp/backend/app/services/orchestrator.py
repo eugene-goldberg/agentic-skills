@@ -3707,7 +3707,7 @@ async def run_brief(
     warm_retrieval: bool = True,  # A56 (operator 2026-06-07): warm the LOCAL
                                   # retrieval backend before the PO so the first
                                   # agent isn't grounding-blind. Flag = rollback.
-    contract_first: bool = False,  # Contract-First Phase 1 (operator 2026-06-15):
+    contract_first: bool = True,  # Contract-First DEFAULT ON (operator 2026-06-16); gated to .NET (operator 2026-06-15):
                                    # PO authors an OpenAPI 3.1 contract; the
                                    # Engineer-as-materializer turns it into compilable
                                    # C# stubs gated by R22 (structural validation +
@@ -3789,6 +3789,16 @@ async def run_brief(
         brief_hash = "unknown"
 
     yield _evt("start", brief_chars=len(brief), project_name=project_name, run_id=run_id)
+
+    # Contract-First is DEFAULT ON but its materializer emits C# stubs and its R22 gate
+    # runs `dotnet build`, so it only applies to .NET/C# targets. On any other stack
+    # force it OFF (clean) so a non-dotnet brownfield run is byte-identical to pre-flip
+    # behaviour rather than escalating at the dotnet-build gate.
+    if contract_first and not _is_dotnet_target(repo_dir):
+        contract_first = False
+        yield _evt("contract_first.gated_off",
+                   reason="target is not a .NET/C# repo (no .sln/.csproj); contract-first "
+                          "materializer + R22 dotnet-build gate are C#-specific")
 
     try:
         # Structural fix (2026-06-06): operate on the configured agent branch,
@@ -4944,6 +4954,28 @@ async def _changed_cs_corpus(wt_path: "Path", base_ref: str) -> str:
             except OSError:
                 pass
     return "\n".join(parts)
+
+
+def _is_dotnet_target(repo_dir: "Path") -> bool:
+    """True when the target looks like a .NET/C# repo (a `.sln` or `.csproj` exists at
+    the root, an immediate subdir, or one level deeper, e.g. `backend/<Proj>/<Proj>.csproj`).
+    Contract-First (default ON) only engages on .NET targets — its materializer emits C#
+    stubs and the R22 gate runs `dotnet build`; on any other stack it is forced OFF."""
+    try:
+        cands = [repo_dir] + [p for p in sorted(repo_dir.iterdir())
+                              if p.is_dir() and p.name not in {".git", "node_modules", "bin", "obj"}]
+    except OSError:
+        return False
+    for d in cands[:25]:
+        if next(d.glob("*.sln"), None) or next(d.glob("*.csproj"), None):
+            return True
+        try:
+            for sub in sorted(d.iterdir()):
+                if sub.is_dir() and next(sub.glob("*.csproj"), None):
+                    return True
+        except OSError:
+            pass
+    return False
 
 
 def _build_target(cfg, wt_path: "Path"):

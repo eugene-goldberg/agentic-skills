@@ -94,3 +94,34 @@ def test_convention_covers_cross_layer_di():
     assert "FULL dependency chain" in mat and "FULL dependency chain" in eng
     assert "Infrastructure-layer" in eng              # register infra repo in the module...
     assert "not an excuse to edit `Program.cs`" in eng.replace("NOT", "not")  # ...never Program.cs
+
+
+# ── Contract-First default ON, gated to .NET targets (operator 2026-06-16) ──
+
+def test_contract_first_default_is_on():
+    from app.routers.projects import RunBriefRequest
+    assert RunBriefRequest.model_fields["contract_first"].default is True
+    import inspect
+    from app.services import orchestrator as o
+    assert inspect.signature(o.run_brief).parameters["contract_first"].default is True
+
+
+def test_is_dotnet_target_root_and_nested(tmp_path):
+    from app.services import orchestrator as o
+    assert o._is_dotnet_target(tmp_path) is False           # empty / non-dotnet
+    (tmp_path / "App.csproj").write_text("<Project/>")
+    assert o._is_dotnet_target(tmp_path) is True             # root .csproj
+
+
+def test_is_dotnet_target_detects_backend_sln(tmp_path):
+    from app.services import orchestrator as o
+    sub = tmp_path / "backend"; sub.mkdir()
+    (sub / "Sln.sln").write_text("")
+    assert o._is_dotnet_target(tmp_path) is True             # subdir .sln (ecommerce layout)
+
+
+def test_is_dotnet_target_detects_two_levels_deep(tmp_path):
+    from app.services import orchestrator as o
+    proj = tmp_path / "backend" / "Web"; proj.mkdir(parents=True)
+    (proj / "Web.csproj").write_text("<Project/>")
+    assert o._is_dotnet_target(tmp_path) is True             # backend/<Proj>/<Proj>.csproj

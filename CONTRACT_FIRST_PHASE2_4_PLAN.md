@@ -141,3 +141,6 @@ impl + any Infrastructure-layer repository) inside its OWN module; the engineer 
 forbids leaking any cross-layer registration into `Program.cs`. Keeps `Program.cs` 100%
 slice-untouched even when a real impl needs an Infra repo. 620 tests; flag-off
 byte-identical. `[x]` **proof 4 — cross-layer fix LIVE-PROVEN** (run-20260616T191203Z-71e4bf, catalog-insights-cf, two slices each with its OWN Infrastructure repository): dag_width=2, both merged_full, asm_conflict=0, contract_bind 2 REAL modules, **Program.cs touched by EXACTLY 1 commit (materializer AddFeatureModules only, zero slice edits)**, both repos registered in their own modules, acceptance integrity_ok=true first pass (0 rerounds) -> sprint_complete. Cross-layer residual CLOSED. **Program A-E + tightening + cross-layer FULLY PROVEN (4 live proofs).**
+
+### contract_first flipped DEFAULT ON (operator 2026-06-16)
+Router + run_brief defaults flipped to True; orchestrator _is_dotnet_target gate forces it OFF on non-.NET targets (materializer/binder are C#/dotnet-specific) so non-.NET runs stay byte-identical. 624 tests. Generalizing to other languages (materializer/binder) is the open extension.

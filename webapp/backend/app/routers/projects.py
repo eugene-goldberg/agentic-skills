@@ -1241,8 +1241,10 @@ class RunBriefRequest(BaseModel):
     # Contract-First Phase 1 (operator 2026-06-15): PO authors an OpenAPI 3.1
     # contract; the Engineer-as-materializer turns it into compilable C# stubs
     # gated by R22 (structural validation + per-operation conformance + dotnet
-    # build) BEFORE any slice runs. Additive; DEFAULT OFF = byte-identical rollback.
-    contract_first: bool = False
+    # build) BEFORE any slice runs. DEFAULT ON (operator 2026-06-16), but the
+    # orchestrator forces it OFF on non-.NET targets (see _is_dotnet_target) since the
+    # materializer/binder are C#-specific; set False to disable on a .NET target.
+    contract_first: bool = True
     # A48 pre-flight disk-free check (2026-06-01). Default advisory:
     # the check ALWAYS runs and emits an SSE event with the breakdown,
     # but only refuses the run (HTTP 409) when enforce=True. This
