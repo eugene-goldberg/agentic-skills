@@ -3629,6 +3629,36 @@ def _reconcile_unassembled_outcome(
     return False
 
 
+def _concurrent_assembly_decision(qa_doc_ok: bool, qa_merged: bool,
+                                  score_doc_ok: bool) -> "tuple[str, bool]":
+    """(outcome_label, assembly_eligible) for a wave-concurrent BL whose ENGINEER
+    already passed its own green gate (deferred_ready) — its work_branch carries
+    green-gated code (+ QA's reinforcement if QA added any).
+
+    Assembly eligibility tracks the SAME bar that ships code in the serial body:
+    engineer-green + QA satisfied doctrine. It deliberately does NOT require
+    ``qa_merged`` (QA having added a reinforcement commit). A BL whose QA added
+    nothing (new_commits==0 — e.g. the engineer already wrote the BL's tests, the
+    common case for a frontend BL) still SHIPS its engineer-green code, exactly as
+    the serial body leaves the engineer merge on the trunk. Requiring qa_merged
+    stranded such BLs on their work_branch while still recording a ``merged_no_qa``
+    label — counted in merged_total yet never on the trunk (the wave-concurrency
+    honesty bug surfaced by the 2026-06-16 frontend-concurrency diagnostic).
+
+    Honesty invariant: a ``merged_*`` label is returned IFF the BL is
+    assembly-eligible (will reach the trunk). A BL that cannot assemble gets an
+    ``*_escalated`` label and MUST be surfaced in ``escalated_bls`` by the caller.
+    """
+    if not qa_doc_ok:
+        # QA could not satisfy doctrine after exhaustive attempts — a real failure.
+        return ("qa_escalated", False)
+    if not qa_merged:
+        return ("merged_no_qa", True)
+    if not score_doc_ok:
+        return ("merged_no_score", True)
+    return ("merged_full", True)
+
+
 def _ensure_on_agent_branch(repo_dir: Path) -> dict:
     """Structural fix (2026-06-06, Ops/Steward proposal §9): put the target
     checkout on the configured ``agent_branch`` at run start.
@@ -4047,25 +4077,34 @@ async def run_brief(
             yield _evt("scorer.done", **(score_outcome or {"bl_id": bl_id}))
             score_doc_ok = bool(score_outcome and score_outcome.get("doctrine_ok"))
 
-            # Same worst-role outcome label as the serial body (engineer already
-            # passed its gate here; "merged" reflects the WORK_BRANCH state).
-            if not qa_doc_ok or not qa_merged:
-                outcome = "merged_no_qa"
-            elif not score_doc_ok:
-                outcome = "merged_no_score"
-            else:
-                outcome = "merged_full"
+            # wave-concurrency honesty + assembly eligibility (single source of
+            # truth: _concurrent_assembly_decision). The engineer already passed
+            # its green gate (deferred_ready); the work_branch carries that
+            # green-gated code. A BL ships (assembles) on engineer-green + QA
+            # doctrine — NOT on qa_merged — matching the serial body. A BL that
+            # CANNOT assemble never carries a merged_* label (it escalates), so
+            # merged_total / coverage never count code that isn't on the trunk.
+            outcome, _eligible = _concurrent_assembly_decision(
+                qa_doc_ok, qa_merged, score_doc_ok)
             summary["bls"].append(per_bl)
             bl_outcomes_compact.append({"bl_id": bl_id, "outcome": outcome})
-            yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
-
-            # Assembly eligibility: engineer green + QA passed doctrine AND merged
-            # its tests into the work_branch. merged_no_qa is NOT assembly-eligible
-            # (QA reinforcement did not land) — surface, do not assemble.
-            if qa_doc_ok and qa_merged:
+            if _eligible:
+                yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
                 yield {"_wave_bl_done": {"bl_id": bl_id, "work_branch": work_branch,
                                          "outcome": "ready"}}
             else:
+                # No-abort: QA could not satisfy doctrine — surface honestly
+                # (escalated, NOT a merged_* label, excluded from merged_total),
+                # do not assemble; siblings continue (mirrors engineer_escalated).
+                escalated_bls.append({"bl_id": bl_id, "role": "qa",
+                                      "reason": (f"QA could not satisfy doctrine for {bl_id} "
+                                                 f"after exhaustive investigate→fix→re-test "
+                                                 f"attempts (wave-concurrent — surfaced, "
+                                                 f"siblings continue)")})
+                yield _evt("bl.escalated", bl_id=bl_id, role="qa",
+                           reason=f"QA could not satisfy doctrine for {bl_id}",
+                           dossier=(qa_outcome or {}).get("dossier") or {})
+                yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
                 yield {"_wave_bl_done": {"bl_id": bl_id, "outcome": outcome}}
             return
 
