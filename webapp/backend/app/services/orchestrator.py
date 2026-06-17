@@ -347,13 +347,15 @@ async def _po_flow(
     inject_lessons: bool = False,
     inject_global_lessons: bool = False,
     contract_first: bool = False,
+    wave_concurrent: bool = False,
 ) -> AsyncIterator[dict]:
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
     prompt = prompts_svc.build_po(family, brief, project_name, repo_dir, feature_slug=feature_slug,
                                   inject_lessons=inject_lessons,
                                   inject_global_lessons=inject_global_lessons,
-                                  contract_first=contract_first)
+                                  contract_first=contract_first,
+                                  wave_concurrent=wave_concurrent)
     if inject_lessons and run_id:
         lessons_svc.record_injection(
             run_id, "po",
@@ -834,8 +836,12 @@ async def _qa_or_scorer_flow(
                 gate_attempt += 1
                 if gate.get("kind") == "no_tests":
                     fix = (f"No unit tests are associated with BL {bl_id}. Doctrine requires the "
-                           "BL to carry comprehensive unit tests. Add the missing tests (e.g. under "
-                           "`backend/tests/...` as `test_*.py`), make them pass, and commit.")
+                           "BL to carry comprehensive unit tests AT THE LAYER THIS BL CHANGES: "
+                           "backend tests (e.g. `dotnet test` / `pytest`) for backend code, or "
+                           "FRONTEND tests with the target's frontend runner (e.g. Vitest under "
+                           "`frontend/tests/**/*.test.tsx`, grounded in the frontend test config) "
+                           "for a React/UI BL. Add them where THIS BL's runner looks, make them "
+                           "pass, and commit.")
                 elif gate.get("kind") == "coverage_gap":
                     uncovered = gate.get("uncovered_criteria") or []
                     fix = (f"R19 — BL {bl_id} left these PO acceptance criteria UNCOVERED by any "
@@ -3865,7 +3871,8 @@ async def run_brief(
                                     run_id=run_id, brief_hash=brief_hash,
                                     feature_slug=feature_slug, inject_lessons=inject_lessons,
                                     inject_global_lessons=inject_global_lessons,
-                                    contract_first=contract_first):
+                                    contract_first=contract_first,
+                                    wave_concurrent=bool(wave_execution and wave_concurrency and wave_concurrency > 1)):
                 if "_orchestrator_outcome" in e:
                     summary["po"] = e
                     po_ok = e.get("doctrine_ok", False)

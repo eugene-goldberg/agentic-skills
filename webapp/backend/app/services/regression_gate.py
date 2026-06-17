@@ -470,6 +470,26 @@ async def _uncovered_criteria(repo_root: Path, agent_branch: str, bl_id: str,
     return [c.id for c in crits if c.id not in blob]
 
 
+_FRONTEND_TEST_EXTS = (".test.ts", ".test.tsx", ".test.js", ".test.jsx")
+
+
+def _is_frontend_test(path: str) -> bool:
+    """A JS/TS unit-test file (vitest/jest), as opposed to a backend test."""
+    return any(path.endswith(e) for e in _FRONTEND_TEST_EXTS)
+
+
+def _frontend_dir(cfg) -> "str | None":
+    """The frontend subdir from app_boot.frontend.dir (where its package.json /
+    test runner live), or None if the target declares no frontend boot block."""
+    ab = getattr(cfg, "app_boot", None)
+    fe = ab.get("frontend") if isinstance(ab, dict) else None
+    if isinstance(fe, dict):
+        d = fe.get("dir")
+        if isinstance(d, str) and d:
+            return d
+    return None
+
+
 async def run_bl_tests(repo_root: Path, agent_branch: str, base_ref: str,
                        *, run_id: str | None = None, timeout: int = 1800,
                        bl_id: str | None = None,
@@ -555,31 +575,46 @@ async def run_bl_tests(repo_root: Path, agent_branch: str, base_ref: str,
                              "backend", "bash", "-c", inner]
             exit_code, stdout, stderr = await _run_capture(cmd, wt, timeout=timeout)
         else:
-            # Use the FULL configured command, not just its binary — a target's
-            # test_cmd may be multi-token (e.g. `uv run pytest`, `python -m
-            # pytest`, `dotnet test backend/Ecommerce.sln`). `test_env` (e.g.
-            # DATABASE_URL/HABITS_STORAGE) is merged into the subprocess env so
-            # natively-run suites that need it can open their DB.
-            base = list(cfg.test_cmd or detect_test_command(repo_root) or ["pytest"])
-            if "pytest" in base:
-                # pytest accepts file paths as test selectors: scope to exactly
-                # the BL's own changed test files and add -v for parseable lines.
-                vflag = ["-v"] if ("-v" not in base and "--verbose" not in base) else []
-                cmd = [*base, *vflag, *bl_tests]
+            # Fix A (mixed-stack false-green): a frontend BL's own tests are
+            # *.test.tsx/.ts(x)/.js(x) — the configured backend test_cmd (e.g.
+            # `dotnet test`) would NEVER execute them, so the BL went green on the
+            # irrelevant backend suite. When the target declares a frontend runner
+            # (frontend_test_cmd, e.g. ["npm","run","test","--"] -> vitest) and the
+            # BL's changed tests are frontend, run THAT runner in the frontend dir,
+            # scoped to this BL's frontend test files (vitest/jest take path args).
+            fe_cmd = getattr(cfg, "frontend_test_cmd", None)
+            fe_dir = _frontend_dir(cfg)
+            fe_tests = [t for t in bl_tests if _is_frontend_test(t)]
+            if fe_tests and fe_cmd and fe_dir:
+                fe_root = wt / fe_dir
+                # The detached gate worktree has no node_modules; symlink the
+                # target frontend's installed deps so the runner resolves without
+                # a slow `npm install` (the worktree — and this symlink — are
+                # reaped in `finally`; the real node_modules is untouched).
+                try:
+                    nm = fe_root / "node_modules"
+                    src_nm = repo_root / fe_dir / "node_modules"
+                    if not nm.exists() and src_nm.exists():
+                        nm.symlink_to(src_nm)
+                except OSError:
+                    pass
+                rels = [t[len(fe_dir) + 1:] if t.startswith(fe_dir + "/") else t
+                        for t in fe_tests]
+                cmd = [*fe_cmd, *rels]
+                exit_code, stdout, stderr = await _run_capture(cmd, fe_root, timeout=timeout, env=cfg.test_env)
             else:
-                # Non-pytest runner (dotnet test, go test, mvn/gradle test,
-                # vitest, …): these don't take source-file paths as test
-                # selectors the way pytest does, so we run the configured suite
-                # as-is rather than appending `.cs`/`.go` paths that the runner
-                # would reject. The BL is still GATED on its own tests' presence
-                # (bl_tests is non-empty above — a BL that shipped no unit tests
-                # already returned no_tests). These suites are fast, isolated
-                # unit tests (no Playwright/lint), so running the whole project
-                # is the per-BL scope; the verdict is taken from the runner's
-                # exit code, which is authoritative across runners. (A future
-                # refinement could scope via `dotnet test --filter` etc.)
-                cmd = [*base]
-            exit_code, stdout, stderr = await _run_capture(cmd, wt, timeout=timeout, env=cfg.test_env)
+                # Use the FULL configured command, not just its binary — a target's
+                # test_cmd may be multi-token (e.g. `uv run pytest`, `python -m
+                # pytest`, `dotnet test backend/Ecommerce.sln`). `test_env` (e.g.
+                # DATABASE_URL/HABITS_STORAGE) is merged into the subprocess env so
+                # natively-run suites that need it can open their DB.
+                base = list(cfg.test_cmd or detect_test_command(repo_root) or ["pytest"])
+                if "pytest" in base:
+                    vflag = ["-v"] if ("-v" not in base and "--verbose" not in base) else []
+                    cmd = [*base, *vflag, *bl_tests]
+                else:
+                    cmd = [*base]
+                exit_code, stdout, stderr = await _run_capture(cmd, wt, timeout=timeout, env=cfg.test_env)
 
         passed, failed = _parse_pytest(stdout, stderr)
         tail = "\n".join((stdout + "\n" + stderr).splitlines()[-300:])

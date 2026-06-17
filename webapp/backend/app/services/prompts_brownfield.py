@@ -111,7 +111,7 @@ Rules:
 # ─────────────────────────────── PO (Brownfield) ───────────────────────────
 
 
-def build_po_prompt_brownfield(brief: str, project_name: str | None = None, artifact_dir: str = "_brownfield", lessons_block: str = "", contract_block: str = "") -> str:
+def build_po_prompt_brownfield(brief: str, project_name: str | None = None, artifact_dir: str = "_brownfield", lessons_block: str = "", contract_block: str = "", wave_block: str = "") -> str:
     name = project_name or "Project"
     skills_md = _load_skill("po")
     body = f"""You are a Brownfield Agile Product Owner. The operational doctrine below is your binding rulebook; you must follow it literally.
@@ -268,6 +268,7 @@ Halt conditions (do NOT commit):
     if "/features/" in artifact_dir:
         body = body.replace(".agile-v/BACKLOG.md", f"{artifact_dir}/BACKLOG.md")
     body += contract_block  # Contract-First Phase 1: PO authors the OpenAPI contract
+    body += wave_block  # G2: keep same-wave (concurrent) BLs file-disjoint
     return body
 
 
@@ -355,6 +356,23 @@ def build_engineer_prompt_brownfield(bl_id: str, bl_section: str, repo_summary: 
 # ────────────────────── WEBAPP CONTRACT (in addition to doctrine) ──────────────────────
 
 {RETRIEVAL_HINT_BROWNFIELD}
+
+## Test at the RIGHT layer for THIS BL (mixed-stack targets)
+
+Write this BL's unit tests against the layer THIS BL actually changes, with the
+target's runner for that layer:
+- A **backend** BL (server / API / persistence code) -> backend unit tests with the
+  backend runner (e.g. `dotnet test`, `pytest`).
+- A **frontend / UI** BL (you add or change React/TS components, hooks, or pages) ->
+  **FRONTEND** unit tests with the target's FRONTEND runner (e.g. Vitest / Jest).
+  Ground in the repo FIRST: read the frontend's test config (e.g.
+  `frontend/vitest.config.*`) and place your tests where its `include` glob looks
+  (commonly `frontend/tests/**/*.test.tsx`), exercising the component's REAL
+  behavior (render, interaction, state) under the configured DOM environment.
+  Do NOT write backend tests for a frontend-only BL -- a backend test cannot
+  exercise a React component, so it gives FALSE coverage and the gate would pass
+  without your UI ever being tested. Reference each `AC-{bl_id}-<n>` in the frontend
+  test that covers it.
 
 ## Required reads before any code change
 
@@ -713,6 +731,45 @@ You are SCORING only. Do NOT modify production code or tests.
 # ───────────────────── Contract-First Phase 1 (R22) ─────────────────────
 # Decision A: PO authors a raw OpenAPI 3.1 contract (HTTP seam, B1).
 # Decision (c): the Engineer materializes it into compilable C# stubs.
+
+
+def po_wave_disjoint_instruction(artifact_dir: str = "_brownfield") -> str:
+    """Appended to the PO prompt when the sprint runs a CONCURRENT wave
+    (wave_concurrency>1) WITHOUT contract_first. Same-wave BLs run on isolated
+    branches and barrier-merge; two same-wave BLs editing the SAME file conflict at
+    the barrier and one fails to assemble. Teach the PO to decompose file-disjoint,
+    and to serialize via a Dependency edge when two BLs must share a file (the
+    non-C# analog of contract_first's 'no shared composition root' rule -- there is
+    no binder to regenerate shared wiring, so serialization is the clean escape)."""
+    return """
+
+# ----------- PARALLEL WAVE EXECUTION -- keep same-wave BLs file-disjoint -----------
+
+This sprint runs backlog items in the SAME wave CONCURRENTLY on isolated branches,
+then merges them in ONE barrier. Two BLs that run in the same wave and edit the
+SAME source file CONFLICT at that barrier -- one of them fails to assemble and does
+NOT ship. Decompose to prevent this:
+
+- Make same-wave BLs **FILE-DISJOINT**: each BL creates/owns its OWN new file(s)
+  (a new component, module, route, or test file) and avoids editing a file another
+  same-wave BL also edits. A BL that only ADDS new files is always safe.
+- **Shared parents are the #1 conflict source.** A shared composition/wiring file --
+  a frontend page/layout/router (e.g. `App.tsx`, a page such as `Home.tsx`, a nav
+  bar), a backend DI/registration/composition root, or an `index`/barrel -- must NOT
+  be co-edited by two concurrent BLs.
+- If two BLs genuinely MUST edit the same existing file (e.g. two new sections that
+  both mount into the same page), they CANNOT run concurrently. Declare a
+  **Dependencies:** edge from the later BL to the earlier one so they land in
+  SEPARATE waves -- the later BL then forks from the earlier's merged result and
+  edits the shared file cleanly. Prefer disjoint files; serialize via a Dependency
+  only where the same file is genuinely unavoidable.
+- Keep **Dependencies: none** for genuinely independent BLs so the wave fans out and
+  they build in parallel -- add a Dependency ONLY for a true ordering need or an
+  unavoidable shared file.
+
+Goal: a backlog whose same-wave BLs never touch the same file, so every BL assembles
+cleanly and ships.
+"""
 
 
 def po_contract_instruction(artifact_dir: str = "_brownfield") -> str:

@@ -382,13 +382,15 @@ def select_family(target_status_result: dict | None) -> str:
 
 def build_po(family: str, brief: str, project_name: str | None, repo_root: _Path,
              feature_slug: str | None = None, inject_lessons: bool = False,
-             inject_global_lessons: bool = False, contract_first: bool = False) -> str:
+             inject_global_lessons: bool = False, contract_first: bool = False,
+             wave_concurrent: bool = False) -> str:
     if family == "brownfield":
         art = _resolve_art_dir(repo_root, feature_slug)
         return _bf.build_po_prompt_brownfield(brief, project_name,
                                               artifact_dir=art,
                                               lessons_block=_lessons_block(repo_root, feature_slug, inject_lessons, inject_global_lessons),
-                                              contract_block=(_bf.po_contract_instruction(art) if contract_first else ""))
+                                              contract_block=(_bf.po_contract_instruction(art) if contract_first else ""),
+                                              wave_block=(_bf.po_wave_disjoint_instruction(art) if (wave_concurrent and not contract_first) else ""))
     return build_po_prompt(brief, project_name)
 
 

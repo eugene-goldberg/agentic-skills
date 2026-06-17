@@ -187,6 +187,7 @@ class RepoConfig:
     ui_globs: list[str] | None = None          # None = use DEFAULT_UI_GLOBS
     test_file_globs: list[str] | None = None   # None = built-in per-language conventions (run_bl_tests)
     app_boot: dict | None = None               # None = compose path; native-boot contract for acceptance (PROPOSAL_NATIVE_BOOT_ACCEPTANCE)
+    frontend_test_cmd: list[str] | None = None  # per-BL gate runner for FRONTEND test files (e.g. ["npm","run","test","--"] -> vitest); None = backend test_cmd runs (mixed-stack false-green fix, Fix A)
 
     def effective_api_route_globs(self) -> list[str]:
         return self.api_route_globs or list(DEFAULT_API_ROUTE_GLOBS)
@@ -271,6 +272,9 @@ def load(repo_root: Path) -> RepoConfig:
                     else None
                 ),
                 app_boot=app_boot,
+                frontend_test_cmd=(list(data["frontend_test_cmd"])
+                                   if isinstance(data.get("frontend_test_cmd"), list) and data["frontend_test_cmd"]
+                                   else None),
                 source="file",
             )
         except (OSError, json.JSONDecodeError):
