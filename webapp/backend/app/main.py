@@ -41,7 +41,7 @@ def _autoload_env() -> str | None:
 
 _LOADED_ENV = _autoload_env()
 
-from app.routers import projects, tasks  # noqa: E402  (after env load)
+from app.routers import projects, runs, tasks  # noqa: E402  (after env load)
 
 app = FastAPI(title="Claude Code Agent Runner", version="0.1.0")
 
@@ -55,6 +55,29 @@ app.add_middleware(
 
 app.include_router(tasks.router)
 app.include_router(projects.router)
+app.include_router(runs.router)
+
+
+# Batch 1 (C1/A34, operator decision D5): surface orphaned runs at startup.
+# A state file left in .orchestrator-state/ by a crashed prior process is
+# logged here and exposed via GET /api/runs?status=orphaned. Deliberately
+# NOT auto-resumed — blind resume after a crash can double-run a BL whose
+# merge landed but whose checkpoint didn't.
+@app.on_event("startup")
+async def _surface_orphaned_runs() -> None:
+    try:
+        from app.services import run_state as _run_state
+        orphans = _run_state.list_active()
+    except Exception:
+        return
+    for st in orphans:
+        print(
+            f"[startup] orphaned run detected: run_id={st.get('run_id')} "
+            f"repo={st.get('repo')} current_bl={st.get('current_bl')} "
+            f"updated_at={st.get('updated_at')} — resume with "
+            f"POST /api/projects/{st.get('repo')}/run-brief {{skip_po:true}} "
+            f"or discard the state file."
+        )
 
 
 @app.get("/api/health")

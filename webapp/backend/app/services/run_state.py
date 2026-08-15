@@ -110,6 +110,38 @@ def mark_terminated(run_id: str, status: str) -> Path | None:
     return dst
 
 
+def list_active() -> list[dict]:
+    """Batch 1 (C1/A34): all active-state files, most recent first.
+
+    Anything in STATE_DIR (not done/) is either currently running or
+    orphaned by a process crash; the runs router cross-references the
+    in-process registry to tell the two apart (D5: orphans are surfaced,
+    never auto-resumed)."""
+    if not STATE_DIR.exists():
+        return []
+    out: list[dict] = []
+    for child in STATE_DIR.iterdir():
+        if child.is_dir() or child.suffix != ".json":
+            continue
+        try:
+            out.append(json.loads(child.read_text()))
+        except (OSError, ValueError):
+            continue
+    out.sort(key=lambda d: d.get("updated_at") or d.get("started_at") or "", reverse=True)
+    return out
+
+
+def read_done(run_id: str) -> dict | None:
+    """Return the terminated-state record for run_id, or None."""
+    p = _done_path(run_id)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def find_active(repo: str, brief_hash: str | None = None) -> dict | None:
     """Return the most-recently-updated active state for this repo (and
     optionally matching brief_hash), or None.

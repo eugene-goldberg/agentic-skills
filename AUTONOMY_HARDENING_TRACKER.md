@@ -27,15 +27,16 @@
 
 | ID | Item | Status | Commit | Verification |
 |---|---|---|---|---|
-| 1-1 | `run_registry.py` + background execution + `detached` flag + `/abort` | pending | — | detached run survives consumer disconnect |
-| 1-2 | `GET /api/runs/{id}/events` replay+tail; `GET /api/runs/{id}` status | pending | — | replay from events.jsonl + live tail; multi-consumer |
-| 1-3 | Startup orphan surfacing (`GET /api/runs?status=orphaned`) | pending | — | no auto-resume (D5) |
+| 1-1 | `run_registry.py` + background execution + `detached` flag + `/abort` | done | (this commit) | `test_run_registry.py` (8): disconnect-survival, abort-fires-finallys, replay, multi-consumer, never-started-task finalization |
+| 1-2 | `GET /api/runs/{id}/events` replay+tail; `GET /api/runs/{id}` status | done | (this commit) | `test_runs_endpoints.py` (7): replay, Last-Event-ID resume, 404/409 |
+| 1-3 | Startup orphan surfacing (`GET /api/runs?status=orphaned`) | done | (this commit) | `run_state.list_active()` + startup log + endpoint filter; D5: surfaced only |
 
 **Batch 1 gate:**
-- [ ] Integration test: kill SSE consumer mid-run → run completes; events.jsonl carries `sprint_complete`
-- [ ] `POST /abort` → task cancelled, cleanup finallys fire
-- [ ] `detached=false` (default) behavior byte-identical to today
-- [ ] Full suite green
+- [x] Integration test: kill SSE consumer mid-run → run completes; events.jsonl carries `sprint_complete` (`test_consumer_disconnect_does_not_stop_run`, `test_detached_run_brief_returns_202_and_completes`)
+- [x] `POST /abort` → task cancelled, cleanup finallys fire (`test_abort_cancels_and_generator_finally_fires`)
+- [x] `detached=false` (default) behavior preserved: same data-only SSE frames, no id: lines, no terminal event, disconnect still aborts (`test_inline_*` ×2)
+- [x] Full suite green — **223/223** (was 208)
+- [ ] Live smoke (`curl --max-time 5` on a real 1-BL sprint) — blocked on 0-3/0-4 environment restore
 
 ---
 

@@ -18,12 +18,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services import backlog as backlog_svc
 from app.services import disk_preflight as disk_preflight_svc
 from app.services import orchestrator as orchestrator_svc
+from app.services import run_registry as run_registry_svc
 from app.services import run_state as run_state_svc
 from app.services.claude_agent import stream_agent_task
 from app.services.indexing import run_claude_context_index, run_graphify_update
@@ -1183,6 +1184,14 @@ class RunBriefRequest(BaseModel):
     # sprints; legacy /run-brief invocations that omit this field fall back
     # to the pre-A18 path layout.
     feature_name: str | None = Field(None, min_length=1, max_length=120)
+    # Batch 1 (AUTONOMY_HARDENING_PLAN.md, C1/A34): when True, the run
+    # executes as a background task in the run registry and this endpoint
+    # returns 202 {run_id, events_url} immediately. The SSE view lives at
+    # GET /api/runs/{run_id}/events (replayable, multi-consumer); client
+    # disconnect never cancels the run — POST /api/runs/{run_id}/abort is
+    # the only cancellation path. Default False preserves the legacy
+    # inline-streaming behavior (including disconnect-aborts semantics).
+    detached: bool = False
 
 
 @router.post("/{repo}/run-brief")
@@ -1305,95 +1314,132 @@ async def run_brief(repo: str, req: RunBriefRequest):
         # Reuses the same preflight + path conventions as the per-role endpoints.
         return _retrieval_kwargs(wt, role=role, bl_id=bl_id, trace=trace)
 
-    async def gen():
-        # A18: tailable per-feature event log. Open in append mode so re-runs
-        # of the same feature accumulate history. The framework / harness can
-        # `tail -F` this file to follow sprint progress regardless of whether
-        # the run was kicked off via webapp UI or curl.
-        events_fh = None
-        if feature_dir_abs is not None:
-            try:
-                events_fh = open(feature_dir_abs / "events.jsonl", "a", buffering=1, encoding="utf-8")
-            except OSError:
-                events_fh = None
+    # ── Batch 1 (C1/A34): single execution path through the run registry ──
+    # The orchestrator generator is consumed by a background pump task, not
+    # by the HTTP response. Both response modes below are pure *views*.
 
-        def _persist_event(evt: dict) -> None:
-            if events_fh is None:
-                return
+    # A18: tailable per-feature event log. Open in append mode so re-runs
+    # of the same feature accumulate history. The framework / harness can
+    # `tail -F` this file to follow sprint progress regardless of whether
+    # the run was kicked off via webapp UI or curl. Closed in on_finish.
+    events_fh = None
+    if feature_dir_abs is not None:
+        try:
+            events_fh = open(feature_dir_abs / "events.jsonl", "a", buffering=1, encoding="utf-8")
+        except OSError:
+            events_fh = None
+
+    def _persist_event(evt: dict) -> None:
+        # Track current_bl from bl.start so 409 responses can name it.
+        if evt.get("phase") == "orchestrator.bl.start":
+            meta = _RUN_META.get(repo)
+            if meta is not None:
+                meta["current_bl"] = evt.get("bl_id")
+        if events_fh is None:
+            return
+        try:
+            rec = dict(evt)
+            rec.setdefault("_persisted_at", datetime.now(timezone.utc).isoformat())
+            rec.setdefault("run_id", run_id)
+            events_fh.write(json.dumps(rec, default=str) + "\n")
+        except (ValueError, TypeError, OSError):
+            pass
+
+    def _exception_event(exc: BaseException) -> dict:
+        # Preserves the legacy inline error shapes verbatim.
+        if isinstance(exc, RetrievalUnavailable):
+            return {"type": "_meta", "phase": "orchestrator.aborted",
+                    "reason": f"retrieval unavailable: {exc}"}
+        return {"type": "_error", "error": f"{type(exc).__name__}: {exc}"}
+
+    def _on_finish(_status: str) -> None:
+        # B2: release lock + clear meta on every exit path (success, abort,
+        # error). Runs in the pump's finally — i.e. tied to the RUN's
+        # lifecycle, no longer to the response's.
+        _RUN_META.pop(repo, None)
+        if lock.locked():
+            lock.release()
+        if events_fh is not None:
             try:
-                rec = dict(evt)
-                rec.setdefault("_persisted_at", datetime.now(timezone.utc).isoformat())
-                rec.setdefault("run_id", run_id)
-                events_fh.write(json.dumps(rec, default=str) + "\n")
-            except (ValueError, TypeError, OSError):
+                events_fh.close()
+            except OSError:
                 pass
 
-        # A48 pre-flight disk advisory — always first event in the
-        # stream so operators see the disk state before any heavy
-        # subprocess fires. Emitted regardless of enforce flag; the
-        # HTTP 409 path above handles the enforce-and-blocked case.
-        _pre_flight_evt = {
-            "type": "_meta",
-            "phase": "orchestrator.pre_flight.disk",
-            "run_id": run_id,
-            "enforce": req.enforce_disk_preflight,
-            **pre_flight.to_event(),
-        }
-        _persist_event(_pre_flight_evt)
-        yield _sse(_pre_flight_evt)
+    # A48 pre-flight disk advisory — always first event in the stream so
+    # operators see the disk state before any heavy subprocess fires.
+    _pre_flight_evt = {
+        "type": "_meta",
+        "phase": "orchestrator.pre_flight.disk",
+        "run_id": run_id,
+        "enforce": req.enforce_disk_preflight,
+        **pre_flight.to_event(),
+    }
 
-        # A17/A18: the per-role brief_persisted SSE event is emitted from
-        # inside _po_flow once the worktree exists and the brief has been
-        # written under <target>/_brownfield/features/<slug>/brief.md.
+    # A17/A18: the per-role brief_persisted SSE event is emitted from
+    # inside _po_flow once the worktree exists and the brief has been
+    # written under <target>/_brownfield/features/<slug>/brief.md.
+    agen = orchestrator_svc.run_brief(
+        repo_dir=repo_dir,
+        repo_name=repo,
+        brief=req.brief,
+        project_name=project_name,
+        retrieval_kwargs_builder=_rk_builder,
+        timeout_per_role=req.timeout_per_role,
+        max_bls=req.max_bls,
+        skip_po=req.skip_po,
+        stop_on_failure=req.stop_on_failure,
+        stop_on_qa_doctrine_failure=req.stop_on_qa_doctrine_failure,
+        # A7: share run_id with the router's lock metadata so the disk
+        # state file, trace archive dir, and 409 detail all line up.
+        run_id=run_id,
+        brief_hash=brief_hash,
+        start_bl=req.start_bl,
+        run_doctrine_meta=req.run_doctrine_meta,
+        feature_slug=feature_slug,
+        run_acceptance=req.run_acceptance,
+        inject_acceptance_priors=req.inject_acceptance_priors,
+        run_acceptance_followup=req.run_acceptance_followup,
+        acceptance_timeout=req.acceptance_timeout,
+        min_ui_coverage_ratio=req.min_ui_coverage_ratio,
+    )
+    try:
+        run_registry_svc.start_run(
+            run_id, repo, agen,
+            pre_events=[_pre_flight_evt],
+            persist=_persist_event,
+            exception_event=_exception_event,
+            on_finish=_on_finish,
+        )
+    except Exception:
+        _on_finish("error")
+        raise
+
+    if req.detached:
+        return JSONResponse(
+            status_code=202,
+            content={
+                "run_id": run_id,
+                "repo": repo,
+                "status": "running",
+                "events_url": f"/api/runs/{run_id}/events",
+                "status_url": f"/api/runs/{run_id}",
+                "abort_url": f"/api/runs/{run_id}/abort",
+            },
+        )
+
+    async def gen():
+        # Legacy inline view: same SSE frames as before Batch 1. Consumer
+        # disconnect ABORTS the run — that is the pre-Batch-1 contract and
+        # detached=False callers may rely on it (curl Ctrl+C, UI Stop).
         try:
-            async for event in orchestrator_svc.run_brief(
-                repo_dir=repo_dir,
-                repo_name=repo,
-                brief=req.brief,
-                project_name=project_name,
-                retrieval_kwargs_builder=_rk_builder,
-                timeout_per_role=req.timeout_per_role,
-                max_bls=req.max_bls,
-                skip_po=req.skip_po,
-                stop_on_failure=req.stop_on_failure,
-                stop_on_qa_doctrine_failure=req.stop_on_qa_doctrine_failure,
-                # A7: share run_id with the router's lock metadata so the disk
-                # state file, trace archive dir, and 409 detail all line up.
-                run_id=run_id,
-                brief_hash=brief_hash,
-                start_bl=req.start_bl,
-                run_doctrine_meta=req.run_doctrine_meta,
-                feature_slug=feature_slug,
-                run_acceptance=req.run_acceptance,
-                inject_acceptance_priors=req.inject_acceptance_priors,
-                run_acceptance_followup=req.run_acceptance_followup,
-                acceptance_timeout=req.acceptance_timeout,
-                min_ui_coverage_ratio=req.min_ui_coverage_ratio,
-            ):
-                # Track current_bl from bl.start so 409 responses can name it.
-                if event.get("phase") == "orchestrator.bl.start":
-                    meta = _RUN_META.get(repo)
-                    if meta is not None:
-                        meta["current_bl"] = event.get("bl_id")
-                _persist_event(event)
+            async for _idx, event in run_registry_svc.subscribe(run_id):
+                if event.get("phase") == "orchestrator.run.terminal":
+                    continue  # registry-internal; not part of the legacy stream
                 yield _sse(event)
-        except RetrievalUnavailable as e:
-            yield _sse({"type": "_meta", "phase": "orchestrator.aborted",
-                       "reason": f"retrieval unavailable: {e}"})
-        except Exception as exc:  # noqa: BLE001
-            yield _sse({"type": "_error", "error": f"{type(exc).__name__}: {exc}"})
         finally:
-            # B2: release lock + clear meta on every exit path (success, abort,
-            # consumer disconnect). asyncio.Lock dies with the process anyway,
-            # so a kill -9 self-clears.
-            _RUN_META.pop(repo, None)
-            if lock.locked():
-                lock.release()
-            if events_fh is not None:
-                try:
-                    events_fh.close()
-                except OSError:
-                    pass
+            h = run_registry_svc.get(run_id)
+            if h is not None and h.status == run_registry_svc.RUNNING:
+                run_registry_svc.abort(run_id)
 
     return StreamingResponse(
         gen(),
