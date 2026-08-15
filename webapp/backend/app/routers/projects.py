@@ -36,6 +36,7 @@ from app.services.git_worktree import (
     get_commit_sha,
     has_new_commits,
     remove_worktree,
+    revert_bl_span,
 )
 from app.services import repo_config as repo_config_svc
 from app.services import regression_gate as regression_gate_svc
@@ -1460,6 +1461,74 @@ async def run_brief(repo: str, req: RunBriefRequest):
 class MergeBranchRequest(BaseModel):
     branch: str
     skip_gate: bool = False
+
+
+class RevertBLRequest(BaseModel):
+    bl_id: str = Field(..., pattern=r"^BL-\d{4}$")
+    confirm: bool = False
+    skip_gate: bool = False
+
+
+@router.post("/{repo}/revert-bl")
+async def revert_bl(repo: str, req: RevertBLRequest):
+    """Batch 4-2 (A50, operator decision D2): the operator-gated backward
+    remedy. Reverts a BL's commit span on the agent branch via forward
+    revert commits (never history rewriting), gates the revert branch,
+    and FF-merges on green — the same bar every agent branch clears.
+
+    Requires ``confirm=true`` (409 otherwise). ``skip_gate=true`` is the
+    same operator override merge-branch has. NEVER invoked automatically
+    — v1 keeps revert an explicit operator act.
+    """
+    repo_dir = _repo_dir(repo)
+    if not req.confirm:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "confirm-required",
+                "hint": ("Reverting merged work is irreversible-ish (forward "
+                         "revert commits on the agent branch). Re-POST with "
+                         "confirm=true."),
+            },
+        )
+    cfg = repo_config_svc.load(repo_dir)
+
+    async def gen():
+        yield _sse({"type": "_meta", "phase": "revert.start",
+                    "bl_id": req.bl_id, "agent_branch": cfg.agent_branch})
+        result = await revert_bl_span(repo_dir, req.bl_id, cfg.agent_branch,
+                                      base_ref=cfg.main_ref)
+        yield _sse({"type": "_meta", "phase": "revert.span",
+                    **{k: result.get(k) for k in ("ok", "kind", "branch", "error", "reverted")}})
+        if not result.get("ok"):
+            yield _sse({"type": "_meta", "phase": "revert.done", "ok": False,
+                        "kind": result.get("kind")})
+            return
+        branch = result["branch"]
+        if req.skip_gate:
+            gate = {"ok": True, "kind": "skipped", "reason": "operator skip_gate=true"}
+        else:
+            gate = await regression_gate_svc.run_gate(
+                repo_dir, agent_branch=branch, target_ref=cfg.agent_branch)
+        yield _sse({"type": "_meta", "phase": "regression_gate",
+                    **{k: gate.get(k) for k in ("ok", "kind", "reason", "regressions", "gate_failure_class")}})
+        if not gate.get("ok"):
+            yield _sse({"type": "_meta", "phase": "revert.done", "ok": False,
+                        "kind": "gate_failed", "branch": branch,
+                        "hint": "revert branch left in place for inspection"})
+            return
+        merge = await fast_forward_target(repo_dir, branch, target_ref=cfg.agent_branch)
+        yield _sse({"type": "_meta", "phase": "merge_to_target",
+                    **{k: merge.get(k) for k in ("ok", "kind", "merged_sha", "error")}})
+        yield _sse({"type": "_meta", "phase": "revert.done",
+                    "ok": bool(merge.get("ok")), "bl_id": req.bl_id,
+                    "merged_sha": merge.get("merged_sha")})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{repo}/merge-branch")

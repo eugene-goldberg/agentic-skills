@@ -824,6 +824,41 @@ def detect_infra_failure(post_tail: str) -> str | None:
     return m.group(0).strip() if m else None
 
 
+# ─── Batch 4-1 (A50): scorecard summary for orchestrator control flow ───────
+
+
+def extract_scorecard_summary(scorecard_path: Path) -> dict:
+    """Parse the scorer's verdict + dimension scores into a control-flow-
+    ready summary. Before Batch 4-1 the numeric score never left the
+    validator (it was parsed only for R7 self-consistency): a merged BL
+    with an honest **Fail** verdict still yielded ``bl.done
+    outcome=merged_full``. Reuses the existing R7 parsers — one source of
+    truth for scorecard shape.
+
+    Returns ``{verdict, dims, min_dim, total}`` (fields None/empty when
+    unparseable — callers treat that as "no score signal", never as a
+    pass).
+    """
+    verdict = _parse_scorecard_verdict(scorecard_path)
+    dims = _parse_brownfield_dims(scorecard_path)
+    total: int | None = None
+    if scorecard_path.exists():
+        try:
+            text = scorecard_path.read_text(encoding="utf-8")
+            m = re.search(r"(?:Total|Overall)[^\d\n]*(\d{1,3})\s*(?:/\s*100)?",
+                          text, re.IGNORECASE)
+            if m:
+                total = int(m.group(1))
+        except OSError:
+            pass
+    return {
+        "verdict": verdict or None,
+        "dims": dims,
+        "min_dim": min((s for _d, s in dims), default=None),
+        "total": total,
+    }
+
+
 # ─── Batch 3-2 (ABL-0002 v1): triage decision parsing + validation ──────────
 
 TRIAGE_DECISIONS = ("RETRY_REWRITE", "DEFER", "ESCALATE")

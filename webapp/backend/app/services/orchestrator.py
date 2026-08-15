@@ -775,11 +775,22 @@ async def _qa_or_scorer_flow(
             else:
                 yield _ptag({"type": "_meta", "phase": "awaiting_review",
                             "reason": gate.get("reason")}, role, bl_id, trace=trace)
-        yield {"_orchestrator_outcome": True, "role": role, "bl_id": bl_id,
-               "merged": merged, "doctrine_ok": validation["ok"],
-               # A2: surface doctrine summary so the per-BL loop can emit
-               # qa_doctrine_failed with diagnostic detail.
-               "doctrine_summary": validation.get("summary")}
+        outcome_evt = {"_orchestrator_outcome": True, "role": role, "bl_id": bl_id,
+                       "merged": merged, "doctrine_ok": validation["ok"],
+                       # A2: surface doctrine summary so the per-BL loop can emit
+                       # qa_doctrine_failed with diagnostic detail.
+                       "doctrine_summary": validation.get("summary")}
+        # Batch 4-1 (A50): the scorer's verdict enters control flow. Parse
+        # it from the worktree BEFORE teardown (the scorecard lives on the
+        # scorer's unmerged branch) and attach it to the outcome so the
+        # per-BL loop can label honestly and route Fail verdicts.
+        if role == "scorer":
+            score = doctrine_svc.extract_scorecard_summary(
+                wt.path / ".agile-v" / "scorecards" / f"{bl_id}.md")
+            outcome_evt["score_verdict"] = score["verdict"]
+            outcome_evt["score_total"] = score["total"]
+            outcome_evt["score_min_dim"] = score["min_dim"]
+        yield outcome_evt
     finally:
         if trace is not None:
             trace.close()
@@ -851,7 +862,7 @@ async def _triage_flow(
             f"{skill}\n\n---\n\n# Invocation context\n\n"
             f"- BL under triage: `{bl_id}`\n"
             f"- Failed role: `{failed_role}`"
-            + (" (QA context: RETRY_REWRITE is not available to you — see SKILLS)" if failed_role == "qa" else "")
+            + (" (QA/scorer context: RETRY_REWRITE is not available to you — see SKILLS)" if failed_role in ("qa", "scorer") else "")
             + f"\n- Artifact directory: `{art}`\n"
             f"- Write your decision to: `{art}/{bl_id}/triage.md`\n\n"
             f"## BACKLOG section for {bl_id}\n\n{bl_section or '(section unavailable)'}\n\n"
@@ -896,12 +907,14 @@ async def _triage_flow(
                 "fallback": True,
             }
 
-        # v1 constraint: QA context cannot grant a retry.
-        if failed_role == "qa" and decision.get("decision") == "RETRY_REWRITE":
+        # v1 constraint: QA/scorer contexts cannot grant a retry (a bare
+        # re-run is not a plan; scorer context concerns already-merged code
+        # whose backward remedy is the operator-gated /revert-bl).
+        if failed_role in ("qa", "scorer") and decision.get("decision") == "RETRY_REWRITE":
             decision["decision"] = "DEFER"
             decision["reasoning"] = (
-                "(coerced from RETRY_REWRITE: QA-context triage may only "
-                "DEFER or ESCALATE in v1) " + decision.get("reasoning", "")
+                f"(coerced from RETRY_REWRITE: {failed_role}-context triage may "
+                "only DEFER or ESCALATE in v1) " + decision.get("reasoning", "")
             )
         yield {"_triage_decision": True, "bl_id": bl_id, **decision}
     finally:
@@ -2402,21 +2415,71 @@ async def run_brief(
 
             # A5: outcome reflects the WORST role result, not just the engineer.
             # Possible labels (this branch only — engineer already merged):
-            #   merged_full     — engineer ✓ qa ✓ scorer doctrine ✓
-            #   merged_no_qa    — engineer ✓ qa failed/didn't merge
-            #   merged_no_score — engineer ✓ qa ✓ scorer doctrine ✗
+            #   merged_full         — engineer ✓ qa ✓ scorer doctrine ✓ verdict ✓
+            #   merged_no_qa        — engineer ✓ qa failed/didn't merge
+            #   merged_score_failed — engineer ✓ qa ✓ scorer says Fail (4-1/A50)
+            #   merged_no_score     — engineer ✓ qa ✓ scorer doctrine ✗
             score_doc_ok = bool(score_outcome and score_outcome.get("doctrine_ok"))
+            score_verdict = (score_outcome or {}).get("score_verdict")
+            score_failed = bool(score_verdict and score_verdict.lower() == "fail")
             if not qa_doc_ok or not qa_merged:
                 outcome = "merged_no_qa"
+            elif score_doc_ok and score_failed:
+                outcome = "merged_score_failed"
             elif not score_doc_ok:
                 outcome = "merged_no_score"
             else:
                 outcome = "merged_full"
+            # Batch 4-1 (A50): a Fail verdict on merged code is a first-class
+            # signal, not a footnote. Emit score_failed; with triage ON, get
+            # a recorded DEFER/ESCALATE decision (scorer context, R16) so
+            # the operator sees WHAT to do about the merged-but-failing BL
+            # (the backward remedy is the operator-gated /revert-bl, 4-2).
+            if score_failed:
+                yield _evt("score_failed", bl_id=bl_id,
+                           verdict=score_verdict,
+                           total=(score_outcome or {}).get("score_total"),
+                           min_dim=(score_outcome or {}).get("score_min_dim"))
+                if run_triage and bl_id not in triaged_bls:
+                    triaged_bls.add(bl_id)  # R16
+                    yield _evt("triage.start", bl_id=bl_id, failed_role="scorer")
+                    sdecision: dict | None = None
+                    try:
+                        async for e in _triage_flow(
+                            repo_dir, repo_name, bl_id,
+                            failed_role="scorer",
+                            signals={"score_failed": {
+                                "verdict": score_verdict,
+                                "total": (score_outcome or {}).get("score_total"),
+                                "min_dim": (score_outcome or {}).get("score_min_dim")}},
+                            bl_section=it.body[:4000] if it.body else None,
+                            timeout=timeout_per_role, run_id=run_id,
+                            feature_slug=feature_slug,
+                        ):
+                            if "_triage_decision" in e:
+                                sdecision = e
+                                continue
+                            yield e
+                    except Exception as exc:  # noqa: BLE001
+                        sdecision = {"decision": "DEFER",
+                                     "reasoning": f"triage flow error: {exc}",
+                                     "fallback": True}
+                    sd = (sdecision or {}).get("decision") or "DEFER"
+                    yield _evt("triage.decision", bl_id=bl_id, decision=sd,
+                               fallback=bool((sdecision or {}).get("fallback")),
+                               reasoning=((sdecision or {}).get("reasoning") or "")[:500])
+                    if sd == "ESCALATE":
+                        rel = _write_escalation(repo_dir, feature_slug, bl_id,
+                                                sdecision or {}, run_id)
+                        yield _evt("triage.escalated", bl_id=bl_id, path=rel,
+                                   question=((sdecision or {}).get("question") or "")[:500])
             summary["bls"].append(per_bl)
             satisfied_bls.add(bl_id)  # A49: engineer landed (all merged_* labels)
             bl_outcomes_compact.append({"bl_id": bl_id, "outcome": outcome})
             _checkpoint(current_bl=None)  # A7
-            yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
+            yield _evt("bl.done", bl_id=bl_id, outcome=outcome,
+                       score_verdict=score_verdict,
+                       score_total=(score_outcome or {}).get("score_total"))
 
         terminal_status = "sprint_complete"  # A7: flip from default "aborted"
 

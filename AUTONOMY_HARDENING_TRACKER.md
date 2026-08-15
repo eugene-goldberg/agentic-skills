@@ -69,8 +69,8 @@
 
 | ID | Item | Status | Commit | Verification |
 |---|---|---|---|---|
-| 4-1 | Scorer verdict/total into `bl.done`; Fail→triage routing | pending | — | fixture Fail scorecard → `score_failed` |
-| 4-2 | `revert_bl_span` + operator-gated `POST /revert-bl` | pending | — | revert branch gated green before FF; conflict → structured error |
+| 4-1 | Scorer verdict/total into `bl.done`; Fail→triage routing | done | (this commit) | `extract_scorecard_summary` (reuses R7 parsers); Fail verdict → outcome `merged_score_failed` + `score_failed` event + scorer-context triage (DEFER/ESCALATE, R16); `bl.done` carries verdict+total |
+| 4-2 | `revert_bl_span` + operator-gated `POST /revert-bl` | done | (this commit) | forward-revert only (R13 symmetry); conflict → structured error, agent_branch untouched (asserted by test); endpoint requires confirm=true, gates revert branch before FF; `test_batch4_score_teeth_revert.py` (8) |
 | 4-3 | Pre-merge QA restructure | **declined (D3)** | — | revisit if reverts >1/sprint over 3 sprints |
 
 ---

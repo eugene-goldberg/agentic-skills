@@ -233,6 +233,75 @@ async def fast_forward_target(repo_root: Path, branch: str, target_ref: str = "m
     return {"ok": True, "kind": "ff", "merged_sha": branch_sha, "target_ref": target_ref}
 
 
+async def find_bl_commits(repo_root: Path, bl_id: str, agent_branch: str,
+                          *, base_ref: str | None = None) -> list[dict]:
+    """Batch 4-2 (A50): commits on ``agent_branch`` belonging to ``bl_id``,
+    oldest first. Subject conventions (verified against the harness):
+    engineer commits start with ``BL-NNNN``; QA commits start with
+    ``qa(BL-NNNN``. ``base_ref`` bounds the scan (default: whole branch).
+    """
+    range_spec = f"{base_ref}..{agent_branch}" if base_ref else agent_branch
+    code, out, _ = await _run(
+        ["git", "log", "--reverse", "--format=%H%x09%s", range_spec],
+        cwd=repo_root,
+    )
+    if code != 0:
+        return []
+    hits: list[dict] = []
+    for line in out.splitlines():
+        if "\t" not in line:
+            continue
+        sha, subj = line.split("\t", 1)
+        s = subj.strip()
+        if s.startswith(bl_id) or s.startswith(f"qa({bl_id}"):
+            hits.append({"sha": sha, "subject": s})
+    return hits
+
+
+async def revert_bl_span(repo_root: Path, bl_id: str, agent_branch: str,
+                         *, base_ref: str | None = None) -> dict:
+    """Batch 4-2 (A50): the orchestrator-owned backward remedy. Reverts a
+    BL's commit span on ``agent_branch`` by adding revert commits (never
+    history rewriting — the R13 boundary applies to the orchestrator's
+    conscience too: refs move forward only).
+
+    Mechanics: disposable worktree off ``agent_branch`` →
+    ``git revert --no-edit`` each of the BL's commits newest-first → on
+    any conflict, ``git revert --abort`` and return a structured error
+    with ZERO mutation of ``agent_branch``. On success returns the revert
+    branch name — the CALLER gates it (regression gate) and FF-merges,
+    exactly like any agent branch. This function never touches
+    ``agent_branch`` itself.
+
+    Returns ``{ok, kind, branch?, reverted?, error?}`` with kind ∈
+    ``reverted | no_commits | conflict | error``.
+    """
+    commits = await find_bl_commits(repo_root, bl_id, agent_branch, base_ref=base_ref)
+    if not commits:
+        return {"ok": False, "kind": "no_commits",
+                "error": f"no commits for {bl_id} found on {agent_branch}"}
+    wt = await create_worktree(repo_root, f"revert-{bl_id.lower()}-{uuid.uuid4().hex[:8]}",
+                               base_ref=agent_branch)
+    try:
+        for c in reversed(commits):  # newest first
+            code, _out, err = await _run(
+                ["git", "revert", "--no-edit", c["sha"]], cwd=wt.path)
+            if code != 0:
+                await _run(["git", "revert", "--abort"], cwd=wt.path)
+                return {
+                    "ok": False, "kind": "conflict",
+                    "error": (f"revert of {c['sha'][:8]} ({c['subject'][:80]}) "
+                              f"conflicts: {err.strip()[:400]}"),
+                    "commits": commits,
+                }
+        return {"ok": True, "kind": "reverted", "branch": wt.branch,
+                "reverted": commits}
+    finally:
+        # Worktree dir is disposable; the branch (on success) survives for
+        # the caller to gate + merge — same convention as agent worktrees.
+        await remove_worktree(repo_root, wt)
+
+
 async def has_new_commits(wt: Worktree, base_ref: str | None = None) -> int:
     """Count commits the agent added beyond the worktree's base.
 
