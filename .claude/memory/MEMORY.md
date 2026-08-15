@@ -20,7 +20,7 @@
 - [Arch I-7: self-hardening](arch_self_hardening.md) — doctrine-meta-agent proposes; operator approves; never auto-merges
 - [Claude's architect role](arch_claude_role.md) — operator directive 2026-05-23: Claude is the architect with delivery accountability; codified in CLAUDE.md
 - [Mission framing](arch_mission_framing.md) — operator correction 2026-05-23: mission is the autonomous synthetic crew itself, not operator-time metrics; metrics are symptoms
-- [Active work branch](arch_active_branch.md) — `architect-prereqs` (handoff after ABL-0015 auto-dispatch batches A–D; only operator-gated Batch E live smoke remains)
+- [Active work branch](arch_active_branch.md) — `autonomy-hardening` (Batches 0–4 shipped 2026-08-15; 5–7 authorized/unstarted; parent architect-prereqs holds ABL-0015 flag-OFF)
 - [Intelligent Kanban sprint](arch_intelligent_kanban_sprint.md) — first non-Documents brownfield sprint; `run-20260528T144444Z-e4ba3d` on target branch `intelligent_kanban`; 3/7 BLs merged at 4h28m snapshot
 - [Project evaluation 2026-05-28](arch_evaluation_2026-05-28.md) — ~40% of thesis (the right 40%); worker-loop works, crew brain unbuilt; Batch E (I-2 tightening) + G (hygiene) proposed in ARCHITECT_PLAN §9, awaiting operator auth
 - [Gate throughput bottleneck](arch_gate_throughput.md) — playwright 79-test gate at 1 worker, PRE+POST per BL = 80-160 min/BL; A28-A31 in ledger for workers/sharding/TIA/tiered gates
@@ -29,3 +29,4 @@
 - [Auto-dispatch (ABL-0015)](arch_auto_dispatch.md) — §I.4 code batches A–D shipped flag-OFF; selector+invoker over unchanged _engineer_flow; R15; only operator-gated Batch E live smoke remains
 - [A48 disk-leak fixes](arch_disk_leak_fixes.md) — 4 shipped fixes (`02ebd7b`); Docker.raw 60 GB Mac VM cap and the four leak classes it closes; force-kill worktree-leak open gap
 - [Pre-flight checklist](../../../../dev/ai-projects/agentic-skills/PREFLIGHT.md) — PF-1..10 verifiable artifacts; run before every sprint launch
+- [Autonomy hardening](arch_autonomy_hardening.md) — 2026-08-15 audit (C1–C5/M1–M4, A49–A57) + Batches 0–4 shipped: detached runs, honest gate signals, dep-gating + triage v1 + R16, score teeth + revert

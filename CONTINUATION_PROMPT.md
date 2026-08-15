@@ -1,164 +1,85 @@
 # Continuation prompt — paste into the next Claude Code session
 
-> Hand-off written 2026-06-02 (evening). This session designed and
-> implemented **ABL-0015 auto-dispatch** (§I.4) — code batches A–D —
-> on top of the prior Financial_Management 12-BL delivery. All work is
-> committed and pushed to `architect-prereqs`.
+> Hand-off written 2026-08-15. This session: (1) full-code-audit that
+> identified mission-blocking flaws C1–C5/M1–M4 (ledger A49–A57);
+> (2) `AUTONOMY_HARDENING_PLAN.md` authorized (decisions D1–D6);
+> (3) **Batches 0–4 executed and committed** on the new branch
+> `autonomy-hardening` (off `architect-prereqs` @ `8745331`).
+> Backend suite: **266/266** (was 208).
 >
-> **Only Batch E remains, and it is operator-gated** — a live
-> calibration smoke that dispatches a real follow-up engineer on the
-> confirmed Journey 03 `product_bug`. The architect cannot run it.
+> ⚠️ **Machine migration:** this checkout now lives under
+> `/Users/egoldberg` (was `/Users/eugenegoldberg`). venv + memory
+> symlink restored; **brownfield targets, Milvus, Ollama are still
+> missing** (tracker 0-3/0-4 — operator-blocked).
 
 ---PROMPT START---
 
 You are picking up the agentic-skills project. **You are the architect.**
-Read `CLAUDE.md` first — especially **"Operating principle: quality over
-speed"** (Rules 1–6, the **95% verified/tested certainty floor**, and
-Rule 3 on **narrative momentum**).
-
-## ⚠️ Priority 0 — Verify branch state (30 sec)
-
-```bash
-cd /Users/eugenegoldberg/dev/ai-projects/agentic-skills
-git status -s                  # MUST be clean
-git log --oneline @{u}..HEAD   # MUST be empty (synced with origin)
-git log --oneline -1           # expect the governance-docs commit on architect-prereqs
-```
+Read `CLAUDE.md` first — especially "Operating principle: quality over
+speed" (the 95% verified/tested certainty floor and narrative-momentum
+rule).
 
 ## 1. Identity
 
 **agentic-skills** — autonomous synthetic AI crew for brownfield feature
-delivery. Operator: Eugene Goldberg. Active branch: `architect-prereqs`.
+delivery. Operator: Eugene Goldberg. Active branch: **`autonomy-hardening`**
+(NOT architect-prereqs; that is its parent).
 
-## 2. State at hand-off — ABL-0015 auto-dispatch shipped (flag-OFF)
+## 2. State at hand-off — autonomy-hardening Batches 0–4 shipped
 
-This session built the feedback-loop-closing feature: when acceptance
-finds a cross-BL `product_bug` and the operator confirms it, the
-orchestrator auto-spawns a follow-up engineer to fix it through the same
-gated pipeline every BL clears.
+Read `AUTONOMY_HARDENING_PLAN.md` (the why + decisions D1–D6) and
+`AUTONOMY_HARDENING_TRACKER.md` (live status). Commits:
 
-**Code batches A–D — all committed on `architect-prereqs`:**
+| Commit | Batch | What |
+|---|---|---|
+| `5b3b31f` | 0 | plan authorized; ledger A49–A57 filed; env partially restored |
+| `f333e20` | 1 (C1/A34) | detached runs: run_registry, `POST /run-brief {detached:true}` → 202, resumable `GET /api/runs/{id}/events`, explicit `/abort`; disconnect never kills a run |
+| `1868229` | 2 (C4) | gate `build_fail` kind + `gate_failure_class` + regressed⇒non-empty invariant (A39); api_error = infra-retry, no budget burn (A44); idle clock suspended while a tool is in flight (A45); A54–A57 |
+| `9728f0a` | 3 (C2) | dependency DAG now GATES (`deferred_dep`, A49); triage agent v1 (RETRY_REWRITE×1 / DEFER / ESCALATE, enum-constrained, DEFER fallback) + **R16**; `run_triage` flag-OFF |
+| `f2ab112` | 4 (C3/A50) | Fail verdict → `merged_score_failed` + `score_failed` + scorer-context triage; `revert_bl_span` + operator-gated `POST /revert-bl {confirm:true}` |
 
-| Commit | What |
-|---|---|
-| `d7b1088` | design doc (`ABL-0015_AUTO_DISPATCH_DESIGN.md`, operator-approved) |
-| `912f21e` | A — 5 `dispatch_*` ledger fields + `set_dispatch_state` |
-| `29f5ac6` | B — `run_acceptance_followup` flag + `retrieval_kwargs_builder` thread-through |
-| `df0e4ff` | C — selector + section builder + `section_override` + dispatch hook + R15 |
-| `b45919d` | D — `scan_stale_followup_worktrees` closure coverage |
-| (this session's last) | governance-docs update (BACKLOG, ABL-0014 §I.4, CLAUDE.md R15, this file) |
+**How to run the suite:** `cd webapp/backend && .venv/bin/python -m
+pytest tests/ -q -p no:cacheprovider` → 266/266. venv is uv-managed
+Python 3.12 (`~/.local/bin/uv`).
 
-**Design principle:** selector + invoker, **not** a new executor. The
-dispatcher filters the I.3 findings ledger and calls the *unchanged*
-`_engineer_flow` (only `section_override` + `task_id` differ). All
-dangerous parts — subprocess, regression gate, auto-merge, A48 worktree
-teardown — are the same machinery that guards every BL.
+## 3. Open work (in priority order)
 
-**Operator-approved v1 policy** (`ABL-0015_AUTO_DISPATCH_DESIGN.md` §9):
-- Conservative verdict gate: dispatch only on `verdict == "confirmed"`.
-- Cost cap 1 (`FOLLOWUP_COST_CAP`).
-- No auto re-run of acceptance after the fix.
-- Gate-fail → `not_merged`, manual review, no extra retry.
-- Flag **OFF by default** (`run_acceptance_followup=False`).
+1. **Batches 5–7 of AUTONOMY_HARDENING_PLAN.md** — authorized (D6),
+   unstarted, independent of each other:
+   - 5: A29 PRE-baseline gate cache, cost aggregation + `max_sprint_usd`
+     cap (5-1 playwright workers is target-side, blocked on env)
+   - 6: `LESSONS.jsonl` within-sprint memory + prompt injection
+   - 7: checkout preflight + checked PO commit (A51); indexer health
+     check (A53); agent env allowlist (A52)
+2. **Environment restore (tracker 0-3/0-4, operator-blocked):**
+   brownfield target (old-machine backup or fresh clone +
+   `RUNBOOK_clean_brownfield_reset.md`), Milvus stack, Ollama+bge-m3.
+   Blocks all live smokes, Batch E of ABL-0015, and calibration sprints.
+3. **Calibration sprints (operator-gated):** one clean `run_triage=true`
+   sprint → propose D1 default flip; ABL-0015 Batch E (Journey 03) —
+   note its findings-ledger state lived on the lost target checkout.
+4. **ARCHITECT_PLAN.md Batches C/D/E/G** — still proposed/unstarted
+   (framework-reviewer, observer, doctrine-spec, governance hygiene).
+   Note G-1 grew: ARCHITECTURE_INVARIANTS.md I-2 table now also lacks
+   R14/R15/R16 rows; the empty-cells matrix predates Batches 1–4.
 
-**New doctrine rule R15** (dispatch-at-most-once) — enforced by the
-selector's `dispatch_state is None` filter. Added to the CLAUDE.md
-R-rules table per I-2.
+## 4. New flags (all default-preserving)
 
-### Test posture
+| Flag | Default | Flip condition |
+|---|---|---|
+| `detached` (run-brief) | False | none — opt-in per call |
+| `run_triage` | False | 1 clean triage-ON calibration sprint (D1) |
+| `run_acceptance_followup` | False | ABL-0015 Batch E live smoke |
 
-```
-208/208 backend pass (was 176 at start of session, +32)
-  +8   test_findings_ledger        (dispatch lifecycle)
-  +5   test_followup_flag_wiring    (Batch B plumbing)
-  +15  test_followup_dispatch       (selector / builders / dispatch loop)
-  +4   test_closure_check_…stack    (followup_worktree scan)
-```
+## 5. Don'ts (carried + new)
 
-**IMPORTANT — how to run the suite:** scope it to `tests/` from
-`webapp/backend/`:
-```bash
-cd webapp/backend && python3 -m pytest tests/ -q -p no:cacheprovider
-```
-Bare `pytest` from `backend/` recurses into the gitignored brownfield
-**target** repos under `repos/` and errors on their `sqlmodel` dep —
-a pre-existing invocation artifact, not a real failure.
-
-## 3. The ONLY open step — Batch E (operator-gated live calibration smoke)
-
-This is the step the architect cannot do alone. To legitimize flipping
-the flag ON (same default-flip discipline as §I.1 API-acceptance):
-
-1. **Operator-verdict the real finding `confirmed`.** Journey 03's
-   `product_bug` (`sha256:6e533e84…`) lives in
-   `…/_brownfield/features/financial-management/acceptance/findings_log.jsonl`
-   (on the `full-stack-fastapi-template` target). Set it via the AppV2
-   triage panel or `POST /verdict`. Until then the selector finds zero
-   candidates by design.
-2. **Run one sprint with `run_acceptance_followup=true`** (and
-   `run_acceptance=true`) on that target.
-3. **Observe exactly one follow-up dispatch** fixing
-   `PUT /billing/invoices/{id}` (it writes `status` directly, bypassing
-   BL-0005's guarded transition state machine — see design §3a). Watch
-   for `acceptance.followup.{start,done}` in the stream and
-   `BL-ACCEPT-<run_id>-0` sub-events.
-4. **Verify clean closure:** `closure_check` reports 0
-   `followup_worktree` violations; ledger finding transitions
-   `dispatch_state: confirmed-verdict → dispatched → merged`.
-
-If the smoke is clean, the architect can propose flipping the flag
-default (operator approves).
-
-## 4. The bug the smoke will fix (Journey 03, the proof point)
-
-`PUT /billing/invoices/{id}` (`update_invoice`) assigns
-`InvoiceUpdate.status` straight onto the model, bypassing the guarded
-state machine (`POST /{id}/transition`, which correctly rejects illegal
-transitions with 409). The follow-up engineer should route status changes
-through `app/billing/workflow.py`. This is the exact cross-BL integration
-class per-BL QA structurally cannot catch — the canonical evidence that
-the acceptance agent + auto-dispatch loop earns its place.
-
-## 5. §I production-readiness roadmap status
-
-| Item | Status |
-|---|---|
-| **I.1** 3 calibration smokes for API-acceptance | ✅ closed |
-| **I.2** observability gaps | not started |
-| **I.3** ledger + triage UI + extractor | ✅ closed |
-| **I.4** ABL-0015 auto-dispatch | **code A–D shipped, flag-OFF; Batch E live smoke is the open step** |
-| **I.5** Django smoke (multi-target) | not started |
-
-After Batch E, the highest-leverage remaining moves are **I.2**
-(observability) and **I.5** (Django multi-target validation).
-
-## 6. Other open ledger items
-
-| ID | Status |
-|---|---|
-| **A39** | open — regression_gate parser conflates baseline-broken with engineer-regressed |
-| **A45** | open — B5 idle-timeout false-positive |
-| **A47** | open — ScheduleWakeup/Glob bypass `--allowedTools` |
-| **A48** | closeable pending operator review (4 fixes shipped 2026-06-02) |
-| doctrine-meta proposal | open — characterization-test ownership contradiction (engineer vs QA SKILLS vs rubric); R-CHAR proposed; awaiting operator decision |
-
-## 7. Mandatory reading order for next session
-
-1. `CLAUDE.md` — architect role + "Operating principle"
-2. `THESIS.md`, `ARCHITECTURE_INVARIANTS.md`
-3. `ABL-0015_AUTO_DISPATCH_DESIGN.md` — the feature you'd be calibrating
-4. `ABL-0014_ACCEPTANCE_AGENT_IMPLEMENTATION.md` §I — production roadmap
-5. This file's §3 — the one open step
-
-## 8. Don'ts (carried lessons)
-
-1. Don't run `docker container prune -f && docker image prune -af`
-   without naming what to keep — it wiped Milvus + a ledger file last time.
-2. Don't auto-skip pre-flight (`PREFLIGHT.md`) after a clean cleanup.
-3. Don't lose narrative-momentum awareness — read post_tail + gate fields
-   carefully every time, even when the pattern looks like prior runs.
-4. Don't force-kill uvicorn during live sprints — use Ctrl+C (SIGTERM)
-   so the shutdown handler reaps Docker stacks (worktrees only reap from
-   `finally`).
+1. Don't `docker system prune` without naming what to keep.
+2. Don't skip `PREFLIGHT.md` before any live sprint.
+3. Don't force-kill uvicorn (SIGTERM only — reapers).
+4. Don't trust `.venv/bin/python` from an unexpected cwd — the Bash
+   session persists its working directory.
+5. The A45 test file (`test_a45_idle_busy.py`) is timing-sensitive:
+   fake-CLI spawn costs ~2.1s on this Mac (argv assessment). If it
+   flakes, widen margins — do not weaken the assertions.
 
 ---PROMPT END---
