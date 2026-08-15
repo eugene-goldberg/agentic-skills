@@ -1184,6 +1184,12 @@ class RunBriefRequest(BaseModel):
     # sprints; legacy /run-brief invocations that omit this field fall back
     # to the pre-A18 path layout.
     feature_name: str | None = Field(None, min_length=1, max_length=120)
+    # Batch 3-2 (ABL-0002 v1): triage agent on role failure — decides
+    # RETRY_REWRITE (one guided engineer retry, R16-capped) / DEFER /
+    # ESCALATE instead of the binary abort-or-continue. Default OFF until
+    # one clean calibration sprint (operator decision D1), same discipline
+    # as run_acceptance / run_acceptance_followup.
+    run_triage: bool = False
     # Batch 1 (AUTONOMY_HARDENING_PLAN.md, C1/A34): when True, the run
     # executes as a background task in the run registry and this endpoint
     # returns 202 {run_id, events_url} immediately. The SSE view lives at
@@ -1401,6 +1407,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
         run_acceptance_followup=req.run_acceptance_followup,
         acceptance_timeout=req.acceptance_timeout,
         min_ui_coverage_ratio=req.min_ui_coverage_ratio,
+        run_triage=req.run_triage,
     )
     try:
         run_registry_svc.start_run(

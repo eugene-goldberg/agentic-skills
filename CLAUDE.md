@@ -352,6 +352,7 @@ Endpoints:
 | R12 | scorer grounding floor | streaming (same Tier 1.5) | |
 | R13 | no agent-initiated history-rewriting git commands | streaming (Tier 1.5-style kill on Bash tool_use) | rebase / reset --hard / push -f / filter-branch / commit --amend / update-ref / tag -d / branch -D blocked by `FORBIDDEN_GIT_RE`; orchestrator owns refs (A1 auto-rebase) |
 | R15 | acceptance `product_bug` dispatched at most once | auto-dispatch selector (`_select_followup_candidates`) | ABL-0015; `dispatch_state is None` filter on the findings ledger; conservative `verdict=="confirmed"` gate + cost cap 1; flag-OFF until calibrated |
+| R16 | triage decides at most once per BL per sprint; RETRY_REWRITE grants at most 1 extra attempt | orchestrator dispatch sites (`triaged_bls` set + 2-attempt engineer loop) | ABL-0002 v1 (autonomy-hardening Batch 3); decisions enum-constrained by `validate_triage`, DEFER fallback; QA-context RETRY coerced to DEFER; `run_triage` flag-OFF until calibrated (D1); test `test_retry_rewrite_grants_exactly_one_guided_attempt_r16` |
 | Tier 1.5 | pre-modification kill | streaming | <3 grounded calls before Write/Edit → kill |
 
 Each rule has an enforcement-point assignment under

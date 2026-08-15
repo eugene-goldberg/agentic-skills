@@ -790,6 +790,151 @@ async def _qa_or_scorer_flow(
                 pass
 
 
+# ─── triage flow (Batch 3-2 / ABL-0002 v1, C2) ─────────────────────────────
+
+
+def _truncate_signals(signals: dict, *, cap: int = 4000) -> dict:
+    """Bound the failure-signal payload fed into the triage prompt: keep
+    every field, truncate long strings (post_tail, build_error)."""
+    out: dict = {}
+    for phase, fields in (signals or {}).items():
+        if isinstance(fields, dict):
+            out[phase] = {
+                k: (v[:cap] + f"... [truncated at {cap} chars]"
+                    if isinstance(v, str) and len(v) > cap else v)
+                for k, v in fields.items()
+            }
+        else:
+            out[phase] = fields
+    return out
+
+
+async def _triage_flow(
+    repo_dir: Path,
+    repo_name: str,
+    bl_id: str,
+    *,
+    failed_role: str,  # "engineer" | "qa"
+    signals: dict,
+    bl_section: str | None,
+    timeout: int,
+    run_id: str | None = None,
+    feature_slug: str | None = None,
+) -> AsyncIterator[dict]:
+    """Spawn the triage agent for a failed BL. Yields passthrough events
+    plus a final sentinel ``{"_triage_decision": True, "decision": ...}``.
+
+    Safety properties:
+    - decisions are ENUM-CONSTRAINED by validate_triage; any validation
+      failure after one R10.1-style retry falls back to DEFER;
+    - QA-context invocations have RETRY_REWRITE coerced to DEFER (v1 —
+      a bare QA re-run without new information is not a plan);
+    - the agent runs in a disposable read-only worktree; its triage.md is
+      copied back by the orchestrator (agent never commits — A14 lesson).
+    """
+    cfg = repo_config_svc.load(repo_dir)
+    skill = prompts_brownfield_svc._load_skill("triage")
+    art = feature_artifact_dir(repo_dir, feature_slug)
+    signals_json = json.dumps(_truncate_signals(signals), indent=2, default=str)
+
+    wt: Worktree | None = None
+    trace: TraceWriter | None = None
+    decision: dict | None = None
+    try:
+        wt = await create_worktree(repo_dir, base_ref=cfg.agent_branch)
+        trace = TraceWriter(repo=repo_name, role="triage", bl_id=bl_id, task_id=wt.task_id)
+        yield _ptag({"type": "_meta", "phase": "worktree_ready", "task_id": wt.task_id,
+                    "branch": wt.branch, "bl_id": bl_id, "role": "triage",
+                    "trace_dir": str(trace.dir)}, "triage", bl_id, trace=trace)
+
+        task = (
+            f"{skill}\n\n---\n\n# Invocation context\n\n"
+            f"- BL under triage: `{bl_id}`\n"
+            f"- Failed role: `{failed_role}`"
+            + (" (QA context: RETRY_REWRITE is not available to you — see SKILLS)" if failed_role == "qa" else "")
+            + f"\n- Artifact directory: `{art}`\n"
+            f"- Write your decision to: `{art}/{bl_id}/triage.md`\n\n"
+            f"## BACKLOG section for {bl_id}\n\n{bl_section or '(section unavailable)'}\n\n"
+            f"## Failure signals (most recent per phase)\n\n```json\n{signals_json}\n```\n"
+        )
+
+        validation: dict = {"ok": False, "missing": ["not run"], "summary": "not run", "triage": None}
+        for attempt in range(2):  # initial + one R10.1-style retry
+            prompt_text = task if attempt == 0 else (
+                task + "\n\n---\n\n# Retry\n\nYour previous output failed validation:\n"
+                + "\n".join(f"- {m}" for m in validation.get("missing", []))
+                + "\nFix these specifically. Same output contract."
+            )
+            async for event in _stream_role_attempt(
+                prompt_text, wt.path, timeout_seconds=timeout, trace=trace,
+            ):
+                yield _tag(event, "triage", bl_id)
+            validation = doctrine_svc.validate_triage(wt.path, bl_id, feature_slug=feature_slug)
+            yield _ptag({"type": "_meta", "phase": "doctrine_check",
+                        "kind": "complete" if validation["ok"] else "incomplete",
+                        "attempt": attempt + 1, "summary": validation["summary"]},
+                       "triage", bl_id, trace=trace)
+            if validation["ok"]:
+                break
+
+        if validation["ok"] and validation.get("triage"):
+            decision = dict(validation["triage"])
+            # Copy the decision record back into the main checkout's
+            # artifact tree (I-3: durable; the worktree is reaped below).
+            try:
+                src = wt.path / validation["triage_rel_path"]
+                dst = repo_dir / validation["triage_rel_path"]
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+            except OSError:
+                pass
+        else:
+            decision = {
+                "decision": "DEFER",
+                "reasoning": f"triage output failed validation: {validation['summary']}",
+                "guidance": "", "question": "",
+                "fallback": True,
+            }
+
+        # v1 constraint: QA context cannot grant a retry.
+        if failed_role == "qa" and decision.get("decision") == "RETRY_REWRITE":
+            decision["decision"] = "DEFER"
+            decision["reasoning"] = (
+                "(coerced from RETRY_REWRITE: QA-context triage may only "
+                "DEFER or ESCALATE in v1) " + decision.get("reasoning", "")
+            )
+        yield {"_triage_decision": True, "bl_id": bl_id, **decision}
+    finally:
+        if trace is not None:
+            trace.close()
+        if wt is not None:
+            try:
+                await remove_worktree(repo_dir, wt)
+            except Exception:
+                pass
+
+
+def _write_escalation(repo_dir: Path, feature_slug: str | None, bl_id: str,
+                      decision: dict, run_id: str | None) -> str | None:
+    """ESCALATE: persist the operator question (I-3 durable artifact).
+    Best-effort; returns the relative path or None."""
+    art = feature_artifact_dir(repo_dir, feature_slug)
+    rel = f"{art}/escalations/{bl_id}.md"
+    try:
+        p = repo_dir / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            f"# Escalation — {bl_id}\n\n"
+            f"run_id: {run_id}\n\n"
+            f"## Question\n\n{decision.get('question') or '(missing)'}\n\n"
+            f"## Triage reasoning\n\n{decision.get('reasoning') or ''}\n",
+            encoding="utf-8",
+        )
+        return rel
+    except OSError:
+        return None
+
+
 # ─── acceptance flow (ABL-0014 — Batch B: agent spawn + R10.1 retry) ──────
 
 
@@ -1863,6 +2008,7 @@ async def run_brief(
     min_ui_coverage_ratio: float = 0.0,  # ABL-0014 Item 2 (Batch C); 0.0 = informational-only
     inject_acceptance_priors: bool = False,  # ABL-0014 §I.3 Batch E; OFF until 3-smoke calibration
     run_acceptance_followup: bool = False,  # ABL-0015 auto-dispatch; OFF until calibrated
+    run_triage: bool = False,  # Batch 3-2 (ABL-0002 v1); OFF until calibrated (D1)
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -1955,6 +2101,22 @@ async def run_brief(
         # mid-reindex). Operator passes start_bl="BL-0002" + skip_po=true to
         # resume the scorer for that BL onward.
         _reached_start_bl = start_bl is None
+        # Batch 3-1 (A49): the dependency DAG now GATES, not just orders.
+        # A BL dispatches only when every dependency it names (that exists
+        # in this backlog) has landed (merged_* or no_op). Unmet deps →
+        # deferred_dep, and the sprint continues — dependents of a failure
+        # no longer build on air, and a failure no longer needs to kill
+        # the whole sprint to be safe.
+        satisfied_bls: set[str] = set()
+        deferred_bls: list[dict] = []
+        triaged_bls: set[str] = set()  # R16: triage at most once per BL per sprint
+        known_bl_ids = {i.id for i in items}
+
+        def _bl_deps(item) -> list[str]:
+            raw = str(item.meta.get("dependencies") or "")
+            return [d.strip() for d in raw.replace(",", " ").split()
+                    if d.strip().startswith("BL-")]
+
         for it in ordered:
             bl_id = it.id
             if not _reached_start_bl:
@@ -1962,23 +2124,118 @@ async def run_brief(
                     _reached_start_bl = True
                 else:
                     yield _evt("bl.skipped", bl_id=bl_id, reason=f"before start_bl={start_bl}")
+                    # A4 resume semantics: BLs before start_bl were landed
+                    # by the prior run — treat as satisfied for dep gating.
+                    satisfied_bls.add(bl_id)
                     continue
+
+            # 3-1 dependency gate
+            unmet = [d for d in _bl_deps(it)
+                     if d in known_bl_ids and d not in satisfied_bls]
+            if unmet:
+                yield _evt("bl.skipped", bl_id=bl_id, kind="dep_unmet",
+                           deps_missing=unmet,
+                           reason=f"dependencies not landed: {', '.join(unmet)} (A49)")
+                per_bl = {"bl_id": bl_id, "title": it.title, "deps_missing": unmet}
+                summary["bls"].append(per_bl)
+                bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "deferred_dep"})
+                deferred_bls.append({"bl_id": bl_id, "outcome": "deferred_dep",
+                                     "deps_missing": unmet})
+                _checkpoint(current_bl=None)
+                yield _evt("bl.done", bl_id=bl_id, outcome="deferred_dep")
+                continue
+
             per_bl = {"bl_id": bl_id, "title": it.title}
             yield _evt("bl.start", bl_id=bl_id, title=it.title)
             _checkpoint(current_bl=bl_id)  # A7: mark which BL is in flight
 
-            # Engineer
-            yield _evt("engineer.start", bl_id=bl_id)
+            # Engineer — up to 2 attempts: the normal one, plus at most ONE
+            # triage-granted retry (Batch 3-2, R16).
             eng_outcome = None
-            async for e in _engineer_flow(repo_dir, repo_name, bl_id,
-                                           timeout_per_role, retrieval_kwargs_builder,
-                                           run_id=run_id, feature_slug=feature_slug):
-                if "_orchestrator_outcome" in e:
-                    eng_outcome = e
+            last_signals: dict = {}
+            triage_note: str | None = None
+            triage_outcome: str | None = None  # deferred_triage | escalated
+            for eng_attempt in (0, 1):
+                yield _evt("engineer.start", bl_id=bl_id,
+                           **({"triage_retry": True} if eng_attempt else {}))
+                section_override = None
+                if triage_note is not None:
+                    base_section = _resolve_engineer_section(
+                        repo_dir, bl_id, feature_slug, None) or ""
+                    section_override = (
+                        base_section
+                        + "\n\n## Triage guidance (failure analysis of the prior attempt)\n\n"
+                        + triage_note
+                    )
+                async for e in _engineer_flow(repo_dir, repo_name, bl_id,
+                                               timeout_per_role, retrieval_kwargs_builder,
+                                               run_id=run_id, feature_slug=feature_slug,
+                                               section_override=section_override):
+                    if "_orchestrator_outcome" in e:
+                        eng_outcome = e
+                        continue
+                    if (e.get("type") == "_meta"
+                            and e.get("phase") in ("regression_gate", "doctrine_check",
+                                                    "awaiting_review", "merge_to_target",
+                                                    "backlog_section_missing")):
+                        # Failure-signal capture for triage (Batch 3-2).
+                        last_signals[e["phase"]] = {k: v for k, v in e.items()
+                                                    if k != "type"}
+                    yield e
+                yield _evt("engineer.done", **(eng_outcome or {"bl_id": bl_id}))
+                if eng_outcome and (eng_outcome.get("merged") or eng_outcome.get("no_op")):
+                    break
+                # Failed. Consult triage (flag-gated; R16: once per BL).
+                if not run_triage or bl_id in triaged_bls or eng_attempt == 1:
+                    break
+                triaged_bls.add(bl_id)  # R16 enforcement point
+                yield _evt("triage.start", bl_id=bl_id, failed_role="engineer")
+                decision: dict | None = None
+                try:
+                    async for e in _triage_flow(
+                        repo_dir, repo_name, bl_id,
+                        failed_role="engineer", signals=last_signals,
+                        bl_section=it.body[:4000] if it.body else None,
+                        timeout=timeout_per_role, run_id=run_id,
+                        feature_slug=feature_slug,
+                    ):
+                        if "_triage_decision" in e:
+                            decision = e
+                            continue
+                        yield e
+                except Exception as exc:  # noqa: BLE001 — triage crash = DEFER
+                    decision = {"decision": "DEFER",
+                                "reasoning": f"triage flow error: {exc}",
+                                "fallback": True}
+                d = (decision or {}).get("decision") or "DEFER"
+                yield _evt("triage.decision", bl_id=bl_id, decision=d,
+                           fallback=bool((decision or {}).get("fallback")),
+                           reasoning=((decision or {}).get("reasoning") or "")[:500])
+                if d == "RETRY_REWRITE":
+                    triage_note = (decision or {}).get("guidance") or ""
                     continue
-                yield e
+                if d == "ESCALATE":
+                    rel = _write_escalation(repo_dir, feature_slug, bl_id,
+                                            decision or {}, run_id)
+                    yield _evt("triage.escalated", bl_id=bl_id, path=rel,
+                               question=((decision or {}).get("question") or "")[:500])
+                    triage_outcome = "escalated"
+                else:
+                    triage_outcome = "deferred_triage"
+                break
             per_bl["engineer"] = eng_outcome or {"merged": False}
-            yield _evt("engineer.done", **(eng_outcome or {"bl_id": bl_id}))
+
+            # Triage decided this BL's disposition: record + continue the
+            # sprint (deferral/escalation is a decision, not a failure —
+            # stop_on_failure does not fire here).
+            if triage_outcome is not None and not (
+                    eng_outcome and (eng_outcome.get("merged") or eng_outcome.get("no_op"))):
+                summary["bls"].append(per_bl)
+                bl_outcomes_compact.append({"bl_id": bl_id, "outcome": triage_outcome})
+                deferred_bls.append({"bl_id": bl_id, "outcome": triage_outcome})
+                _checkpoint(current_bl=None)
+                yield _evt("bl.done", bl_id=bl_id, outcome=triage_outcome)
+                continue
             # R11 no_op: engineer detected work already in codebase. But QA may
             # still be missing (resume-after-crash). Only short-circuit if the QA
             # report is also already on the branch — otherwise fall through and
@@ -1994,6 +2251,7 @@ async def run_brief(
             if eng_outcome and eng_outcome.get("no_op"):
                 if qa_report.exists() and qa_committed:
                     summary["bls"].append(per_bl)
+                    satisfied_bls.add(bl_id)  # A49: no_op satisfies dependents
                     bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "no_op"})
                     _checkpoint(current_bl=None)  # A7
                     yield _evt("bl.done", bl_id=bl_id, outcome="no_op")
@@ -2079,9 +2337,46 @@ async def run_brief(
                     summary=(qa_outcome or {}).get("doctrine_summary"),
                 )
                 summary["bls"].append(per_bl)
+                satisfied_bls.add(bl_id)  # A49: engineer code landed
                 bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "merged_no_qa"})
                 _checkpoint(current_bl=None)  # A7
                 yield _evt("bl.done", bl_id=bl_id, outcome="merged_no_qa")
+                # Batch 3-2: with triage ON, a QA-merge failure becomes a
+                # recorded DEFER/ESCALATE decision (qa context, R16) and
+                # the sprint continues; without it, A37 abort semantics
+                # under stop_on_failure are preserved.
+                if run_triage and bl_id not in triaged_bls:
+                    triaged_bls.add(bl_id)  # R16
+                    yield _evt("triage.start", bl_id=bl_id, failed_role="qa")
+                    qdecision: dict | None = None
+                    try:
+                        async for e in _triage_flow(
+                            repo_dir, repo_name, bl_id,
+                            failed_role="qa",
+                            signals={"qa_merge_failed": {
+                                "summary": (qa_outcome or {}).get("doctrine_summary")}},
+                            bl_section=it.body[:4000] if it.body else None,
+                            timeout=timeout_per_role, run_id=run_id,
+                            feature_slug=feature_slug,
+                        ):
+                            if "_triage_decision" in e:
+                                qdecision = e
+                                continue
+                            yield e
+                    except Exception as exc:  # noqa: BLE001
+                        qdecision = {"decision": "DEFER",
+                                     "reasoning": f"triage flow error: {exc}",
+                                     "fallback": True}
+                    qd = (qdecision or {}).get("decision") or "DEFER"
+                    yield _evt("triage.decision", bl_id=bl_id, decision=qd,
+                               fallback=bool((qdecision or {}).get("fallback")),
+                               reasoning=((qdecision or {}).get("reasoning") or "")[:500])
+                    if qd == "ESCALATE":
+                        rel = _write_escalation(repo_dir, feature_slug, bl_id,
+                                                qdecision or {}, run_id)
+                        yield _evt("triage.escalated", bl_id=bl_id, path=rel,
+                                   question=((qdecision or {}).get("question") or "")[:500])
+                    continue
                 if stop_on_failure:
                     yield _evt("aborted",
                                reason=f"QA did not merge {bl_id} despite passing doctrine")
@@ -2118,6 +2413,7 @@ async def run_brief(
             else:
                 outcome = "merged_full"
             summary["bls"].append(per_bl)
+            satisfied_bls.add(bl_id)  # A49: engineer landed (all merged_* labels)
             bl_outcomes_compact.append({"bl_id": bl_id, "outcome": outcome})
             _checkpoint(current_bl=None)  # A7
             yield _evt("bl.done", bl_id=bl_id, outcome=outcome)
@@ -2164,9 +2460,14 @@ async def run_brief(
             subtype=subtype,
         )
 
+        # Batch 3-1 (I-5): a sprint with deferrals is never labeled bare
+        # success — worst-wins aggregate.
+        sprint_label = "complete_with_deferrals" if deferred_bls else "complete"
         yield _evt(
             "sprint_complete",
             summary=summary,
+            sprint_label=sprint_label,
+            deferred=deferred_bls,
             coverage_subtype=subtype,
             ui_coverage_ratio=round(coverage["ratio"], 4),
             ui_coverage_threshold=min_ui_coverage_ratio,

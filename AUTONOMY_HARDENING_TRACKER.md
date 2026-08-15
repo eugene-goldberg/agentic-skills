@@ -59,9 +59,9 @@
 
 | ID | Item | Status | Commit | Verification |
 |---|---|---|---|---|
-| 3-1 | Dep-gated scheduling (`deferred_dep`, worst-wins sprint label) | pending | — | planted-failure synthetic sprint |
-| 3-2 | Triage SKILLS.md + `_triage_flow` + R16 (enforcement + test) | pending | — | enum-constrained decisions; retry cap 1; flag-OFF |
-| 3-3 | D1 default flip | deferred | — | after one clean triage-ON calibration sprint |
+| 3-1 | Dep-gated scheduling (`deferred_dep`, worst-wins sprint label) | done | (this commit) | planted-failure synthetic sprint: failed BL-0001 → BL-0002 `deferred_dep` (engineer never spawned), BL-0003 merges, `sprint_label=complete_with_deferrals` |
+| 3-2 | Triage SKILLS.md + `_triage_flow` + R16 (enforcement + test) | done | (this commit) | `test_batch3_dep_gating_triage.py` (12): RETRY_REWRITE = exactly 1 guided retry with guidance injected; DEFER/ESCALATE record + continue; crash→DEFER fallback; enum-constrained validator; QA-context coercion; flag-OFF default verified. R16 added to CLAUDE.md R-rules table (I-2). Engineer-failure + QA-merge-failure hooks both wired |
+| 3-3 | D1 default flip | deferred | — | after one clean triage-ON calibration sprint (blocked on 0-3/0-4 environment) |
 
 ---
 

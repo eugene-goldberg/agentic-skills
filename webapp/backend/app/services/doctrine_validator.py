@@ -824,6 +824,71 @@ def detect_infra_failure(post_tail: str) -> str | None:
     return m.group(0).strip() if m else None
 
 
+# ─── Batch 3-2 (ABL-0002 v1): triage decision parsing + validation ──────────
+
+TRIAGE_DECISIONS = ("RETRY_REWRITE", "DEFER", "ESCALATE")
+_TRIAGE_DECISION_RE = re.compile(r"^DECISION:\s*(RETRY_REWRITE|DEFER|ESCALATE)\b", re.MULTILINE)
+
+
+def _triage_section(text: str, title: str) -> str:
+    m = re.search(rf"^##\s+{title}\s*$(.*?)(?=^##\s|\Z)", text,
+                  re.MULTILINE | re.DOTALL)
+    return (m.group(1).strip() if m else "")
+
+
+def parse_triage_decision(text: str) -> dict | None:
+    """Parse a triage.md into {decision, reasoning, guidance, question}.
+    Returns None when no valid DECISION line exists."""
+    m = _TRIAGE_DECISION_RE.search(text or "")
+    if not m:
+        return None
+    return {
+        "decision": m.group(1),
+        "reasoning": _triage_section(text, "Reasoning"),
+        "guidance": _triage_section(text, "Guidance"),
+        "question": _triage_section(text, "Question"),
+    }
+
+
+def validate_triage(wt_path: Path, bl_id: str, *, feature_slug: str | None = None) -> dict:
+    """Triage doctrine: triage.md exists at the artifact path, carries a
+    valid enum DECISION, ≥120 chars of Reasoning, and the decision-specific
+    section (Guidance for RETRY_REWRITE, Question for ESCALATE).
+
+    Enum-constraint is the safety property: free text can never route
+    control flow. The caller treats any validation failure (after one
+    retry) as DEFER — the conservative fallback.
+    """
+    from app.services.brownfield import feature_artifact_dir
+    art = feature_artifact_dir(wt_path, feature_slug)
+    rel = f"{art}/{bl_id}/triage.md"
+    path = wt_path / rel
+    missing: list[str] = []
+    parsed: dict | None = None
+    if not path.exists():
+        missing.append(f"{rel} (file missing)")
+    else:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        parsed = parse_triage_decision(text)
+        if parsed is None:
+            missing.append(f"{rel}: no valid 'DECISION: <RETRY_REWRITE|DEFER|ESCALATE>' line")
+        else:
+            if len(parsed["reasoning"]) < 120:
+                missing.append(f"{rel}: '## Reasoning' section missing or <120 chars")
+            if parsed["decision"] == "RETRY_REWRITE" and len(parsed["guidance"]) < 40:
+                missing.append(f"{rel}: RETRY_REWRITE requires a substantive '## Guidance' section")
+            if parsed["decision"] == "ESCALATE" and len(parsed["question"]) < 20:
+                missing.append(f"{rel}: ESCALATE requires a '## Question' section")
+    ok = not missing
+    return {
+        "ok": ok,
+        "missing": missing,
+        "summary": "triage decision valid" if ok else f"{len(missing)} problem(s): " + "; ".join(missing),
+        "triage": parsed,
+        "triage_rel_path": rel,
+    }
+
+
 def build_gate_fix_prompt(
     role: str,
     gate_result: dict,
