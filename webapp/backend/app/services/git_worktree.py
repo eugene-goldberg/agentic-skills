@@ -17,6 +17,11 @@ class Worktree:
     task_id: str
     path: Path
     branch: str
+    # A54 (Batch 2-4): the SHA the worktree was created at. The prior
+    # `has_new_commits(wt, base_ref="HEAD~1")` idiom counted "HEAD has a
+    # parent" (always ≥1), not "the agent committed" — masked by doctrine
+    # no-op detection but semantically wrong.
+    base_sha: str | None = None
 
 
 async def _run(cmd: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
@@ -47,7 +52,11 @@ async def create_worktree(repo_root: Path, task_id: str | None = None, *, base_r
     code, _, err = await _run(cmd, cwd=repo_root)
     if code != 0:
         raise RuntimeError(f"git worktree add failed: {err}")
-    return Worktree(task_id=task_id, path=base, branch=branch)
+    # A54: record the creation-time SHA so "did the agent commit?" is
+    # answered against the true base, not HEAD~1.
+    sha_code, sha_out, _ = await _run(["git", "rev-parse", "HEAD"], cwd=base)
+    base_sha = sha_out.strip() if sha_code == 0 else None
+    return Worktree(task_id=task_id, path=base, branch=branch, base_sha=base_sha)
 
 
 async def _reap_worktree_compose_stacks(wt: Worktree) -> None:
@@ -224,10 +233,17 @@ async def fast_forward_target(repo_root: Path, branch: str, target_ref: str = "m
     return {"ok": True, "kind": "ff", "merged_sha": branch_sha, "target_ref": target_ref}
 
 
-async def has_new_commits(wt: Worktree, base_ref: str = "HEAD~0") -> int:
-    """Count commits the agent added beyond the worktree's base."""
+async def has_new_commits(wt: Worktree, base_ref: str | None = None) -> int:
+    """Count commits the agent added beyond the worktree's base.
+
+    A54: defaults to the SHA recorded at worktree creation (`wt.base_sha`),
+    which is the true base. An explicit `base_ref` still wins for callers
+    with a different comparison point. Falls back to "HEAD~0" (count 0)
+    when neither is available — the safe answer is "no new commits".
+    """
+    base = base_ref or wt.base_sha or "HEAD~0"
     code, out, _ = await _run(
-        ["git", "rev-list", "--count", f"{base_ref}..HEAD"], cwd=wt.path
+        ["git", "rev-list", "--count", f"{base}..HEAD"], cwd=wt.path
     )
     try:
         return int(out.strip()) if code == 0 else 0

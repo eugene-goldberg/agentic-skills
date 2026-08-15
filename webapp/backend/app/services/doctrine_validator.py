@@ -848,6 +848,39 @@ def build_gate_fix_prompt(
     excerpt = _extract_test_failures(post_tail)
     failed_list = "\n".join(f"- `{t}`" for t in failed_tests) or "- (see excerpt below)"
 
+    # Batch 2-1 (A39a + A40): a build/lint failure is a completely different
+    # fix task than a test regression — no tests ran, so listing test names
+    # would be 100% noise (the "161 regressions" incident). Give the agent
+    # the compiler/linter block and the auto-fix directive instead.
+    if gate_result.get("kind") == "build_fail":
+        cls = gate_result.get("gate_failure_class") or "build"
+        sentinels = gate_result.get("build_sentinels") or []
+        error_block = gate_result.get("build_error") or _extract_test_failures(post_tail)
+        return f"""Your previous {role_label} run{bl_clause} PASSED doctrine but the gate's {cls.upper()} step failed.
+
+The harness has re-invoked you in the SAME worktree. You have {max_attempts - attempt + 1} retries left (this is attempt {attempt}/{max_attempts}).
+
+## What happened
+
+The {cls} step ({', '.join(f'`{s}`' for s in sentinels) or 'build/lint'}) failed, so NO tests ran. This is NOT a test regression — do not chase test names. Fix the {cls} error below.
+
+## Compiler / linter output
+
+```
+{error_block}
+```
+
+## Required steps
+
+1. Read the {cls} error above and fix its root cause in source.
+2. **Auto-fix first (A40):** if the output reports a biome/ruff/eslint/prettier rule with a "Safe fix" or auto-fix available, run the formatter's `--apply` / `--fix` flag and re-stage before editing manually. Manual edits are reserved for failures the formatter cannot auto-fix. If a generated file is stale (e.g. `routeTree.gen.ts`), regenerate it with the project's generator rather than hand-editing.
+3. Verify locally: run the same build/lint command the gate ran (see the failing step name) and confirm it exits 0.
+4. `git add -A` and `git commit -m "fix: <one-line summary of the {cls} fix>"` to add a NEW commit on top of your prior work. **R13 boundary:** never amend/rebase/reset — the orchestrator owns refs.
+5. Print ONLY the same final JSON shape as your previous run with the new `commit_sha`.
+
+Doctrine and gate will both re-run after this attempt.
+"""
+
     return f"""Your previous {role_label} run{bl_clause} PASSED doctrine but FAILED the regression gate.
 
 The harness has re-invoked you in the SAME worktree. You have {max_attempts - attempt + 1} retries left (this is attempt {attempt}/{max_attempts}).

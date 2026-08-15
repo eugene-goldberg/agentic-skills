@@ -115,6 +115,29 @@ Read-only git is allowed for evidence gathering: `git log`, `git diff`, `git sta
 
 ---
 
+## Gate discipline (R14.4)
+
+The orchestrator runs the regression gate for you after your commit and
+re-invokes you with the failure detail (failing test identities, or the
+compiler/linter block on a build failure). Therefore:
+
+- **NEVER run `scripts/regression_gate.sh` (or the full PRE/POST gate
+  flow) yourself.** It wastes 10–25 minutes and risks docker port
+  collisions with the orchestrator's own gate stacks.
+- To verify a fix, run the *narrowest relevant test subset* directly
+  (`pytest tests/api/test_x.py -x -q`; a single playwright spec) — never
+  the full suite.
+- **NEVER wait silently.** No zero-output `until ...; do sleep N; done`
+  loops, no bare long `sleep`. If a wait is unavoidable, print progress
+  each iteration so the stream shows you are alive. Prolonged silence
+  with no tool running is treated as a hang.
+
+*(Worked failure: time-tracking BL-0014 — an engineer self-ran the gate,
+waited on it with a silent grep loop, and was killed by the idle timeout
+with a verified fix uncommitted. See A45 in DESIGN_SHORTCOMINGS.md.)*
+
+---
+
 ## Required Retrieval Evidence Footer (R5b)
 
 The last section of every artifact you write (e.g. `eng_patterns.md` and any QA-supplied followups) MUST be titled `## Retrieval evidence` and MUST contain **at least three bullets** in this exact form:

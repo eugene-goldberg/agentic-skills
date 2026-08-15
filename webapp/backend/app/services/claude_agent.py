@@ -125,10 +125,20 @@ def _claude_binary() -> str:
     return os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
 
 
+def _agent_model() -> str | None:
+    """A56 (Batch 2-4): explicit model pin for agent spawns. Without it the
+    crew's behavior (and every rubric calibration) silently changes with
+    the operator's CLI default. Set AGENT_MODEL (e.g. in webapp/.env);
+    unset preserves the CLI default but the spawn event records that."""
+    return os.environ.get("AGENT_MODEL") or None
+
+
 def _build_retrieval_mcp_config(
     reference_repo: Path | None,
     target_repo: Path | None,
     log_path: Path | None,
+    *,
+    tool_budget: int | None = None,
 ) -> tuple[Path, list[str]] | None:
     """Materialize an MCP config file pointing at the local retrieval server.
 
@@ -152,6 +162,13 @@ def _build_retrieval_mcp_config(
         server_env["RETRIEVAL_TARGET_REPO"] = str(Path(target_repo).resolve())
     if log_path:
         server_env["RETRIEVAL_LOG_PATH"] = str(Path(log_path).resolve())
+    if tool_budget is not None:
+        # A57 (Batch 2-4): the MCP server enforces the R8 budget GRACEFULLY
+        # (returns "budget exhausted; use what you have" as a tool result,
+        # letting the agent finish with the evidence it has). Keep it in
+        # sync with the harness's max_retrieval_calls; the harness kill is
+        # only a 2× backstop for an agent that ignores repeated denials.
+        server_env["RETRIEVAL_TOOL_BUDGET"] = str(tool_budget)
     # Inherit retrieval-relevant env (Azure / Milvus / budget).
     for k in (
         "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_VERSION",
@@ -223,6 +240,22 @@ def _tool_uses_in_event(evt: dict) -> list[dict]:
     return [c for c in content if isinstance(c, dict) and c.get("type") == "tool_use"]
 
 
+def _tool_result_ids_in_event(evt: dict) -> list[str]:
+    """Batch 2-3 (A45): extract tool_use_ids acknowledged by a user event's
+    tool_result blocks. Pairing these against emitted tool_use ids tells the
+    idle-timeout whether the agent is *busy* (a tool is in flight — e.g. a
+    long pytest/playwright/docker child) versus genuinely *silent*."""
+    if evt.get("type") != "user":
+        return []
+    content = (evt.get("message") or {}).get("content") or []
+    if not isinstance(content, list):
+        return []
+    return [
+        c.get("tool_use_id") for c in content
+        if isinstance(c, dict) and c.get("type") == "tool_result" and c.get("tool_use_id")
+    ]
+
+
 MAX_RETRIEVAL_CALLS_DEFAULT = 30  # brownfield SKILLS.md states this budget
 
 
@@ -264,11 +297,16 @@ async def stream_agent_task(
         Path(reference_repo) if reference_repo else None,
         Path(target_repo) if target_repo else Path(repo_path),
         Path(retrieval_log_path) if retrieval_log_path else None,
+        tool_budget=max_retrieval_calls,  # A57: server denies gracefully first
     )
     if retrieval is not None:
         mcp_config_path, mcp_tools = retrieval
         extra_cli += ["--mcp-config", str(mcp_config_path)]
         effective_allowed = ",".join([allowed_tools, *mcp_tools])
+
+    model = _agent_model()  # A56: pin, and record in the spawn event
+    if model:
+        extra_cli += ["--model", model]
 
     cmd = [
         _claude_binary(),
@@ -293,7 +331,10 @@ async def stream_agent_task(
         "GIT_COMMITTER_EMAIL": os.environ.get("GIT_COMMITTER_EMAIL", "agent@webapp.local"),
     }
 
-    spawn_evt = {"type": "_meta", "phase": "spawn", "cmd": cmd[:4] + ["..."]}
+    spawn_evt = {"type": "_meta", "phase": "spawn", "cmd": cmd[:4] + ["..."],
+                 # A56: model identity travels with the trace (harness_sha's
+                 # sibling — code version AND model version per run).
+                 "model": model or "(cli default)"}
     if trace is not None:
         trace.write_event(spawn_evt)
     yield spawn_evt
@@ -340,30 +381,64 @@ async def stream_agent_task(
     try:
         assert proc.stdout is not None
         try:
-            # B5: per-readline timeout = min(idle_timeout, timeout_seconds).
-            # idle_timeout=None preserves prior behavior (timeout_seconds only).
-            effective_timeout = (
-                min(idle_timeout, timeout_seconds) if idle_timeout is not None
-                else timeout_seconds
-            )
+            # Batch 2-3 (A45): the idle clock is suspended while a tool is
+            # in flight. B5's original heuristic equated "no stream token
+            # for N seconds" with "hung" — but an agent blocking on a long
+            # synchronous child (gate / pytest / playwright, routinely
+            # 10–25 min) is fully alive and stream-silent. We track
+            # tool_use ids without a matching tool_result: while that set
+            # is non-empty the agent is *busy*, and only the wall timeout
+            # applies. Genuine silence (no tool in flight) still hits the
+            # idle timeout as before. Wall time is now also enforced
+            # cumulatively across the whole run, not per-readline.
+            in_flight_tools: set[str] = set()
             while True:
+                remaining_wall = timeout_seconds - (loop.time() - start)
+                if remaining_wall <= 0:
+                    await _kill_pgroup(proc)
+                    evt = {
+                        "type": "_error",
+                        "error": (
+                            f"agent exceeded wall timeout {timeout_seconds}s "
+                            f"(in_flight_tools={len(in_flight_tools)})"
+                        ),
+                        "kind": "wall_timeout",
+                        "in_flight_tools": len(in_flight_tools),
+                    }
+                    if trace is not None:
+                        trace.write_event(evt)
+                    yield evt
+                    return
+                if idle_timeout is not None and not in_flight_tools:
+                    effective_timeout = min(idle_timeout, remaining_wall)
+                else:
+                    # Busy (tool in flight) or no idle timeout configured:
+                    # wait out the remaining wall budget.
+                    effective_timeout = remaining_wall
                 # readline with timeout so a hung claude process doesn't hang us.
                 try:
                     raw = await asyncio.wait_for(
                         proc.stdout.readline(),
-                        timeout=effective_timeout,
+                        timeout=max(1.0, effective_timeout),
                     )
                 except asyncio.TimeoutError:
                     await _kill_pgroup(proc)
-                    kind = "idle_timeout" if (idle_timeout is not None and idle_timeout <= timeout_seconds) else "wall_timeout"
+                    idle_fired = (
+                        idle_timeout is not None
+                        and not in_flight_tools
+                        and effective_timeout < remaining_wall
+                    )
+                    kind = "idle_timeout" if idle_fired else "wall_timeout"
                     evt = {
                         "type": "_error",
                         "error": (
-                            f"agent silent for {effective_timeout}s "
-                            f"({kind}; idle={idle_timeout} wall={timeout_seconds})"
+                            f"agent silent for {round(effective_timeout)}s "
+                            f"({kind}; idle={idle_timeout} wall={timeout_seconds}; "
+                            f"in_flight_tools={len(in_flight_tools)})"
                         ),
                         "kind": kind,
-                        "idle_seconds": effective_timeout,
+                        "idle_seconds": round(effective_timeout),
+                        "in_flight_tools": len(in_flight_tools),
                     }
                     if trace is not None:
                         trace.write_event(evt)
@@ -412,6 +487,14 @@ async def stream_agent_task(
                 except json.JSONDecodeError:
                     evt = {"type": "_raw", "text": line}
 
+                # ─── A45: in-flight tool tracking for the idle clock ────────
+                for _tu in _tool_uses_in_event(evt):
+                    _tid = _tu.get("id")
+                    if _tid:
+                        in_flight_tools.add(_tid)
+                for _rid in _tool_result_ids_in_event(evt):
+                    in_flight_tools.discard(_rid)
+
                 # ─── Pre-modification grounding + budget enforcement ────────
                 # R5/Tier1.5: ≥min_pregrounding grounded calls before any
                 # mutating tool (Write/Edit/NotebookEdit). target_status is
@@ -423,7 +506,12 @@ async def stream_agent_task(
                         retrieval_call_count += 1
                         if name in GROUNDED_RETRIEVAL_TOOLS:
                             grounded_count += 1
-                        if retrieval_call_count > max_retrieval_calls:
+                        # A57: the MCP server denies calls past the budget
+                        # gracefully (agent keeps its in-flight work). The
+                        # harness kill is a 2× BACKSTOP for an agent that
+                        # ignores repeated denials — not the primary
+                        # enforcement anymore.
+                        if retrieval_call_count > max_retrieval_calls * 2:
                             budget_exceeded = True
                             break
                     elif (
@@ -484,9 +572,12 @@ async def stream_agent_task(
                         "kind": "budget_exceeded",
                         "retrieval_call_count": retrieval_call_count,
                         "max": max_retrieval_calls,
+                        "backstop": max_retrieval_calls * 2,
                         "reason": (
-                            f"Agent exceeded retrieval budget: {retrieval_call_count} > "
-                            f"{max_retrieval_calls} mcp__retrieval__* calls. "
+                            f"Agent exceeded the 2x retrieval backstop: "
+                            f"{retrieval_call_count} > {max_retrieval_calls * 2} "
+                            f"mcp__retrieval__* calls despite the MCP server "
+                            f"denying every call past {max_retrieval_calls} (A57). "
                             f"Brownfield SKILLS.md states a 30-call budget."
                         ),
                     }

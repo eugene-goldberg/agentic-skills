@@ -44,14 +44,14 @@
 
 | ID | Item | Status | Commit | Verification |
 |---|---|---|---|---|
-| 2-1 | A39a/b gate parser: `build_fail` kind, `gate_failure_class`, regressed⇒non-empty invariant, class-aware fix prompts, retry-predicate extension | pending | — | 3 real-incident fixture tails classify correctly |
-| 2-2 | A44 wiring: api_error = infra-retry (backoff, no budget burn) | pending | — | doctrine attempt counter unchanged on api_error |
-| 2-3 | A45: in-flight tool suspends idle clock; R14.3 SKILLS extension | pending | — | 700s in-tool silence survives; bare silence still killed |
-| 2-4 | Small defects A54 / A55 / A56 / A57 | pending | — | per-item tests |
+| 2-1 | A39a/b gate parser: `build_fail` kind, `gate_failure_class`, regressed⇒non-empty invariant, class-aware fix prompts, retry-predicate extension | done | (this commit) | `test_a39_gate_classifier.py` (9) incl. the 3 real-incident shapes; decision tree extracted to pure `classify_gate_outcome()`; bonus: ran-nothing post now `inconclusive`, never mass-regressed |
+| 2-2 | A44 wiring: api_error = infra-retry (backoff, no budget burn) | done | (this commit) | `test_a44_api_error_retry.py` (4); all 8 role-flow spawn sites route through `_stream_role_attempt` (source-contract test) |
+| 2-3 | A45: in-flight tool suspends idle clock; R14.4 SKILLS (engineer+QA) | done | (this commit) | `test_a45_idle_busy.py` (3) against a fake CLI: busy survives idle silence; genuine silence still killed; wall bounds busy. Wall timeout now enforced cumulatively (was per-readline) |
+| 2-4 | Small defects A54 / A55 / A56 / A57 | done | (this commit) | `test_batch2_small_defects.py` (7) |
 
 **Batch 2 gate:**
-- [ ] Property test: `kind=regressed` ⇒ `regressions+new_failures ≠ []`
-- [ ] Full suite green
+- [x] Property test: `kind=regressed` ⇒ `regressions+new_failures ≠ []` (`test_regressed_invariant_holds_across_shapes`)
+- [x] Full suite green — **246/246**
 
 ---
 

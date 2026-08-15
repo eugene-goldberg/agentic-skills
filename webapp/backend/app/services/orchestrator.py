@@ -267,6 +267,63 @@ async def _run_indexers(repo_dir: Path, label: str) -> AsyncIterator[dict]:
     )
 
 
+# ─── Batch 2-2 (A44 follow-up): API errors are infra, not incompetence ─────
+#
+# stream_agent_task emits `_meta phase=api_error` when the claude CLI's
+# terminal result event carries is_error (e.g. the 400 thinking-block error
+# that burned BL-0004's final retry). Before Batch 2-2 nothing consumed it:
+# the attempt fell through to doctrine validation, read as "agent produced
+# no work", burned an R10.1/R10.2 retry, and could abort the sprint under a
+# false label. This wrapper re-spawns the SAME prompt in the SAME worktree
+# with backoff — infra retries never count against capability budgets.
+
+_API_ERROR_BACKOFF_S: tuple[int, ...] = (30, 120)
+
+
+async def _stream_role_attempt(
+    prompt: str,
+    wt_path,
+    *,
+    timeout_seconds: int,
+    trace=None,
+    min_pregrounding: int = 0,
+    **rk,
+) -> AsyncIterator[dict]:
+    """Drop-in wrapper around ``stream_agent_task`` (same signature).
+
+    If an attempt's stream contains a ``phase=api_error`` event, the spawn
+    is retried with backoff (up to ``len(_API_ERROR_BACKOFF_S)`` extra
+    attempts), emitting ``phase=infra_retry`` events so the trace records
+    that the repeat was an infrastructure decision, not a doctrine one.
+    The caller's doctrine/gate retry counters never see these attempts.
+    """
+    for infra_attempt in range(len(_API_ERROR_BACKOFF_S) + 1):
+        saw_api_error = False
+        async for event in stream_agent_task(
+            prompt, wt_path, timeout_seconds=timeout_seconds, trace=trace,
+            min_pregrounding=min_pregrounding, **rk,
+        ):
+            if event.get("type") == "_meta" and event.get("phase") == "api_error":
+                saw_api_error = True
+            yield event
+        if not saw_api_error:
+            return
+        if infra_attempt >= len(_API_ERROR_BACKOFF_S):
+            yield {"type": "_meta", "phase": "infra_retry",
+                   "kind": "api_error_exhausted",
+                   "attempts": infra_attempt,
+                   "reason": ("API errors persisted across all infra retries; "
+                              "falling through to normal outcome handling. See A44.")}
+            return
+        delay = _API_ERROR_BACKOFF_S[infra_attempt]
+        yield {"type": "_meta", "phase": "infra_retry", "kind": "api_error",
+               "attempt": infra_attempt + 1, "delay_s": delay,
+               "reason": ("attempt ended with a CLI-side API error (not a "
+                          "doctrine decision); re-spawning same prompt in the "
+                          "same worktree. Does NOT consume R10.1/R10.2 budget.")}
+        await asyncio.sleep(delay)
+
+
 # ─── per-role flows (extracted from projects.py, simplified) ──────────────
 #
 # Each returns an async iterator of SSE-shaped dicts AND a final outcome dict
@@ -322,7 +379,7 @@ async def _po_flow(
                             "feature_slug": feature_slug}, "po", trace=trace)
 
         rk = retrieval_kwargs_builder(wt, "po", None, trace)
-        async for event in stream_agent_task(prompt, wt.path, timeout_seconds=timeout, trace=trace, **rk):
+        async for event in _stream_role_attempt(prompt, wt.path, timeout_seconds=timeout, trace=trace, **rk):
             yield _tag(event, "po")
         # doctrine
         validation = doctrine_svc.validate_po(wt.path, feature_slug=feature_slug)
@@ -332,7 +389,7 @@ async def _po_flow(
             yield _ptag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
                         "attempt": attempt, **validation}, "po", trace=trace)
             fix = doctrine_svc.build_fix_prompt("po", validation)
-            async for event in stream_agent_task(fix, wt.path, timeout_seconds=max(300, timeout // 2),
+            async for event in _stream_role_attempt(fix, wt.path, timeout_seconds=max(300, timeout // 2),
                                                   trace=trace, **rk):
                 yield _tag(event, "po")
             validation = doctrine_svc.validate_po(wt.path, feature_slug=feature_slug)
@@ -419,6 +476,20 @@ async def _engineer_flow(
     cfg = repo_config_svc.load(repo_dir)
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
     section = _resolve_engineer_section(repo_dir, bl_id, feature_slug, section_override)
+    # A55 (Batch 2-4): extract_section returns None when the BL heading
+    # can't be found (PO output format drift). Before this guard the
+    # literal string "None" was interpolated as the engineer's task —
+    # a silent garbage prompt. Fail the BL honestly instead.
+    if section is None:
+        yield _tag({"type": "_meta", "phase": "backlog_section_missing",
+                    "bl_id": bl_id,
+                    "reason": (f"no '## {bl_id}:' section found in BACKLOG.md "
+                               "(PO heading-format drift?); refusing to spawn "
+                               "an engineer with an empty task. See A55.")},
+                   "engineer", bl_id)
+        yield {"_orchestrator_outcome": True, "role": "engineer", "bl_id": bl_id,
+               "merged": False, "no_op": False, "section_missing": True}
+        return
     prompt = prompts_svc.build_engineer(family, bl_id, section, repo_dir, feature_slug=feature_slug)
 
     wt: Worktree | None = None
@@ -436,7 +507,7 @@ async def _engineer_flow(
                     "branch": wt.branch, "bl_id": bl_id, "role": "engineer",
                     "trace_dir": str(trace.dir)}, "engineer", bl_id, trace=trace)
         rk = retrieval_kwargs_builder(wt, "engineer", bl_id, trace)
-        async for event in stream_agent_task(prompt, wt.path, timeout_seconds=timeout,
+        async for event in _stream_role_attempt(prompt, wt.path, timeout_seconds=timeout,
                                               trace=trace, min_pregrounding=3, **rk):
             yield _tag(event, "engineer", bl_id)
 
@@ -456,7 +527,7 @@ async def _engineer_flow(
             yield _ptag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
                         "attempt": attempt, **validation}, "engineer", bl_id, trace=trace)
             fix = doctrine_svc.build_fix_prompt("engineer", validation, bl_id=bl_id)
-            async for event in stream_agent_task(fix, wt.path, timeout_seconds=max(300, timeout // 2),
+            async for event in _stream_role_attempt(fix, wt.path, timeout_seconds=max(300, timeout // 2),
                                                   trace=trace, **rk):
                 yield _tag(event, "engineer", bl_id)
             validation = doctrine_svc.validate_engineer(wt.path, bl_id, base_ref=cfg.agent_branch,
@@ -465,7 +536,7 @@ async def _engineer_flow(
                     "kind": "complete" if validation["ok"] else "give_up",
                     "attempts": attempt, "summary": validation["summary"]}, "engineer", bl_id, trace=trace)
 
-        new_commits = await has_new_commits(wt, base_ref="HEAD~1")
+        new_commits = await has_new_commits(wt)  # A54: counts from wt.base_sha
         if validation["ok"] and new_commits > 0:
             gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                      target_ref=cfg.agent_branch, run_id=run_id)
@@ -473,15 +544,17 @@ async def _engineer_flow(
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
                        "engineer", bl_id)
             gate_attempt = 0
-            # A25b: only retry on regressed (code regression the engineer can
-            # plausibly fix). For infra_fail / inconclusive / error, retries
-            # cannot help — break out and let awaiting_review surface the
-            # operator-actionable reason.
-            while not gate.get("ok") and gate.get("kind") == "regressed" and gate_attempt < 2:
+            # A25b: only retry on outcomes the agent can plausibly fix —
+            # regressed (code regression) and, since Batch 2-1/A39a,
+            # build_fail (compile/lint break with the compiler output in
+            # the fix prompt). For infra_fail / inconclusive / error,
+            # retries cannot help — break out and let awaiting_review
+            # surface the operator-actionable reason.
+            while not gate.get("ok") and gate.get("kind") in ("regressed", "build_fail") and gate_attempt < 2:
                 gate_attempt += 1
                 fix = doctrine_svc.build_gate_fix_prompt("engineer", gate, bl_id=bl_id,
                                                          attempt=gate_attempt, max_attempts=2)
-                async for event in stream_agent_task(fix, wt.path,
+                async for event in _stream_role_attempt(fix, wt.path,
                                                       timeout_seconds=max(300, timeout // 2),
                                                       trace=trace, **rk):
                     yield _tag(event, "engineer", bl_id)
@@ -570,6 +643,20 @@ async def _qa_or_scorer_flow(
     family = cfg.doctrine or prompts_svc.select_family(classify_target(repo_dir))
     bf = backlog_svc.find_backlog(repo_dir, feature_slug=feature_slug)
     section = backlog_svc.extract_section(bf.read_text(encoding="utf-8"), bl_id)
+    # A55: same guard as _engineer_flow — never prompt a role with a
+    # literal "None" task.
+    if section is None:
+        yield _tag({"type": "_meta", "phase": "backlog_section_missing",
+                    "bl_id": bl_id,
+                    "reason": (f"no '## {bl_id}:' section found in BACKLOG.md; "
+                               f"refusing to spawn {role} with an empty task. "
+                               "See A55.")},
+                   role, bl_id)
+        yield {"_orchestrator_outcome": True, "role": role, "bl_id": bl_id,
+               "merged": False, "doctrine_ok": False,
+               "doctrine_summary": "backlog section missing (A55)",
+               "section_missing": True}
+        return
     if role == "qa":
         prompt = prompts_svc.build_qa(family, bl_id, section, repo_dir, feature_slug=feature_slug)
     else:
@@ -586,7 +673,7 @@ async def _qa_or_scorer_flow(
                     "trace_dir": str(trace.dir)}, role, bl_id, trace=trace)
         rk = retrieval_kwargs_builder(wt, role, bl_id, trace)
         pregrounding = 3 if role == "qa" else 0
-        async for event in stream_agent_task(prompt, wt.path, timeout_seconds=timeout,
+        async for event in _stream_role_attempt(prompt, wt.path, timeout_seconds=timeout,
                                               trace=trace, min_pregrounding=pregrounding, **rk):
             yield _tag(event, role, bl_id)
 
@@ -602,7 +689,7 @@ async def _qa_or_scorer_flow(
             yield _ptag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
                         "attempt": attempt, **validation}, role, bl_id, trace=trace)
             fix = doctrine_svc.build_fix_prompt(role, validation, bl_id=bl_id)
-            async for event in stream_agent_task(fix, wt.path, timeout_seconds=max(300, timeout // 2),
+            async for event in _stream_role_attempt(fix, wt.path, timeout_seconds=max(300, timeout // 2),
                                                   trace=trace, **rk):
                 yield _tag(event, role, bl_id)
             if role == "qa":
@@ -615,7 +702,7 @@ async def _qa_or_scorer_flow(
                     "kind": "complete" if validation["ok"] else "give_up",
                     "attempts": attempt, "summary": validation["summary"]}, role, bl_id, trace=trace)
 
-        new_commits = await has_new_commits(wt, base_ref="HEAD~1")
+        new_commits = await has_new_commits(wt)  # A54: counts from wt.base_sha
         if role == "qa" and validation["ok"] and new_commits > 0:
             gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                      target_ref=cfg.agent_branch, run_id=run_id)
@@ -623,15 +710,17 @@ async def _qa_or_scorer_flow(
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
                        role, bl_id)
             gate_attempt = 0
-            # A25b: only retry on regressed (code regression the engineer can
-            # plausibly fix). For infra_fail / inconclusive / error, retries
-            # cannot help — break out and let awaiting_review surface the
-            # operator-actionable reason.
-            while not gate.get("ok") and gate.get("kind") == "regressed" and gate_attempt < 2:
+            # A25b: only retry on outcomes the agent can plausibly fix —
+            # regressed (code regression) and, since Batch 2-1/A39a,
+            # build_fail (compile/lint break with the compiler output in
+            # the fix prompt). For infra_fail / inconclusive / error,
+            # retries cannot help — break out and let awaiting_review
+            # surface the operator-actionable reason.
+            while not gate.get("ok") and gate.get("kind") in ("regressed", "build_fail") and gate_attempt < 2:
                 gate_attempt += 1
                 fix = doctrine_svc.build_gate_fix_prompt("qa", gate, bl_id=bl_id,
                                                          attempt=gate_attempt, max_attempts=2)
-                async for event in stream_agent_task(fix, wt.path,
+                async for event in _stream_role_attempt(fix, wt.path,
                                                       timeout_seconds=max(300, timeout // 2),
                                                       trace=trace, **rk):
                     yield _tag(event, role, bl_id)

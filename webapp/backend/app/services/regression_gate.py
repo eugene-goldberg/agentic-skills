@@ -131,6 +131,37 @@ def extract_disk_full_reason(post_tail: str) -> str | None:
 
 PYTEST_RESULT_RE = re.compile(r"^(?P<file>tests?/[\w./-]+)::(?P<name>[\w.\[\]-]+)\s+(?P<verdict>PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)", re.MULTILINE)
 
+# ─── Batch 2-1 / A39a: build/lint sentinel detection ────────────────────────
+# The target's regression_gate.sh wrapper emits pseudo-test lines for its
+# non-test steps (`tests/gate::build FAILED`,
+# `tests/frontend::lint_typecheck_build FAILED`). When one of these fails,
+# downstream tests never ran — so `pre.passed - post.passed` counts every
+# baseline test as a "regression" (the documents_2 BL-0008 "161 regressions"
+# incident). Detect the sentinel and classify honestly instead.
+_BUILD_SENTINEL_FILES = ("tests/gate", "tests/frontend", "test/gate", "test/frontend")
+_BUILD_SENTINEL_NAME_RE = re.compile(r"(?:build|lint|typecheck|compile)", re.IGNORECASE)
+
+
+def _is_build_sentinel(nodeid: str) -> bool:
+    file_part, _, name_part = nodeid.partition("::")
+    if not name_part:
+        return False
+    return file_part in _BUILD_SENTINEL_FILES and bool(_BUILD_SENTINEL_NAME_RE.search(name_part))
+
+
+def _extract_build_error(post_tail: str, sentinels: list[str]) -> str:
+    """Slice the compiler/linter output that *precedes* the sentinel FAILED
+    line — that block, not the container noise after it, is what the
+    engineer needs. Falls back to the tail's last 2500 chars."""
+    if not post_tail:
+        return ""
+    cut = len(post_tail)
+    for s in sentinels:
+        i = post_tail.find(s)
+        if i != -1:
+            cut = min(cut, i)
+    return post_tail[:cut][-2500:].strip() or post_tail[-2500:].strip()
+
 
 @dataclass
 class TestSet:
@@ -221,6 +252,119 @@ async def _run_tests(cwd: Path, cmd: list[str], *,
     # traceback) out of the captured tail.
     tail = (stdout + "\n" + stderr).splitlines()[-300:]
     return TestSet(passed=passed, failed=failed, raw_exit=exit_code, raw_tail="\n".join(tail))
+
+
+def classify_gate_outcome(pre: TestSet, post: TestSet, *, test_cmd: list) -> dict:
+    """Batch 2-1 (A39a/b): the gate's pure decision tree — extracted from
+    ``run_gate`` so classification is unit-testable against real-incident
+    fixture tails.
+
+    Result kinds (worst-first): ``infra_fail`` | ``build_fail`` |
+    ``regressed`` | ``inconclusive`` | ``green``. Every result carries
+    ``gate_failure_class ∈ {"infra","build","lint","test",None}`` so the
+    fix-prompt builder and retry predicates can switch on failure class
+    instead of guessing from free text.
+
+    Invariant (A39b): ``kind == "regressed"`` ⟹ ``regressions`` ∪
+    ``new_failures`` is non-empty. An empty union downgrades to
+    ``inconclusive`` — a positive count with no identities is a parser
+    bug and must never reach the engineer's fix prompt.
+    """
+    base = {
+        "pre": pre.to_dict(),
+        "post": post.to_dict(),
+        "command": test_cmd,
+        "post_tail": post.raw_tail[-15000:],
+    }
+
+    # A25b: infra markers (ENOSPC, OOM, docker daemon, pg unreachable...)
+    # mean the runtime crashed under the suite — not engineer-fixable.
+    infra = detect_infra_failure(post.raw_tail)
+    if infra:
+        # A48 fix #3: prefer the canonical disk-full line over the cascade.
+        disk_full = extract_disk_full_reason(post.raw_tail)
+        result = {
+            **base,
+            "ok": False, "kind": "infra_fail",
+            "gate_failure_class": "infra",
+            "regressions": [], "new_failures": [],
+        }
+        if disk_full:
+            result["reason"] = f"infra failure (host_disk_full): {disk_full[:200]}"
+            result["infra_fail_reason"] = "host_disk_full"
+        else:
+            result["reason"] = f"infra failure: {infra[:200]}"
+            result["infra_fail_reason"] = "other"
+        return result
+
+    # A39a: a failed build/lint sentinel means downstream tests never ran.
+    # pre.passed - post.passed would count the whole baseline as regressed
+    # ("161 regressions"); classify as build_fail with the compiler/linter
+    # block as the reason instead.
+    sentinels = sorted(n for n in post.failed if _is_build_sentinel(n))
+    if sentinels:
+        cls = "lint" if all("lint" in n.lower() for n in sentinels) else "build"
+        error_block = _extract_build_error(post.raw_tail, sentinels)
+        return {
+            **base,
+            "ok": False, "kind": "build_fail",
+            "gate_failure_class": cls,
+            "regressions": [], "new_failures": [],
+            "build_sentinels": sentinels,
+            "build_error": error_block,
+            "reason": (
+                f"{cls} step failed ({', '.join(sentinels)}); "
+                f"downstream tests not run — this is NOT a test regression"
+            ),
+        }
+
+    # A test that was passing pre-merge but is now failing (or missing) is
+    # a regression — but ONLY if the post suite actually executed
+    # something. A differential comparison with an empty denominator is
+    # the no-sentinel variant of the "161 regressions" lie: when the run
+    # produced zero parseable results, "everything in pre regressed" is
+    # noise, not signal (A39a residual, Batch 2-1).
+    regressions = sorted(pre.passed - post.passed)
+    new_failures = sorted(post.failed - pre.failed)
+    post_executed = bool(post.passed or post.failed)
+    if not post_executed:
+        kind, cls = "inconclusive", "test"
+        reason = (
+            f"post suite produced no parseable results (exit={post.raw_exit}); "
+            "differential comparison impossible — inspect post_tail; verify test_cmd"
+        )
+    elif regressions:
+        kind, cls = "regressed", "test"
+        reason = f"{len(regressions)} regression(s); post exit={post.raw_exit}"
+    elif post.raw_exit != 0:
+        # A21 (I-5): runner self-reported failure — never 'green'.
+        if new_failures:
+            kind, cls = "regressed", "test"
+            reason = f"{len(new_failures)} new failure(s); post exit={post.raw_exit}"
+        else:
+            kind, cls = "inconclusive", "test"
+            reason = (f"post suite did not exit clean (exit={post.raw_exit}, "
+                      f"{len(post.passed)} passed, {len(post.failed)} failed); inspect post_tail")
+    else:
+        kind, cls = "green", None
+        reason = f"post suite green ({len(post.passed)} passed)"
+
+    # A39b invariant: regressed requires identities. Unreachable by
+    # construction above, but guards any future refactor of the tree.
+    if kind == "regressed" and not (regressions or new_failures):
+        kind, cls = "inconclusive", "test"
+        reason = ("regression count positive but no test identities parsed "
+                  "(A39b parser invariant); inspect post_tail")
+
+    return {
+        **base,
+        "ok": kind == "green",
+        "kind": kind,
+        "gate_failure_class": cls,
+        "regressions": regressions[:50],
+        "new_failures": new_failures[:50],
+        "reason": reason,
+    }
 
 
 async def _git(args: list[str], cwd: Path) -> tuple[int, str]:
@@ -336,75 +480,11 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
                 }
         post = await _run_tests(wt_post, test_cmd, compose_project=post_proj)
 
-        # A25b: before the regression/new-failure decision tree, check
-        # whether the post-run tail carries an infrastructure-failure marker
-        # (ENOSPC, OOMKilled, docker daemon error, postgres unreachable,
-        # etc.). When it does, the gate failure is NOT a code regression
-        # the engineer can fix — surface `kind=infra_fail` so the
-        # orchestrator routes it to operator review rather than burning
-        # retries on unfixable problems. This is distinct from `error`
-        # (which means the gate itself couldn't run) — infra_fail means the
-        # gate ran but the runtime crashed under it.
-        infra = detect_infra_failure(post.raw_tail)
-        if infra:
-            # A48 fix #3: prefer the canonical disk-full line over the
-            # cascade error (e.g. SQLAlchemy's PendingRollbackError). The
-            # operator action is completely different from generic
-            # ENOSPC — free space + prune volumes, not "fix the test."
-            disk_full = extract_disk_full_reason(post.raw_tail)
-            result: dict = {
-                "ok": False, "kind": "infra_fail",
-                "pre": pre.to_dict(), "post": post.to_dict(),
-                "regressions": [], "new_failures": [],
-                "command": test_cmd,
-                "post_tail": post.raw_tail[-15000:],
-            }
-            if disk_full:
-                result["reason"] = f"infra failure (host_disk_full): {disk_full[:200]}"
-                result["infra_fail_reason"] = "host_disk_full"
-            else:
-                result["reason"] = f"infra failure: {infra[:200]}"
-                result["infra_fail_reason"] = "other"
-            return result
-
-        # A test that was passing pre-merge but is now failing (or missing) is a regression.
-        regressions = sorted(pre.passed - post.passed)
-        new_failures = sorted(post.failed - pre.failed)
-        # Distinguish "tests ran clean" from "tests never ran". If post exited
-        # non-zero but emitted no parseable results, the gate is inconclusive
-        # (e.g. backend container down, missing fixture, import error) — that
-        # is NOT 'green'.
-        post_executed = bool(post.passed or post.failed)
-        if regressions:
-            kind, reason = "regressed", f"{len(regressions)} regression(s); post exit={post.raw_exit}"
-        elif post.raw_exit != 0:
-            # A21 (I-5 truthful aggregation): runner self-reported failure.
-            # Even when no test regressed vs pre, a non-zero exit means the
-            # suite did not complete cleanly — build error, infrastructure
-            # failure, fixture crash, or a brand-new failure with no pre
-            # counterpart. Never call this 'green'. If only new failures
-            # appeared (none shared with pre), surface them as 'regressed';
-            # otherwise it's 'inconclusive'.
-            if new_failures:
-                kind, reason = "regressed", f"{len(new_failures)} new failure(s); post exit={post.raw_exit}"
-            else:
-                kind, reason = "inconclusive", f"post suite did not exit clean (exit={post.raw_exit}, {len(post.passed)} passed, {len(post.failed)} failed); inspect post_tail"
-        elif not post_executed:
-            kind, reason = "inconclusive", "tests did not execute (no pass/fail parsed); verify test_cmd"
-        else:
-            kind, reason = "green", f"post suite green ({len(post.passed)} passed)"
-        ok = (kind == "green")
-        return {
-            "ok": ok,
-            "kind": kind,
-            "pre": pre.to_dict(),
-            "post": post.to_dict(),
-            "regressions": regressions[:50],
-            "new_failures": new_failures[:50],
-            "command": test_cmd,
-            "reason": reason,
-            "post_tail": post.raw_tail[-15000:],
-        }
+        # Batch 2-1 (A39a/b): the decision tree lives in
+        # classify_gate_outcome — pure and unit-tested against the real
+        # incident tails (161-fake-regressions, empty-regressions-with-
+        # count, biome lint, DiskFull cascade).
+        return classify_gate_outcome(pre, post, test_cmd=test_cmd)
     finally:
         for wt in (wt_pre, wt_post):
             await _git(["worktree", "remove", "--force", str(wt)], cwd=repo_root)

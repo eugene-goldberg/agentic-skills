@@ -165,6 +165,22 @@ calls), explicitly opt out with `@pytest.mark.timeout(N)` and document
 why. Otherwise the default 120 s applies. **Never write a test that
 relies on long-running fixture setup without bounding it.**
 
+### R14.4 — Never self-run the regression gate; never wait silently
+
+- **NEVER run `scripts/regression_gate.sh` (or the full PRE/POST gate
+  flow) yourself.** The orchestrator runs the gate after your commit and
+  hands you the failure detail in the retry prompt. Self-running it
+  wastes 10–25 minutes and risks docker port collisions with the
+  orchestrator's own stacks.
+- **NEVER use a silent blocking wait loop** (`until grep -q ... ; do
+  sleep 15; done`, bare `sleep 300`, `wait` on a long child with no
+  output). The harness treats prolonged stream silence as a hang. If a
+  wait is unavoidable, emit progress each iteration
+  (`echo "waiting ($i)..."`) so the stream shows you are alive.
+- If you need a subset of tests to verify a fix, run *that subset
+  directly* (`pytest tests/api/test_x.py -x -q`) — it is faster and its
+  output keeps the stream alive.
+
 ### Failure mode this prevents
 
 Sprint `run-20260524T220528Z-f56070` (documents_1 BL-0001 QA gate) hung
@@ -172,6 +188,13 @@ for 30+ min on `test_alembic_upgrade_downgrade_upgrade_round_trip` —
 exact pattern: leaked `TestClient(app)` instances in `_add_member`
 held DB connections open; downgrade() blocked on `AccessExclusiveLock`;
 gate hung; sprint aborted.
+
+R14.4's failure mode: sprint `run-20260530T133341Z-f97e8c` BL-0014 —
+the engineer self-ran the full gate to diagnose (A39 gave it no test
+identities), waited on it with a zero-output `until grep` loop, and was
+killed by the idle timeout with a verified fix uncommitted (A45). The
+harness now suspends the idle clock while a tool is in flight, but the
+discipline stands: subset tests + audible waits.
 
 ---
 
