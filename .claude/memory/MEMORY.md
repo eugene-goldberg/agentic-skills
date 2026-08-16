@@ -29,4 +29,4 @@
 - [Auto-dispatch (ABL-0015)](arch_auto_dispatch.md) — §I.4 code batches A–D shipped flag-OFF; selector+invoker over unchanged _engineer_flow; R15; only operator-gated Batch E live smoke remains
 - [A48 disk-leak fixes](arch_disk_leak_fixes.md) — 4 shipped fixes (`02ebd7b`); Docker.raw 60 GB Mac VM cap and the four leak classes it closes; force-kill worktree-leak open gap
 - [Pre-flight checklist](../../../../dev/ai-projects/agentic-skills/PREFLIGHT.md) — PF-1..10 verifiable artifacts; run before every sprint launch
-- [Autonomy hardening](arch_autonomy_hardening.md) — 2026-08-15 audit (C1–C5/M1–M4, A49–A57) + Batches 0–4 shipped: detached runs, honest gate signals, dep-gating + triage v1 + R16, score teeth + revert
+- [Autonomy hardening](arch_autonomy_hardening.md) — 2026-08-15/16: ALL Batches 0–7 shipped (291/291): detached runs, honest signals, dep-gating + triage v1 + R16, score teeth + revert, gate cache + budget, sprint lessons, checkout/indexer/env hygiene

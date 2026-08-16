@@ -1,6 +1,6 @@
 ---
 name: arch-active-branch
-description: Active work branch is autonomy-hardening (Batches 0-4 shipped 2026-08-15; 5-7 authorized/unstarted); parent architect-prereqs holds ABL-0015 flag-OFF awaiting Batch E
+description: Active work branch is autonomy-hardening (Batches 0-7 ALL shipped, 291/291); parent architect-prereqs holds ABL-0015 flag-OFF awaiting Batch E
 metadata:
   type: project
 ---
@@ -8,8 +8,8 @@ metadata:
 Active branch: **`autonomy-hardening`** (created 2026-08-15 off
 `architect-prereqs` @ `8745331`). Batches 0–4 of
 AUTONOMY_HARDENING_PLAN.md shipped (commits 5b3b31f, f333e20, 1868229,
-9728f0a, f2ab112); suite 266/266. Batches 5–7 authorized (D6),
-unstarted.
+9728f0a, f2ab112, f5ab92c, 9e33cfc, 855f62b — Batches 0–7 ALL
+shipped); suite 291/291.
 
 **Why:** the 2026-08-15 audit ([[arch-autonomy-hardening]]) showed the
 mission-blockers lived in the harness control flow, not the worker

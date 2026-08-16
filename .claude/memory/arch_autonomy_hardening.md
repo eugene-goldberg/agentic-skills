@@ -1,6 +1,6 @@
 ---
 name: arch-autonomy-hardening
-description: 2026-08-15 audit found mission-blockers C1–C5/M1–M4 (A49–A57); AUTONOMY_HARDENING_PLAN Batches 0–4 shipped on branch autonomy-hardening; 5–7 authorized/unstarted
+description: 2026-08-15 audit found mission-blockers C1–C5/M1–M4 (A49–A57); AUTONOMY_HARDENING_PLAN Batches 0–7 ALL shipped on branch autonomy-hardening (291/291); live smokes blocked on env restore
 metadata:
   type: project
 ---
@@ -25,9 +25,16 @@ while tool in flight; Batch 3 dep-gating (`deferred_dep`,
 abort-or-blind-continue code path; these batches convert failure into
 routed decisions. Operator decisions D1–D6 recorded in the plan header.
 
-**How to apply:** Batches 5–7 authorized but unstarted (see
-[[arch-active-branch]] pointer + AUTONOMY_HARDENING_TRACKER.md). New
-flags stay OFF until calibration sprints — which are blocked on the
-machine-migration environment restore (targets/Milvus/Ollama gone from
-/Users/egoldberg). The A45 test is timing-sensitive (~2.1s fake-CLI
-spawn latency on this Mac): widen margins, never weaken assertions.
+Batches 5–7 shipped 2026-08-16: Batch 5 A29 PRE-cache + cost
+aggregation + max_sprint_usd (`f5ab92c`); Batch 6 LESSONS.jsonl sprint
+memory + prompt injection (`9e33cfc`); Batch 7 A51 checkout preflight +
+verified PO commit, A53 indexer health + Milvus restart, A52 agent env
+allowlist + HARNESS.md §11 trust model (`855f62b`).
+
+**How to apply:** the plan is fully executed (see
+AUTONOMY_HARDENING_TRACKER.md sign-offs); only 5-1 (target-side
+playwright workers) + live smokes + calibration sprints remain, all
+blocked on the environment restore (targets/Milvus/Ollama gone from
+/Users/egoldberg). New flags stay OFF until calibration. The A45 test is
+timing-sensitive (~2.1s fake-CLI spawn latency on this Mac): widen
+margins, never weaken assertions.

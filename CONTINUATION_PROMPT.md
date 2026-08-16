@@ -3,7 +3,7 @@
 > Hand-off written 2026-08-15. This session: (1) full-code-audit that
 > identified mission-blocking flaws C1–C5/M1–M4 (ledger A49–A57);
 > (2) `AUTONOMY_HARDENING_PLAN.md` authorized (decisions D1–D6);
-> (3) **Batches 0–4 executed and committed** on the new branch
+> (3) **Batches 0–7 executed and committed** on the new branch
 > `autonomy-hardening` (off `architect-prereqs` @ `8745331`).
 > Backend suite: **291/291** (was 208; Batches 5–7 landed 2026-08-16).
 >
@@ -25,7 +25,7 @@ rule).
 delivery. Operator: Eugene Goldberg. Active branch: **`autonomy-hardening`**
 (NOT architect-prereqs; that is its parent).
 
-## 2. State at hand-off — autonomy-hardening Batches 0–4 shipped
+## 2. State at hand-off — autonomy-hardening Batches 0–7 shipped
 
 Read `AUTONOMY_HARDENING_PLAN.md` (the why + decisions D1–D6) and
 `AUTONOMY_HARDENING_TRACKER.md` (live status). Commits:
@@ -37,9 +37,12 @@ Read `AUTONOMY_HARDENING_PLAN.md` (the why + decisions D1–D6) and
 | `1868229` | 2 (C4) | gate `build_fail` kind + `gate_failure_class` + regressed⇒non-empty invariant (A39); api_error = infra-retry, no budget burn (A44); idle clock suspended while a tool is in flight (A45); A54–A57 |
 | `9728f0a` | 3 (C2) | dependency DAG now GATES (`deferred_dep`, A49); triage agent v1 (RETRY_REWRITE×1 / DEFER / ESCALATE, enum-constrained, DEFER fallback) + **R16**; `run_triage` flag-OFF |
 | `f2ab112` | 4 (C3/A50) | Fail verdict → `merged_score_failed` + `score_failed` + scorer-context triage; `revert_bl_span` + operator-gated `POST /revert-bl {confirm:true}` |
+| `f5ab92c` | 5 (C5) | A29 PRE-baseline gate cache (SHA-keyed, ~50% gate time); cost aggregation (`bl.done cost_usd`, `sprint_complete total_cost_usd`/`cost_by_role`); `max_sprint_usd` cap → `deferred_budget` |
+| `9e33cfc` | 6 (M1) | `LESSONS.jsonl`: resolved retries append failure signatures; last 10 injected into engineer/QA prompts; exported to trace archive for doctrine-meta |
+| `855f62b` | 7 (M2–M4) | A51 checkout preflight + verified PO commit; A53 indexer health + mid-sprint Milvus restart + loud `indexing_degraded`; A52 agent env allowlist + HARNESS.md §11 trust model |
 
 **How to run the suite:** `cd webapp/backend && .venv/bin/python -m
-pytest tests/ -q -p no:cacheprovider` → 266/266. venv is uv-managed
+pytest tests/ -q -p no:cacheprovider` → 291/291. venv is uv-managed
 Python 3.12 (`~/.local/bin/uv`).
 
 ## 3. Open work (in priority order)
