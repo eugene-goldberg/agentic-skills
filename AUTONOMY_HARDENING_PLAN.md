@@ -560,6 +560,45 @@ should propose a pilot repo (small, self-contained, locally testable —
 `spheracloud-measurement-extract-worker` look like candidates on size,
 unverified) at C-3.
 
+### 9c.1 Reconnaissance findings — EA estate, verified 2026-08-16
+
+Operator directive: *"any real work can only begin when you begin to work
+with the real EA codebase."* Correct on information-value grounds — the
+ladder tested the least-risky assumption (the crew works on a stack it
+already works on) before the riskiest (can an EA repo be gated at all?).
+C-2 was aborted mid-run and reconnaissance started immediately. Findings,
+all verified by execution, not inspection:
+
+| # | Finding | Status |
+|---|---|---|
+| R-1 | `dotnet` was not installed on this machine | ✅ fixed — .NET SDK 8.0.424 user-local at `~/.dotnet`, symlinked to `~/.local/bin` |
+| R-2 | Only **6 of 21** repos contain any test project (`calculation-engine` 3, `dfm-worker` 3, `ea-dotnet-service` 2, `ea-waste-service` 1, `material-worker` 1, `shared-nuget-package` 1; plus jest in `ea-gateway`, vitest in `ea-web-client`) | Structural — the other 15 **cannot be regression-gated**, so the crew cannot safely work them at all until tests exist |
+| R-3 | Test frameworks fragmented: MSTest, NUnit, xunit, jest, vitest | Gate authoring is **per-repo**, not per-estate. `templates/gate_dotnet.sh` covers the .NET trio via TRX→nodeid conversion |
+| R-4 | Azure coupling ranges 0 files (`ea-gateway`) → 63 (`ea-dotnet-service`) | Heavily-coupled services may be untestable locally at any price; pilot selection must favour the low end |
+| R-5 | **HARD BLOCKER — every repo restores from Sphera's private Azure DevOps Artifacts feeds.** npm: `SCSafeguard` registry with `always-auth=true` → `npm install` fails demanding `npm login`. NuGet: `SpheraPackages@Local` + `SpheraCloudEA` with a CI-substituted `__nugetUser__` placeholder → `dotnet restore` fails `NU1301: Unable to load the service index`. Even `shared-nuget-package` (all-public package refs bar one) needs the feed for `Sphera.Foundation.Repository.Core` | **Blocks E-2 and E-3 entirely.** No restore → no build → no test → no gate. An ungated sprint is exactly the slop generator this project exists to prevent |
+
+**Consequence:** E-3 ("tests runnable locally") is not merely unproven — it
+is currently *impossible* for all 21 repos. The critical path is no longer
+the ladder; it is a credential grant.
+
+**The ask (operator-only, ~5 minutes):** an Azure DevOps PAT scoped
+*Packaging → Read* for `sphera.pkgs.visualstudio.com`, wired as:
+```bash
+# npm
+npm config set //sphera.pkgs.visualstudio.com/_packaging/SCSafeguard/npm/registry/:_authToken <base64-PAT>
+# NuGet
+dotnet nuget add source "https://sphera.pkgs.visualstudio.com/_packaging/SpheraPackages@Local/nuget/v3/index.json" \
+  -n Foundation -u <user> -p <PAT> --store-password-in-clear-text
+```
+No engineering substitutes for this; working around it would mean vendoring
+dependencies, which is worse than waiting.
+
+**Pilot ranking once unblocked** (by testability, best first):
+`ea-gateway` (jest, **0** Azure files, mock-server-backed API tests) →
+`shared-nuget-package` (xunit, library, no service deps) →
+`calculation-engine` (3 MSTest projects, 3 Azure files) →
+`ea-waste-service` (NUnit, 2 Azure files).
+
 ### Interim capability available sooner
 
 Setting `RETRIEVAL_CORPUS_ROOT` lets agents *read* EA conventions as
