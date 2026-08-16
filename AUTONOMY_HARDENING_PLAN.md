@@ -519,6 +519,56 @@ whenever the claim is made):
 4. **Escalation latency** — ESCALATE writes files/events; no push channel
    (ABL-0004). Walk-away holds; walk-away-and-be-notified does not.
 
+## 9c. EA transition gate — the destination (operator directive 2026-08-16)
+
+Operator directive: *"let me know when the plan is fully executed and when
+we're ready to switch to work with the EA codebase full time."* The EA
+estate (21 Sphera service repos under `ea-repos/`) is the real
+destination; the FastAPI template is only the proving ground. This
+section makes "ready" falsifiable rather than a judgment call.
+
+**Status today (verified 2026-08-16):** no experiment touches EA code.
+EA work to date is embeddings only — 21 Milvus collections / 53,609
+chunks. No EA repo is exposed to the webapp, none has
+`.agentic-skills.json` or a gate script, and `RETRIEVAL_CORPUS_ROOT` is
+unset on the backend, so agents cannot even *read* EA code.
+
+### The gate — all six must hold
+
+| # | Requirement | Why it's non-negotiable |
+|---|---|---|
+| **E-1** | **C-4 complete**: 5 consecutive zero-intervention sprints on the template, ≥2 targets, ≥1 sprint ≥10 BLs | Proving trustworthiness on a disposable target is the entire point of the ladder. Corporate code is not where you discover the crew's failure modes. |
+| **E-2** | **Per-repo bootstrap for the pilot repo**: agent branch, `.agentic-skills.json`, gitignore hygiene, and a **.NET-shaped gate script** that runs green twice consecutively and satisfies the harness parser contract (`tests/x::y PASSED` nodeids + build/lint sentinels) | C-0 took **8 iterations** to get a green gate on a stack the harness was *designed* for. A `dotnet test` + integration harness on an Azure-coupled service is strictly harder. |
+| **E-3** | **Local-runnable test path**: the pilot repo's suite must run without live Azure resources (APIM/Databricks/managed SQL), or with documented stubs | The regression gate is the crew's only correctness signal. A repo whose tests can't run locally cannot be gated, and an ungated sprint is a slop generator. |
+| **E-4** | **Security posture decision (D4 escalates)**: for corporate code + `--dangerously-skip-permissions` + unrestricted Bash + untrusted-input-via-retrieval, the sandbox track moves from "deferred" to **required-or-explicitly-accepted-in-writing** | A52/A47/HARNESS.md §11: the env allowlist closed secret exposure, but nothing jails the filesystem or network. Acceptable on a throwaway clone; a different conversation on Sphera IP. |
+| **E-5** | **Scope fit: single-repo features only** — or multi-repo support is built | The crew is architecturally one-repo-per-sprint (one `agent_branch`, one gate, one worktree). EA features routinely span gateway + service + web-client. Until that's addressed, pilot features MUST be chosen to fit inside one repo, or the crew will fail for structural reasons unrelated to its competence. |
+| **E-6** | **One operator-reviewed EA pilot sprint**: low-risk feature, single repo, human reads every artifact before anything merges | n=1 on a new stack is not evidence of capability; it's the smoke test that tells us which of E-1..E-5 we got wrong. |
+
+### Sequencing
+
+```
+C-2 (in flight) → C-3 → C-4 → C-5 ┐
+                                   ├→ E-2/E-3 pilot-repo bootstrap (can start in parallel with C-4)
+                E-4 security call  ┘
+                                   └→ E-6 pilot sprint → EA full time
+```
+
+E-2/E-3 are the long pole and are **independent of the ladder** — the
+pilot repo's gate can be built while C-4's sprints run. The architect
+should propose a pilot repo (small, self-contained, locally testable —
+`spheracloud-ea-datamanagement-service` or
+`spheracloud-measurement-extract-worker` look like candidates on size,
+unverified) at C-3.
+
+### Interim capability available sooner
+
+Setting `RETRIEVAL_CORPUS_ROOT` lets agents *read* EA conventions as
+grounding while still only ever writing to a sandbox target. That is a
+meaningful jump (real Sphera patterns instead of a generic template) at
+much lower risk than E-1..E-6, and needs only one operator decision:
+whether corpus hits count toward the R5 grounding floor (a doctrine
+change, so operator-approved, not architect-applied).
+
 ## 10. Operator decisions required before build
 
 | # | Decision | Architect recommendation |
