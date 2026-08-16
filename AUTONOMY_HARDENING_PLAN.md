@@ -474,6 +474,49 @@ honest evidence the crew can be walked away from.
 
 ---
 
+## 9b. Calibration protocol — the evidence ladder to 95% (added 2026-08-16)
+
+Batches 0–7 shipped (291/291) verify the *harness*. Per CLAUDE.md Rule 6,
+the claim **"the crew handles complex brownfield work completely
+autonomously"** currently has ZERO direct artifacts — no sprint has ever
+completed without mid-sprint operator intervention, and every
+intervention-removing feature is flag-OFF and live-untested. Each rung
+below produces re-openable artifacts; the 95% claim attaches only after
+C-4.
+
+**Operationalized claim (needs operator sign-off — the thesis §7 metric
+contradiction, ARCHITECT_PLAN §9.5 #1, still stands):**
+> On configured brownfield targets, a Sprint-1-scale (≥8 BL) feature
+> submitted detached completes or *honestly defers* with **zero
+> mid-sprint operator interventions**, ≥80% of BLs `merged_full`,
+> deferred BLs correctly dep-gated with triage records, closure_check
+> 0 violations, acceptance report produced, within budget.
+
+| Rung | Action | Pass artifact | Owner | Est. |
+|---|---|---|---|---|
+| **C-0** | Environment restore: target repo (fresh clone + RUNBOOK reset — old sprint state is unrecoverable), Milvus, Ollama; PF-1..10 all green | PREFLIGHT transcript | operator (+architect verifies) | 0.5–1 d |
+| **C-1** | Mechanics smokes: (a) detached submit + `curl --max-time 5` disconnect → sprint completes, replay works, `/abort` clean; (b) A29 cache: identical sprint wall-time before/after, zero stale-greens; (c) cost totals vs console sanity | events.jsonl + timing table | architect | 0.5 d |
+| **C-2** | Triage calibration sprint: `run_triage=true`, one planted flaky BL + organic failures; operator reviews EVERY triage.md | 0 nonsensical decisions; R16 held; guidance-injected retry observed | both | 1 sprint |
+| **C-3** | **End-state test (§9)**: detached → walk away → planted failure defers with dependent → completes-with-deferrals under budget → replay → closure 0 | the first walk-away artifact | both | 1 sprint |
+| **C-4** | **Autonomy series**: 5 consecutive zero-intervention sprints meeting the operationalized claim, across ≥2 targets (add Django — ABL-0014 §I.5), ≥1 sprint ≥10 BLs. An intervention resets the consecutive counter and files a ledger entry first | 5 sprint reports | both | 2–3 wk elapsed |
+| **C-5** | Flag flips + accuracy bounds: D1 (`run_triage` default) after C-2; ABL-0015 Batch E re-created on a new confirmed `product_bug`; ≥10 operator verdicts in the findings ledger → acceptance FP-rate bound (§I.3) | flip commits + verdict ledger | operator-gated | alongside C-4 |
+
+**Residuals that stay OUTSIDE the 95% even after C-4** (state them
+whenever the claim is made):
+1. **Recovery ceiling** — triage has no SPLIT and the PO never re-plans:
+   a bad decomposition ends in honest deferral, not autonomous recovery
+   (ABL-0006 territory). The claim is *delivers-or-honestly-defers*, not
+   *always-delivers*.
+2. **Untrusted targets** — sandbox track deferred (D4); the claim holds
+   only for targets trusted at shell level (HARNESS.md §11).
+3. **Stability over time** — the self-hardening loop is still half-open
+   (ARCHITECT_PLAN Batches C/D unbuilt); every prior sprint surfaced 1–3
+   new ledger entries and C-4 should be expected to as well. 95% is a
+   statement about the calibrated configuration, not about novel targets
+   or unbounded time.
+4. **Escalation latency** — ESCALATE writes files/events; no push channel
+   (ABL-0004). Walk-away holds; walk-away-and-be-notified does not.
+
 ## 10. Operator decisions required before build
 
 | # | Decision | Architect recommendation |
