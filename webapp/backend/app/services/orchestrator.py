@@ -541,7 +541,7 @@ async def _engineer_flow(
             gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                      target_ref=cfg.agent_branch, run_id=run_id)
             yield _ptag({"type": "_meta", "phase": "regression_gate",
-                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
+                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "new_failures", "gate_failure_class", "pre_cache_hit", "reason", "post_tail")}},
                        "engineer", bl_id)
             gate_attempt = 0
             # A25b: only retry on outcomes the agent can plausibly fix —
@@ -567,7 +567,7 @@ async def _engineer_flow(
                                                          target_ref=cfg.agent_branch, run_id=run_id)
                 yield _ptag({"type": "_meta", "phase": "regression_gate",
                             "gate_attempt": gate_attempt,
-                            **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
+                            **{k: gate.get(k) for k in ("ok", "kind", "regressions", "new_failures", "gate_failure_class", "pre_cache_hit", "reason", "post_tail")}},
                            "engineer", bl_id)
             if validation["ok"] and gate.get("ok"):
                 merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
@@ -593,7 +593,7 @@ async def _engineer_flow(
                         gate2 = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                                    target_ref=cfg.agent_branch, run_id=run_id)
                         yield _ptag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
-                                    **{k: gate2.get(k) for k in ("ok","kind","regressions","reason","post_tail")}},
+                                    **{k: gate2.get(k) for k in ("ok", "kind", "regressions", "new_failures", "gate_failure_class", "pre_cache_hit", "reason", "post_tail")}},
                                    "engineer", bl_id)
                         if gate2.get("ok"):
                             merge = await fast_forward_target(repo_dir, wt.branch,
@@ -707,7 +707,7 @@ async def _qa_or_scorer_flow(
             gate = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                      target_ref=cfg.agent_branch, run_id=run_id)
             yield _ptag({"type": "_meta", "phase": "regression_gate",
-                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
+                        **{k: gate.get(k) for k in ("ok", "kind", "regressions", "new_failures", "gate_failure_class", "pre_cache_hit", "reason", "post_tail")}},
                        role, bl_id)
             gate_attempt = 0
             # A25b: only retry on outcomes the agent can plausibly fix —
@@ -732,7 +732,7 @@ async def _qa_or_scorer_flow(
                                                          target_ref=cfg.agent_branch, run_id=run_id)
                 yield _ptag({"type": "_meta", "phase": "regression_gate",
                             "gate_attempt": gate_attempt,
-                            **{k: gate.get(k) for k in ("ok", "kind", "regressions", "reason", "post_tail")}},
+                            **{k: gate.get(k) for k in ("ok", "kind", "regressions", "new_failures", "gate_failure_class", "pre_cache_hit", "reason", "post_tail")}},
                            role, bl_id)
             if validation["ok"] and gate.get("ok"):
                 merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
@@ -754,7 +754,7 @@ async def _qa_or_scorer_flow(
                         gate2 = await regression_gate_svc.run_gate(repo_dir, agent_branch=wt.branch,
                                                                    target_ref=cfg.agent_branch, run_id=run_id)
                         yield _ptag({"type": "_meta", "phase": "regression_gate", "post_rebase": True,
-                                    **{k: gate2.get(k) for k in ("ok","kind","regressions","reason","post_tail")}},
+                                    **{k: gate2.get(k) for k in ("ok", "kind", "regressions", "new_failures", "gate_failure_class", "pre_cache_hit", "reason", "post_tail")}},
                                    role, bl_id)
                         if gate2.get("ok"):
                             merge = await fast_forward_target(repo_dir, wt.branch,
@@ -2022,6 +2022,7 @@ async def run_brief(
     inject_acceptance_priors: bool = False,  # ABL-0014 §I.3 Batch E; OFF until 3-smoke calibration
     run_acceptance_followup: bool = False,  # ABL-0015 auto-dispatch; OFF until calibrated
     run_triage: bool = False,  # Batch 3-2 (ABL-0002 v1); OFF until calibrated (D1)
+    max_sprint_usd: float | None = None,  # Batch 5-4 (C5): hard sprint budget
 ) -> AsyncIterator[dict]:
     """Full brief-to-merged-feature pipeline. Yields SSE-shaped event dicts.
 
@@ -2071,6 +2072,27 @@ async def run_brief(
     yield _evt("start", brief_chars=len(brief), project_name=project_name, run_id=run_id)
 
     try:
+        # Batch 5-3 (C5): cost telemetry. Every claude result frame carries
+        # total_cost_usd; before this, zero code read it — the crew had no
+        # idea what it spends. Accumulated per BL, per role, per sprint.
+        sprint_cost_usd = 0.0
+        cost_by_role: dict[str, float] = {}
+        budget_exhausted_announced = False
+
+        def _accumulate_cost(e: dict) -> float:
+            nonlocal sprint_cost_usd
+            if e.get("type") != "result":
+                return 0.0
+            try:
+                c = float(e.get("total_cost_usd") or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+            if c > 0:
+                sprint_cost_usd += c
+                role = str(e.get("orchestrator_step") or "unknown")
+                cost_by_role[role] = round(cost_by_role.get(role, 0.0) + c, 6)
+            return c
+
         # ── Step 2-3: initial indexing ─────────────────────────────────────────
         async for e in _run_indexers(repo_dir, "index_initial"):
             yield e
@@ -2087,6 +2109,7 @@ async def run_brief(
                     summary["po"] = e
                     po_ok = e.get("doctrine_ok", False)
                     continue
+                _accumulate_cost(e)
                 yield e
             yield _evt("po.done", ok=po_ok)
             if not po_ok and stop_on_failure:
@@ -2142,6 +2165,27 @@ async def run_brief(
                     satisfied_bls.add(bl_id)
                     continue
 
+            # Batch 5-4 (C5): hard sprint budget — checked BETWEEN BLs only
+            # (never mid-BL; a half-done BL is worse than an expensive one).
+            # Over cap → remaining BLs defer honestly (I-5), sprint still
+            # completes with the worst-wins label.
+            if max_sprint_usd is not None and sprint_cost_usd >= max_sprint_usd:
+                if not budget_exhausted_announced:
+                    budget_exhausted_announced = True
+                    yield _evt("budget_exhausted", run_id=run_id,
+                               spent_usd=round(sprint_cost_usd, 4),
+                               max_sprint_usd=max_sprint_usd)
+                yield _evt("bl.skipped", bl_id=bl_id, kind="budget",
+                           reason=(f"sprint budget exhausted: "
+                                   f"${sprint_cost_usd:.2f} >= ${max_sprint_usd:.2f}"))
+                per_bl = {"bl_id": bl_id, "title": it.title}
+                summary["bls"].append(per_bl)
+                bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "deferred_budget"})
+                deferred_bls.append({"bl_id": bl_id, "outcome": "deferred_budget"})
+                _checkpoint(current_bl=None)
+                yield _evt("bl.done", bl_id=bl_id, outcome="deferred_budget")
+                continue
+
             # 3-1 dependency gate
             unmet = [d for d in _bl_deps(it)
                      if d in known_bl_ids and d not in satisfied_bls]
@@ -2160,6 +2204,7 @@ async def run_brief(
 
             per_bl = {"bl_id": bl_id, "title": it.title}
             yield _evt("bl.start", bl_id=bl_id, title=it.title)
+            bl_start_cost = sprint_cost_usd  # 5-3: per-BL cost = delta
             _checkpoint(current_bl=bl_id)  # A7: mark which BL is in flight
 
             # Engineer — up to 2 attempts: the normal one, plus at most ONE
@@ -2194,6 +2239,7 @@ async def run_brief(
                         # Failure-signal capture for triage (Batch 3-2).
                         last_signals[e["phase"]] = {k: v for k, v in e.items()
                                                     if k != "type"}
+                    _accumulate_cost(e)
                     yield e
                 yield _evt("engineer.done", **(eng_outcome or {"bl_id": bl_id}))
                 if eng_outcome and (eng_outcome.get("merged") or eng_outcome.get("no_op")):
@@ -2215,6 +2261,7 @@ async def run_brief(
                         if "_triage_decision" in e:
                             decision = e
                             continue
+                        _accumulate_cost(e)
                         yield e
                 except Exception as exc:  # noqa: BLE001 — triage crash = DEFER
                     decision = {"decision": "DEFER",
@@ -2247,7 +2294,8 @@ async def run_brief(
                 bl_outcomes_compact.append({"bl_id": bl_id, "outcome": triage_outcome})
                 deferred_bls.append({"bl_id": bl_id, "outcome": triage_outcome})
                 _checkpoint(current_bl=None)
-                yield _evt("bl.done", bl_id=bl_id, outcome=triage_outcome)
+                yield _evt("bl.done", bl_id=bl_id, outcome=triage_outcome,
+                           cost_usd=round(sprint_cost_usd - bl_start_cost, 4))
                 continue
             # R11 no_op: engineer detected work already in codebase. But QA may
             # still be missing (resume-after-crash). Only short-circuit if the QA
@@ -2289,7 +2337,8 @@ async def run_brief(
                 summary["bls"].append(per_bl)
                 bl_outcomes_compact.append({"bl_id": bl_id, "outcome": "engineer_unmerged"})
                 _checkpoint(current_bl=None)  # A7
-                yield _evt("bl.done", bl_id=bl_id, outcome="engineer_unmerged")
+                yield _evt("bl.done", bl_id=bl_id, outcome="engineer_unmerged",
+                           cost_usd=round(sprint_cost_usd - bl_start_cost, 4))
                 if stop_on_failure:
                     yield _evt("aborted", reason=f"engineer did not merge {bl_id}")
                     return
@@ -2308,6 +2357,7 @@ async def run_brief(
                 if "_orchestrator_outcome" in e:
                     qa_outcome = e
                     continue
+                _accumulate_cost(e)
                 yield e
             per_bl["qa"] = qa_outcome or {"merged": False}
             yield _evt("qa.done", **(qa_outcome or {"bl_id": bl_id}))
@@ -2375,6 +2425,7 @@ async def run_brief(
                             if "_triage_decision" in e:
                                 qdecision = e
                                 continue
+                            _accumulate_cost(e)
                             yield e
                     except Exception as exc:  # noqa: BLE001
                         qdecision = {"decision": "DEFER",
@@ -2409,6 +2460,7 @@ async def run_brief(
                 if "_orchestrator_outcome" in e:
                     score_outcome = e
                     continue
+                _accumulate_cost(e)
                 yield e
             per_bl["scorer"] = score_outcome or {}
             yield _evt("scorer.done", **(score_outcome or {"bl_id": bl_id}))
@@ -2459,6 +2511,7 @@ async def run_brief(
                             if "_triage_decision" in e:
                                 sdecision = e
                                 continue
+                            _accumulate_cost(e)
                             yield e
                     except Exception as exc:  # noqa: BLE001
                         sdecision = {"decision": "DEFER",
@@ -2479,7 +2532,8 @@ async def run_brief(
             _checkpoint(current_bl=None)  # A7
             yield _evt("bl.done", bl_id=bl_id, outcome=outcome,
                        score_verdict=score_verdict,
-                       score_total=(score_outcome or {}).get("score_total"))
+                       score_total=(score_outcome or {}).get("score_total"),
+                       cost_usd=round(sprint_cost_usd - bl_start_cost, 4))
 
         terminal_status = "sprint_complete"  # A7: flip from default "aborted"
 
@@ -2531,6 +2585,9 @@ async def run_brief(
             summary=summary,
             sprint_label=sprint_label,
             deferred=deferred_bls,
+            total_cost_usd=round(sprint_cost_usd, 4),
+            cost_by_role={k: round(v, 4) for k, v in cost_by_role.items()},
+            max_sprint_usd=max_sprint_usd,
             coverage_subtype=subtype,
             ui_coverage_ratio=round(coverage["ratio"], 4),
             ui_coverage_threshold=min_ui_coverage_ratio,

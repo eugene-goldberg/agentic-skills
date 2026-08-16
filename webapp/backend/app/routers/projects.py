@@ -1191,6 +1191,10 @@ class RunBriefRequest(BaseModel):
     # one clean calibration sprint (operator decision D1), same discipline
     # as run_acceptance / run_acceptance_followup.
     run_triage: bool = False
+    # Batch 5-4 (C5): hard sprint budget in USD. Checked between BLs;
+    # over-cap BLs defer honestly (outcome deferred_budget) and the sprint
+    # completes with the worst-wins label. None = unlimited (legacy).
+    max_sprint_usd: float | None = Field(None, gt=0.0, le=100000.0)
     # Batch 1 (AUTONOMY_HARDENING_PLAN.md, C1/A34): when True, the run
     # executes as a background task in the run registry and this endpoint
     # returns 202 {run_id, events_url} immediately. The SSE view lives at
@@ -1409,6 +1413,7 @@ async def run_brief(repo: str, req: RunBriefRequest):
         acceptance_timeout=req.acceptance_timeout,
         min_ui_coverage_ratio=req.min_ui_coverage_ratio,
         run_triage=req.run_triage,
+        max_sprint_usd=req.max_sprint_usd,
     )
     try:
         run_registry_svc.start_run(

@@ -376,6 +376,84 @@ async def _git(args: list[str], cwd: Path) -> tuple[int, str]:
     return proc.returncode or 0, (out + err).decode(errors="replace")
 
 
+# ─── Batch 5-2 (A29): PRE-baseline result cache ─────────────────────────────
+#
+# The PRE side of the gate re-runs the ENTIRE suite against target_ref for
+# every gate invocation — even though target_ref only moves when a merge
+# lands. At the measured 40–80 min per suite run that is ~50% of all gate
+# wall-time after the first BL. Cache the PRE TestSet keyed on the exact
+# (target_ref SHA, test_cmd) pair: any merge moves the SHA, so
+# invalidation is automatic and a stale-green is structurally impossible
+# from the key alone. TTL is a 24h backstop against environmental drift
+# (docker image updates etc.) that the SHA can't see.
+
+_PRE_CACHE_TTL_S = 24 * 3600
+_PRE_CACHE_KEEP = 10  # opportunistic pruning: newest N files kept
+
+
+def _pre_cache_dir(repo_root: Path) -> Path:
+    return repo_root.parent / ".gate-cache"
+
+
+def _pre_cache_path(repo_root: Path, target_sha: str, test_cmd: list) -> Path:
+    import hashlib
+    cmd_hash = hashlib.sha256(json.dumps(test_cmd).encode()).hexdigest()[:8]
+    return _pre_cache_dir(repo_root) / f"pre-{target_sha[:12]}-{cmd_hash}.json"
+
+
+def _pre_cache_load(repo_root: Path, target_sha: str, test_cmd: list) -> TestSet | None:
+    import time
+    p = _pre_cache_path(repo_root, target_sha, test_cmd)
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    if data.get("target_sha") != target_sha or data.get("test_cmd") != test_cmd:
+        return None  # hash collision paranoia — full-key check
+    if time.time() - float(data.get("created_at", 0)) > _PRE_CACHE_TTL_S:
+        return None
+    return TestSet(
+        passed=set(data.get("passed") or []),
+        failed=set(data.get("failed") or []),
+        raw_exit=int(data.get("raw_exit", 0)),
+        raw_tail=str(data.get("tail") or ""),
+    )
+
+
+def _pre_cache_store(repo_root: Path, target_sha: str, test_cmd: list,
+                     pre: TestSet) -> None:
+    """Best-effort. Only parseable, executed PRE runs are cacheable — an
+    empty/broken baseline must be recomputed, never replayed."""
+    import time
+    if not (pre.passed or pre.failed):
+        return
+    try:
+        d = _pre_cache_dir(repo_root)
+        d.mkdir(parents=True, exist_ok=True)
+        p = _pre_cache_path(repo_root, target_sha, test_cmd)
+        p.write_text(json.dumps({
+            "target_sha": target_sha,
+            "test_cmd": test_cmd,
+            "created_at": time.time(),
+            "passed": sorted(pre.passed),
+            "failed": sorted(pre.failed),
+            "raw_exit": pre.raw_exit,
+            "tail": pre.raw_tail[-2000:],
+        }))
+        # Opportunistic prune: keep the newest N cache files.
+        files = sorted(d.glob("pre-*.json"), key=lambda f: f.stat().st_mtime,
+                       reverse=True)
+        for old in files[_PRE_CACHE_KEEP:]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    except (OSError, ValueError):
+        pass
+
+
 async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
                    *, run_id: str | None = None) -> dict:
     """Run pre/post differential test suite around a dry-run merge.
@@ -419,9 +497,10 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
 
     # Pre-merge baseline: run against the current target_ref (i.e. what
     # production looks like before this agent's commits).
-    code, _ = await _git(["rev-parse", "--verify", target_ref], cwd=repo_root)
+    code, target_sha_out = await _git(["rev-parse", "--verify", target_ref], cwd=repo_root)
     if code != 0:
         return {"ok": False, "kind": "error", "reason": f"target ref {target_ref} not found", "command": test_cmd}
+    target_sha = target_sha_out.strip()
     code, _ = await _git(["rev-parse", "--verify", agent_branch], cwd=repo_root)
     if code != 0:
         return {"ok": False, "kind": "error", "reason": f"agent branch {agent_branch} not found", "command": test_cmd}
@@ -458,10 +537,24 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
     post_proj = f"{base_proj}-post-{wt_id}" if base_proj else None
 
     try:
-        code, msg = await _git(["worktree", "add", "--detach", str(wt_pre), target_ref], cwd=repo_root)
-        if code != 0:
-            return {"ok": False, "kind": "error", "reason": f"pre worktree add failed: {msg.strip()}", "command": test_cmd}
-        pre = await _run_tests(wt_pre, test_cmd, compose_project=pre_proj)
+        # A29 (Batch 5-2): PRE-baseline cache. On a hit we skip the entire
+        # PRE worktree + docker stack + suite run (~50% of gate wall-time
+        # after the first BL of a sprint). Keyed on the exact target SHA —
+        # any merge moves the key, so a stale baseline is unreachable.
+        pre_cache_hit = False
+        pre = _pre_cache_load(repo_root, target_sha, test_cmd)
+        if pre is not None:
+            pre_cache_hit = True
+        else:
+            code, msg = await _git(["worktree", "add", "--detach", str(wt_pre), target_ref], cwd=repo_root)
+            if code != 0:
+                return {"ok": False, "kind": "error", "reason": f"pre worktree add failed: {msg.strip()}", "command": test_cmd}
+            pre = await _run_tests(wt_pre, test_cmd, compose_project=pre_proj)
+            # Cache only when the baseline itself is healthy: parseable
+            # results AND no infra marker in its tail — a DiskFull/OOM
+            # baseline must never be replayed as truth.
+            if not detect_infra_failure(pre.raw_tail):
+                _pre_cache_store(repo_root, target_sha, test_cmd, pre)
 
         code, msg = await _git(["worktree", "add", "--detach", str(wt_post), target_ref], cwd=repo_root)
         if code != 0:
@@ -484,7 +577,9 @@ async def run_gate(repo_root: Path, agent_branch: str, target_ref: str,
         # classify_gate_outcome — pure and unit-tested against the real
         # incident tails (161-fake-regressions, empty-regressions-with-
         # count, biome lint, DiskFull cascade).
-        return classify_gate_outcome(pre, post, test_cmd=test_cmd)
+        result = classify_gate_outcome(pre, post, test_cmd=test_cmd)
+        result["pre_cache_hit"] = pre_cache_hit  # A29: every hit is auditable
+        return result
     finally:
         for wt in (wt_pre, wt_post):
             await _git(["worktree", "remove", "--force", str(wt)], cwd=repo_root)
