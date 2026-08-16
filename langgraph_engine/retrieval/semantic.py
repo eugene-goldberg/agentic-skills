@@ -139,6 +139,70 @@ try {
     result = await context.indexCodebase(cmd.repo, null, cmd.force === true);
   } else if (cmd.op === 'search') {
     result = await context.semanticSearch(cmd.repo, cmd.query, cmd.k || 5);
+  } else if (cmd.op === 'search_multi') {
+    // Cross-repo search: fan the same query across N already-indexed
+    // collections, tag each hit with its repo, merge and rank globally.
+    // Repos with no collection are skipped (reported in `skipped`) rather
+    // than failing the call — a partially-indexed corpus still answers.
+    // IMPORTANT (ranking correctness): we do NOT reuse
+    // context.semanticSearch here. Its hybrid path returns Reciprocal Rank
+    // Fusion scores computed INDEPENDENTLY per collection (k=100, so
+    // 1/101, 2/101, 1/102...). Those encode rank-within-a-repo, not
+    // relevance — merging them globally makes a rank-1 hit in a 6-chunk
+    // repo tie a rank-1 hit in a 25k-chunk repo, so tiny repos dominate.
+    // Instead: embed the query ONCE and dense-search every collection with
+    // the same vector, which yields scores in one comparable space.
+    // Trade-off: this arm is dense-only (no BM25 half), so exact-identifier
+    // matching is weaker than single-repo semanticSearch. Documented, not
+    // accidental.
+    const repos = Array.isArray(cmd.repos) ? cmd.repos : [];
+    const k = cmd.k || 5;
+    const perRepo = cmd.per_repo_k || Math.max(k, 10);
+    const hits = [];
+    const skipped = [];
+    const searched = [];
+    const qv = (await embedding.embed(cmd.query)).vector;
+    for (const repo of repos) {
+      try {
+        const collectionName = context.getCollectionName(repo);
+        const exists = await vectorDatabase.hasCollection(collectionName);
+        if (!exists) { skipped.push({ repo, reason: 'no_collection' }); continue; }
+        const rs = await vectorDatabase.search(collectionName, qv, { topK: perRepo });
+        searched.push(repo);
+        const repoName = repo.split('/').filter(Boolean).pop();
+        for (const h of (rs || [])) {
+          const d = h.document || h;
+          hits.push({
+            relativePath: d.relativePath, startLine: d.startLine,
+            endLine: d.endLine, content: d.content,
+            fileExtension: d.fileExtension,
+            score: h.score ?? h.distance ?? 0, repo, repoName,
+          });
+        }
+      } catch (e) {
+        skipped.push({ repo, reason: String(e?.message || e).slice(0, 200) });
+      }
+    }
+    hits.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    // Diversity cap: without it the largest repo monopolizes the result set
+    // (a 25k-chunk web client crowds out the 6-chunk service that actually
+    // answers "which service does X?"). Greedy pass in score order keeps the
+    // best hit per repo before allowing seconds. max_per_repo unset = no cap.
+    let ranked = hits;
+    if (cmd.max_per_repo) {
+      const perRepoCount = {};
+      const primary = [];
+      const overflow = [];
+      for (const h of hits) {
+        const n = (perRepoCount[h.repoName] = (perRepoCount[h.repoName] || 0) + 1);
+        (n <= cmd.max_per_repo ? primary : overflow).push(h);
+      }
+      // Backfill with overflow only if the cap starved us of k results.
+      ranked = primary.concat(overflow);
+    }
+    result = { hits: ranked.slice(0, k), n_searched: searched.length,
+               skipped, ranking: 'dense_cosine_shared_query_vector',
+               max_per_repo: cmd.max_per_repo || null };
   } else if (cmd.op === 'has_index') {
     // Fast check: does the Milvus collection for this repo already have
     // rows? Used by SemanticRegistry to skip re-indexing across MCP-server
@@ -263,3 +327,22 @@ class SemanticRegistry:
                 return idx
         r = _run_bridge(self.node_dir, {"op": "search", "repo": str(repo), "query": query, "k": k})
         return r
+
+    def search_multi(self, repos: list[Path], query: str, k: int = 5,
+                     *, max_per_repo: int | None = None,
+                     timeout: int | None = None) -> dict:
+        """Cross-repo search over ALREADY-indexed collections.
+
+        Deliberately does NOT index-on-miss the way `search` does: a
+        corpus-wide search must never trigger a multi-hour indexing run as
+        a side effect. Un-indexed repos come back in `skipped` so the
+        caller can see what wasn't covered — silence about missing
+        coverage would be a worse failure than a partial answer (I-5).
+        """
+        if not repos:
+            return {"ok": False, "error": "no repos supplied", "result": {"hits": []}}
+        cmd = {"op": "search_multi", "repos": [str(p) for p in repos],
+               "query": query, "k": k}
+        if max_per_repo:
+            cmd["max_per_repo"] = int(max_per_repo)
+        return _run_bridge(self.node_dir, cmd, timeout=timeout)

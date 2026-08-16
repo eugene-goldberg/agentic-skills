@@ -157,6 +157,29 @@ grep -E "seq 1 60|PLAYWRIGHT_BASE_URL|--timeout=120" scripts/regression_gate.sh 
 the re-authored gate follows the current upstream template's
 `PLAYWRIGHT_BASE_URL` via compose.gate.yml.)*
 
+## PF-11 — Retrieval MCP server actually starts (A59)
+
+The single highest-value check: if this server can't start, agents get
+ZERO retrieval tools and run ungrounded — sprints then fail as
+`pre_grounding_violation` (or, worse, would produce unfounded work if
+Tier 1.5 were ever relaxed).
+
+```bash
+cd webapp/backend && RETRIEVAL_TARGET_REPO=<target> .venv/bin/python -c "
+import importlib.util, asyncio, warnings; warnings.filterwarnings('ignore')
+spec = importlib.util.spec_from_file_location('rs','mcp_servers/retrieval_server.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(sorted(t.name for t in asyncio.run(m.mcp.list_tools())))
+"
+```
+
+PASS when the output lists all six tools: `graph_find_similar`,
+`graph_neighbors`, `graph_summary`, `semantic_search`,
+`semantic_search_corpus`, `target_status`.
+
+Known breakages (both cost a live sprint on 2026-08-16): `mcp` missing
+from the venv, and `mcp>=2.0` (which removed `mcp.server.fastmcp`).
+
 ## When PASS
 
-All 10 green = safe to relaunch. Otherwise resolve the specific failure first; **do not rely on "things mostly look OK."**
+All 11 green = safe to relaunch. Otherwise resolve the specific failure first; **do not rely on "things mostly look OK."**

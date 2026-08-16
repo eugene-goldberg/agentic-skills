@@ -1,3 +1,5 @@
 fastapi>=0.111
 uvicorn[standard]>=0.30
 pydantic>=2.7
+# mcp 2.0 removed mcp.server.fastmcp (used by mcp_servers/retrieval_server.py)
+mcp>=1.9,<2

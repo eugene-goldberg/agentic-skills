@@ -14,7 +14,12 @@ Configured via env vars (set by the spawner in claude_agent.py):
 
 Run: `python -m mcp_servers.retrieval_server` from webapp/backend.
 """
-from __future__ import annotations
+# NOTE: deliberately NOT using `from __future__ import annotations`.
+# FastMCP (mcp 1.9.x) introspects tool signatures with issubclass(), which
+# raises TypeError on the *string* annotations that the future-import
+# produces — every @mcp.tool() registration fails and the server never
+# starts, which silently strips retrieval from every agent (see A59).
+# Python 3.12 evaluates `X | Y` natively, so nothing here needs it.
 
 import json
 import os
@@ -92,6 +97,24 @@ if _tgt:
     graphs.register("target", p)
     semantics.register("target", p)
     sources["target"] = p
+
+# Cross-repo corpus (optional). RETRIEVAL_CORPUS_ROOT names a directory whose
+# git subdirectories were indexed ahead of time (see
+# scripts/batch_index_repos.py). RETRIEVAL_CORPUS_REPOS is the explicit
+# alternative: an os.pathsep-separated list of repo paths. Unset → the
+# corpus tool reports itself unconfigured and is otherwise inert, so this
+# changes nothing for a normal per-BL agent spawn.
+corpus_repos: list[Path] = []
+_corpus_root = os.getenv("RETRIEVAL_CORPUS_ROOT")
+_corpus_list = os.getenv("RETRIEVAL_CORPUS_REPOS")
+if _corpus_list:
+    corpus_repos = [Path(x).resolve() for x in _corpus_list.split(os.pathsep)
+                    if x.strip()]
+elif _corpus_root:
+    root = Path(_corpus_root).expanduser().resolve()
+    if root.is_dir():
+        corpus_repos = sorted(p.resolve() for p in root.iterdir()
+                              if (p / ".git").exists())
 
 _calls = {"n": 0}
 
@@ -253,6 +276,60 @@ def semantic_search(query: str, k: int = 5, source: str = "reference") -> dict:
         })
     _log({"tool": "semantic_search", "query": query, "source": source, "n_hits": len(hits)})
     return {"ok": True, "source": source, "query": query, "hits": hits}
+
+
+@mcp.tool()
+def semantic_search_corpus(query: str, k: int = 8, max_per_repo: int = 3) -> dict:
+    """Hybrid semantic+keyword search ACROSS every repo in the configured
+    corpus (e.g. all EA service repos), ranked globally.
+
+    Use this for cross-repo questions — "which service publishes the waste
+    shipment event?", "where is the APIM policy for the odata route?" —
+    where the answer may live in a repo other than the current target.
+    Each hit names the repo it came from. Only pre-indexed repos are
+    searched; anything not indexed is reported in `not_searched` so you can
+    see what the answer did NOT cover.
+
+    Args:
+        query: natural-language description of what you're looking for.
+        k: number of hits across the whole corpus (1-20).
+        max_per_repo: cap hits from any single repo so one large repo can't
+            monopolize the answer (default 3; 0 = uncapped).
+    """
+    if (b := _budget("semantic_search_corpus")): return b
+    if not corpus_repos:
+        return {"ok": False, "query": query, "hits": [],
+                "error": ("no corpus configured; set RETRIEVAL_CORPUS_ROOT "
+                          "(a dir of git repos) or RETRIEVAL_CORPUS_REPOS")}
+    k = max(1, min(int(k), 20))
+    try:
+        r = semantics.search_multi(corpus_repos, query, k=k,
+                                   max_per_repo=(int(max_per_repo) or None))
+    except Exception as exc:  # noqa: BLE001
+        msg = f"{type(exc).__name__}: {exc}"
+        _log({"tool": "semantic_search_corpus", "query": query, "error": msg})
+        return {"ok": False, "query": query, "error": msg, "hits": []}
+    if not r.get("ok"):
+        _log({"tool": "semantic_search_corpus", "query": query, "error": r.get("error")})
+        return {**r, "hits": []}
+    res = r.get("result") or {}
+    hits = []
+    for h in res.get("hits", []) or []:
+        hits.append({
+            "repo": h.get("repoName"),
+            "file": h.get("relativePath"),
+            "start_line": h.get("startLine"),
+            "end_line": h.get("endLine"),
+            "snippet": (h.get("content") or "")[:SNIPPET_MAX_CHARS],
+        })
+    not_searched = [s.get("repo", "").rstrip("/").split("/")[-1]
+                    for s in (res.get("skipped") or [])]
+    _log({"tool": "semantic_search_corpus", "query": query,
+          "n_hits": len(hits), "n_searched": res.get("n_searched"),
+          "n_skipped": len(not_searched)})
+    return {"ok": True, "query": query, "hits": hits,
+            "repos_searched": res.get("n_searched"),
+            "not_searched": not_searched}
 
 
 @mcp.tool()
