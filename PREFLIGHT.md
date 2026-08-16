@@ -129,7 +129,7 @@ git worktree prune
 cd webapp/backend && .venv/bin/python -m pytest tests/ 2>&1 | tail -3
 ```
 
-PASS when N/N passes (expect ≥176 as of 2026-06-02).
+PASS when N/N passes (expect ≥291 as of 2026-08-16).
 
 ## PF-9 — Docker leak watch
 
@@ -147,10 +147,15 @@ ls _brownfield/features/<slug>/BACKLOG.md _brownfield/features/<slug>/brief.md
 ls scripts/regression_gate.sh compose.gate.yml .agentic-skills.json
 ```
 
-PASS when all four files present. Also verify `scripts/regression_gate.sh` has both gate fixes (180s budget, PLAYWRIGHT_TEST_BASE_URL):
+PASS when all four files present. Also verify `scripts/regression_gate.sh`
+is the 2026-08-16 re-authored version (health-wait budget + playwright
+base-url env + A32 per-test timeout):
 ```bash
-grep -E "seq 1 60|PLAYWRIGHT_TEST_BASE_URL" scripts/regression_gate.sh
+grep -E "seq 1 60|PLAYWRIGHT_BASE_URL|--timeout=120" scripts/regression_gate.sh compose.gate.yml
 ```
+*(Historical note: the pre-migration gate used `PLAYWRIGHT_TEST_BASE_URL`;
+the re-authored gate follows the current upstream template's
+`PLAYWRIGHT_BASE_URL` via compose.gate.yml.)*
 
 ## When PASS
 
