@@ -17,8 +17,8 @@
 |---|---|---|---|
 | 0-1 | Memory symlink restored | done | `setup_memory_symlink.sh` → `~/.claude/projects/<enc>/memory` links to repo `.claude/memory` (2026-08-15) |
 | 0-2 | venv + full suite green | done | uv-managed Python 3.12.12; `pytest tests/` → **208/208** (matches 2026-06-02 handoff posture) |
-| 0-3 | Brownfield target restore | **blocked (operator)** | `~/dev/ai-projects/brownfield-targets/` absent on migrated machine (`/Users/egoldberg`). Prior sprint state (branches `agentic-skills-work*`, Journey 03 findings ledger) recoverable only from old-machine backup; fallback = fresh upstream clone + `RUNBOOK_clean_brownfield_reset.md`. Not needed for Batches 1–4 unit-tested code. |
-| 0-4 | Docker / Milvus / Ollama | **partial** | Docker Desktop present, daemon started this session. Milvus stack not yet recreated (needs volumes/compose — old state gone). Ollama not installed (no brew; GUI app install → operator). Needed for live smokes only. |
+| 0-3 | Brownfield target restore | **done 2026-08-16 (C-0)** | Fresh upstream clone @ `75b4026` (prior sprint state unrecoverable — Journey 03 finding gone; C-5 re-creates on a new sprint). Branch `agentic-skills-work` with 9 harness commits: config, gate overlay, re-authored `regression_gate.sh` (A39a/A32/A28 contract), gitignore hygiene (A35). **Gate live-verified GREEN end-to-end**: 5 sentinels + 60 pytest + 62 playwright (4 workers, 11s), exit 0, zero leftover containers. Seven environment/template drifts found+fixed during verification: FASTAPI_ENV validator gate, no macOS coreutils `timeout` (perl-alarm shim), uv-image pip, `backend/tests` relocation, tests excluded from prod image (ro mount), pytest↔e2e DB-state contamination (phase reset). |
+| 0-4 | Docker / Milvus / Ollama | **done 2026-08-16 (C-0)** | Milvus 3-container stack healthy (:19530 + /healthz OK); standalone ollama CLI at `~/.local/bin` serving bge-m3 (1024-dim probe verified); `webapp/.env` recreated; `bridge.js` regenerated from semantic.py via AST + npm deps installed; graphify in venv; end-to-end bridge index of target: **164 files → 1305 chunks**. PF-1..10 ALL GREEN (uvicorn + 4 A48 fixes loaded; suite 291/291; Docker.raw cap on this machine is 926G sparse — the old 60G ceiling is gone). |
 | 0-5 | Ledger entries A49–A57 | done | Filed in `DESIGN_SHORTCOMINGS.md` with class + invariant back-refs, each cross-referencing its plan batch |
 
 ---
@@ -79,7 +79,7 @@
 
 | ID | Item | Status |
 |---|---|---|
-| 5-1 | A28 playwright workers (target-side) | blocked on 0-3 |
+| 5-1 | A28 playwright workers (target-side) | done — baked into the re-authored gate (`--workers=4 --retries=1`); 62 e2e in 11s |
 | 5-2 | A29 PRE-baseline cache | done — SHA+cmd-keyed, TTL 24h, infra-poisoned baselines never cached, `pre_cache_hit` auditable in gate events; second gate runs POST only |
 | 5-3 | Cost aggregation | done — result-frame `total_cost_usd` → `bl.done cost_usd` + `sprint_complete total_cost_usd`/`cost_by_role` (all 7 passthrough sites) |
 | 5-4 | `max_sprint_usd` cap | done — checked between BLs; over-cap → `deferred_budget` + `budget_exhausted` event + worst-wins label |
