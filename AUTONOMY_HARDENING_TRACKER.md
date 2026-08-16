@@ -91,6 +91,47 @@
 
 ---
 
+## Calibration ladder (plan §9b)
+
+### C-0 — environment restore ✅ 2026-08-16
+PF-1..11 green; gate live-verified (5 sentinels + 60 pytest + 62 playwright, exit 0).
+
+### C-1 — mechanics smokes ✅ 2026-08-16
+Run `run-20260816T163240Z-55d69e` (1 BL, detached, ~50 min):
+
+| Check | Result |
+|---|---|
+| Detached submit → 202 immediate | ✅ |
+| Viewer disconnect mid-run (`curl --max-time 5`) | ✅ run continued to completion (verified on the earlier attempt) |
+| `POST /abort` + cleanup contract | ✅ (verified on the aborted attempt: exit 143, 0 worktrees, lock released, state→done/) — **surfaced A58** |
+| Event replay / `Last-Event-ID` resume | ✅ 820/820 replay; `Last-Event-ID: 815`→4; `from_index=818`→2 |
+| Outcome | ✅ `merged_full`, scorer **Pass 93/100** |
+| Gates | ✅ 2/2 green (engineer 75 passed, QA 88 passed — QA added 13 tests, 0 regressions) |
+| Merges | ✅ 2 FF (`6709786` engineer, `a3d65b1` QA) |
+| Cost aggregation (5-3) | ✅ **$10.12** total — po $1.43, engineer $2.28, qa $3.22, scorer $3.19; `bl.done cost_usd` $8.69 |
+| Sprint memory (6-1) | ✅ `lessons_count=1` (scorer doctrine retry recorded) |
+| Closure | ✅ 0 violations |
+| Retrieval grounding | ✅ 6/5/5/8 calls across po/engineer/qa/scorer — **validates the A59 fix** |
+
+**A59 (critical) found and fixed by this rung**: the retrieval MCP server
+could not start at all, so the *first* C-1 attempt ran every agent with
+ZERO retrieval tools; only Tier 1.5's `pre_grounding_violation` caught it.
+That attempt's result is void as grounding evidence — this row records the
+re-run after the fix.
+
+**Correction — A29 (5-2) value was overstated.** Both gates in this run
+show `pre_cache_hit=False`, and that is CORRECT: `target_ref` (the agent
+branch) advances after each merge, so a QA gate never shares the
+engineer gate's baseline SHA. The cache therefore hits only where the
+baseline is genuinely unchanged — **gate retries within a role** (R10.2)
+and post-rebase re-gates — not "~50% of gate wall-time after the first
+BL" as the Batch-5 commit claimed. Real but narrower. Follow-up idea
+(unbuilt): let a QA gate reuse the engineer gate's POST result as its
+PRE baseline, since the just-merged, fully-tested tree *is* the new
+baseline.
+
+### C-2 — triage calibration sprint ⬜ next (operator reviews every triage.md)
+
 ## End-state test (plan §9)
 
 - [ ] Live sprint: detached submit → disconnect → planted flaky BL defers with dependent → completes-with-deferrals under budget → reconnect replays history → closure_check 0 violations
