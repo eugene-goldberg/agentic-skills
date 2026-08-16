@@ -41,6 +41,7 @@ from app.services import findings_ledger as findings_ledger_svc
 from app.services.brownfield import classify_target, feature_artifact_dir
 from app.services.claude_agent import stream_agent_task
 from app.services.git_worktree import (
+    _run as _git_run,
     Worktree,
     create_worktree,
     fast_forward_target,
@@ -265,6 +266,77 @@ async def _run_indexers(repo_dir: Path, label: str) -> AsyncIterator[dict]:
         graphify={"ok": getattr(gr, "get", lambda *_: None)("ok") if isinstance(gr, dict) else False,
                   "summary": gr if isinstance(gr, dict) else str(gr)},
     )
+
+
+# ─── Batch 7-2 (A53): retrieval health is checked, not hoped for ────────────
+#
+# Before this, _run_indexers' ok-flags were yielded into the stream and
+# consulted by NO code path: a Milvus death after preflight meant every
+# reindex failed silently and agents grounded against stale embeddings
+# while Tier 1.5 counted their calls as "grounded." The crew's defining
+# property — groundedness — had no runtime health check.
+
+
+def _indexer_done_ok(evt: dict) -> bool:
+    """An indexer .done event is unhealthy only on an EXPLICIT ok=False —
+    absent keys (legacy/stub events) don't fail the check."""
+    cc = evt.get("claude_context")
+    gr = evt.get("graphify")
+    if isinstance(cc, dict) and cc.get("ok") is False:
+        return False
+    if isinstance(gr, dict) and gr.get("ok") is False:
+        return False
+    return True
+
+
+async def _restart_milvus(timeout_s: float = 30.0) -> bool:
+    """A3's preflight restart pattern, now available mid-sprint: try
+    `docker start milvus-standalone` once and wait for :19530. Best-effort;
+    False on any failure."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "start", "milvus-standalone",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=15.0)
+    except Exception:  # noqa: BLE001
+        return False
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", 19530), timeout=2.0)
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:  # noqa: BLE001
+                pass
+            return True
+        except Exception:  # noqa: BLE001
+            await asyncio.sleep(1.0)
+    return False
+
+
+async def _run_indexers_checked(repo_dir: Path, label: str) -> AsyncIterator[dict]:
+    """_run_indexers + health verdict. Yields all indexer events; on an
+    unhealthy .done, attempts one Milvus restart + one re-run. The final
+    yield is a sentinel ``{"_indexers_ok": bool}`` the caller consumes
+    (never forwarded to the stream)."""
+    ok = True
+    async for e in _run_indexers(repo_dir, label):
+        if str(e.get("phase", "")).endswith(".done"):
+            ok = _indexer_done_ok(e)
+        yield e
+    if not ok:
+        restarted = await _restart_milvus()
+        yield _evt(f"{label}.milvus_restart", ok=restarted)
+        ok = True
+        async for e in _run_indexers(repo_dir, f"{label}.retry"):
+            if str(e.get("phase", "")).endswith(".done"):
+                ok = _indexer_done_ok(e)
+            yield e
+    yield {"_indexers_ok": ok}
 
 
 # ─── Batch 6 (M1): within-sprint lesson memory ──────────────────────────────
@@ -500,10 +572,40 @@ async def _po_flow(
             add_paths = ["_brownfield/"]
             if not feature_slug:
                 add_paths.insert(0, ".agile-v/")
-            subprocess.run(["git", "add", *add_paths], cwd=repo_dir, check=False)
-            subprocess.run(["git", "commit", "-m", f"po: import backlog from {wt.branch}",
-                           "--author", "Claude PO Agent <po@webapp.local>"],
-                          cwd=repo_dir, check=False)
+            # Batch 7-1b (A51): the old check=False pair swallowed every
+            # failure (hooks, index lock, wrong branch) — the sprint then
+            # proceeded with worktrees forked WITHOUT PO context, surfacing
+            # as inexplicable downstream doctrine failures. Verify instead:
+            # after add+commit, no artifact-path changes may remain
+            # uncommitted ("nothing to commit" is fine — status is empty).
+            add_rc = subprocess.run(["git", "add", *add_paths], cwd=repo_dir,
+                                    check=False, capture_output=True, text=True)
+            commit_rc = subprocess.run(
+                ["git", "commit", "-m", f"po: import backlog from {wt.branch}",
+                 "--author", "Claude PO Agent <po@webapp.local>"],
+                cwd=repo_dir, check=False, capture_output=True, text=True)
+            status_rc = subprocess.run(
+                ["git", "status", "--porcelain", "--", *add_paths],
+                cwd=repo_dir, check=False, capture_output=True, text=True)
+            leftover = (status_rc.stdout or "").strip()
+            commit_ok = not leftover
+            if commit_ok:
+                sha_rc = subprocess.run(["git", "rev-parse", "HEAD"],
+                                        cwd=repo_dir, check=False,
+                                        capture_output=True, text=True)
+                yield _ptag({"type": "_meta", "phase": "po_commit", "ok": True,
+                            "sha": (sha_rc.stdout or "").strip()[:12]},
+                           "po", trace=trace)
+            else:
+                yield _ptag({"type": "_meta", "phase": "po_commit", "ok": False,
+                            "leftover": leftover[:400],
+                            "add_stderr": (add_rc.stderr or "")[:200],
+                            "commit_stderr": (commit_rc.stderr or "")[:200]},
+                           "po", trace=trace)
+            yield {"_orchestrator_outcome": True, "role": "po",
+                   "doctrine_ok": validation["ok"] and commit_ok,
+                   "commit_failed": not commit_ok}
+            return
         yield {"_orchestrator_outcome": True, "role": "po", "doctrine_ok": validation["ok"]}
     finally:
         if trace is not None:
@@ -2206,9 +2308,57 @@ async def run_brief(
                 cost_by_role[role] = round(cost_by_role.get(role, 0.0) + c, 6)
             return c
 
+        # ── Batch 7-1 (A51): main-checkout invariants become code ─────────────
+        # The PO copy-back commits to the main checkout and every merge
+        # checks out cfg.agent_branch there; "the checkout is on
+        # agent_branch and clean" was enforced only by PREFLIGHT.md PF-6 —
+        # an operator checklist, exactly the human-attention dependency the
+        # project exists to remove. Verify in code, BEFORE any agent spawns.
+        cfg_pf = repo_config_svc.load(repo_dir)
+        _b_code, _b_out, _ = await _git_run(
+            ["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=repo_dir)
+        _cur_branch = _b_out.strip() if _b_code == 0 else None
+        _ref_code, _, _ = await _git_run(
+            ["git", "rev-parse", "--verify", "--quiet", cfg_pf.agent_branch],
+            cwd=repo_dir)
+        if _ref_code == 0 and _cur_branch != cfg_pf.agent_branch:
+            yield _evt("pre_flight.checkout", ok=False,
+                       current_branch=_cur_branch,
+                       expected=cfg_pf.agent_branch)
+            yield _evt("aborted",
+                       reason=(f"main checkout is on {_cur_branch!r}, expected "
+                               f"agent_branch {cfg_pf.agent_branch!r} (A51). "
+                               "Checkout the agent branch, then resubmit."))
+            return
+        _s_code, _s_out, _ = await _git_run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=repo_dir)
+        if _s_code == 0 and _s_out.strip():
+            yield _evt("pre_flight.checkout", ok=False,
+                       dirty=_s_out.strip()[:400])
+            yield _evt("aborted",
+                       reason=("main checkout has modified tracked files (A51); "
+                               "commit or stash them, then resubmit."))
+            return
+        yield _evt("pre_flight.checkout", ok=True,
+                   branch=_cur_branch,
+                   agent_branch_exists=(_ref_code == 0))
+
         # ── Step 2-3: initial indexing ─────────────────────────────────────────
-        async for e in _run_indexers(repo_dir, "index_initial"):
+        # 7-2 (A53): a failed INITIAL index makes grounding impossible —
+        # abort early rather than run a whole sprint on empty retrieval.
+        _idx_ok = True
+        async for e in _run_indexers_checked(repo_dir, "index_initial"):
+            if "_indexers_ok" in e:
+                _idx_ok = e["_indexers_ok"]
+                continue
             yield e
+        if not _idx_ok:
+            yield _evt("aborted",
+                       reason=("initial indexing failed after Milvus restart "
+                               "attempt (A53); agents would run ungrounded. "
+                               "Fix the retrieval stack (PF-2/PF-3/PF-5)."))
+            return
 
         # ── Step 4: PO ─────────────────────────────────────────────────────────
         po_ok = True
@@ -2226,7 +2376,13 @@ async def run_brief(
                 yield e
             yield _evt("po.done", ok=po_ok)
             if not po_ok and stop_on_failure:
-                yield _evt("aborted", reason="PO doctrine failed")
+                _po_out = summary.get("po") or {}
+                yield _evt("aborted",
+                           reason=("PO artifact commit failed (A51) — backlog "
+                                   "never landed on the main checkout; see the "
+                                   "po_commit event for git detail"
+                                   if _po_out.get("commit_failed")
+                                   else "PO doctrine failed"))
                 return
 
         # ── Step 4 cont: parse backlog ─────────────────────────────────────────
@@ -2458,8 +2614,22 @@ async def run_brief(
                 continue
             else:
                 # Reindex post-engineer (only when engineer actually committed)
-                async for e in _run_indexers(repo_dir, f"reindex_after_engineer.{bl_id}"):
+                _idx_ok = True
+                async for e in _run_indexers_checked(repo_dir, f"reindex_after_engineer.{bl_id}"):
+                    if "_indexers_ok" in e:
+                        _idx_ok = e["_indexers_ok"]
+                        continue
                     yield e
+                if not _idx_ok:
+                    # 7-2 (A53): QA would ground against STALE embeddings while
+                    # Tier 1.5 counts its calls as grounded. Never silent.
+                    yield _evt("indexing_degraded", bl_id=bl_id,
+                               stage="reindex_after_engineer",
+                               reason="reindex failed after Milvus restart; retrieval is stale from this point")
+                    if stop_on_failure:
+                        yield _evt("aborted",
+                                   reason=f"reindex after engineer failed for {bl_id} (A53)")
+                        return
 
             # QA
             yield _evt("qa.start", bl_id=bl_id)
@@ -2561,8 +2731,20 @@ async def run_brief(
                 continue
 
             # Reindex post-QA (QA may add characterization tests)
-            async for e in _run_indexers(repo_dir, f"reindex_after_qa.{bl_id}"):
+            _idx_ok = True
+            async for e in _run_indexers_checked(repo_dir, f"reindex_after_qa.{bl_id}"):
+                if "_indexers_ok" in e:
+                    _idx_ok = e["_indexers_ok"]
+                    continue
                 yield e
+            if not _idx_ok:
+                yield _evt("indexing_degraded", bl_id=bl_id,
+                           stage="reindex_after_qa",
+                           reason="reindex failed after Milvus restart; retrieval is stale from this point")
+                if stop_on_failure:
+                    yield _evt("aborted",
+                               reason=f"reindex after QA failed for {bl_id} (A53)")
+                    return
 
             # Scorer
             yield _evt("scorer.start", bl_id=bl_id)

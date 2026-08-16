@@ -779,7 +779,36 @@ specific BL after triage. *Never* the framework's choice.
 
 ---
 
-## 11. Pointers
+## 11. Trust model (A52 / A47 — read before pointing the crew at a new target)
+
+Added 2026-08-16 (autonomy-hardening Batch 7-3). The security boundaries
+that DO and DO NOT exist:
+
+1. **Target-repo content is untrusted input.** Retrieval chunks, file
+   reads, and test output from the brownfield target all flow into agent
+   prompts. A malicious or poisoned target is a prompt-injection vector.
+2. **`--allowedTools` is NOT a security boundary.** A47 (4 worked
+   examples): built-in CLI tools (`ScheduleWakeup`, `Glob`, …) bypass the
+   allowlist silently. Doctrine that names allowed tools is behavioral
+   guidance, enforced only where the harness adds a streaming-side check
+   (Tier 1.5, R8, R13).
+3. **Agents run `--dangerously-skip-permissions` with unrestricted Bash**
+   in their worktree. R13 blocks history-rewriting git; nothing blocks
+   `curl`, package installs, or arbitrary computation.
+4. **The agent env is allowlisted (A52).** Since Batch 7-3, agent
+   subprocesses receive only shell basics + git identity + claude auth
+   (`HOME`, `CLAUDE_*`, `ANTHROPIC_*`, `AWS_*`, `GOOGLE_*`/`VERTEX_*`) +
+   proxy vars. Retrieval secrets (`AZURE_OPENAI_*`, `OPENAI_API_KEY`,
+   `MILVUS_*`) reach only the MCP *server* via its own config env, never
+   the agent process. Operator knobs: `AGENT_ENV_ALLOWLIST="V1,V2"`
+   extends; `AGENT_ENV_PASSTHROUGH_ALL=1` is the emergency full-inherit
+   rollback.
+5. **What remains open (deferred per operator decision D4):** container-
+   jailed Bash, filesystem scoping beyond the worktree, and network
+   egress control. Until that track lands, point the crew only at targets
+   you trust as much as your own shell.
+
+## 12. Pointers
 
 - `THESIS.md` — the mission and definition-of-done
 - `ARCHITECTURE_INVARIANTS.md` — I-1..I-7 in detail

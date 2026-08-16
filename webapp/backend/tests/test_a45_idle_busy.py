@@ -62,6 +62,9 @@ def _setup(tmp_path: Path, monkeypatch, mode: str) -> Path:
     cli.chmod(cli.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("CLAUDE_BIN", str(cli))
     monkeypatch.setenv("FAKE_CLAUDE_MODE", mode)
+    # A52 allowlist: FAKE_CLAUDE_MODE isn't a passthrough var; use the
+    # operator-extension mechanism (which this also exercises).
+    monkeypatch.setenv("AGENT_ENV_ALLOWLIST", "FAKE_CLAUDE_MODE")
     return repo
 
 

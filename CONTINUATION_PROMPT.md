@@ -5,7 +5,7 @@
 > (2) `AUTONOMY_HARDENING_PLAN.md` authorized (decisions D1–D6);
 > (3) **Batches 0–4 executed and committed** on the new branch
 > `autonomy-hardening` (off `architect-prereqs` @ `8745331`).
-> Backend suite: **266/266** (was 208).
+> Backend suite: **291/291** (was 208; Batches 5–7 landed 2026-08-16).
 >
 > ⚠️ **Machine migration:** this checkout now lives under
 > `/Users/egoldberg` (was `/Users/eugenegoldberg`). venv + memory
@@ -44,13 +44,10 @@ Python 3.12 (`~/.local/bin/uv`).
 
 ## 3. Open work (in priority order)
 
-1. **Batches 5–7 of AUTONOMY_HARDENING_PLAN.md** — authorized (D6),
-   unstarted, independent of each other:
-   - 5: A29 PRE-baseline gate cache, cost aggregation + `max_sprint_usd`
-     cap (5-1 playwright workers is target-side, blocked on env)
-   - 6: `LESSONS.jsonl` within-sprint memory + prompt injection
-   - 7: checkout preflight + checked PO commit (A51); indexer health
-     check (A53); agent env allowlist (A52)
+1. **AUTONOMY_HARDENING_PLAN.md is fully executed** (Batches 0–7;
+   commits `f5ab92c` Batch 5, `9e33cfc` Batch 6, Batch 7 in the
+   tracker-final commit; suite **291/291**). Only 5-1 (target-side
+   playwright workers) remains, blocked on the environment.
 2. **Environment restore (tracker 0-3/0-4, operator-blocked):**
    brownfield target (old-machine backup or fresh clone +
    `RUNBOOK_clean_brownfield_reset.md`), Milvus stack, Ollama+bge-m3.

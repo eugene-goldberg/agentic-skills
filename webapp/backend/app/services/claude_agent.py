@@ -125,6 +125,48 @@ def _claude_binary() -> str:
     return os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
 
 
+# ─── Batch 7-3 (A52): agent env allowlist ────────────────────────────────────
+#
+# Before this the agent subprocess inherited the ENTIRE server environment
+# ({**os.environ}) under --dangerously-skip-permissions — every retrieval
+# secret (AZURE_OPENAI_API_KEY, OPENAI_API_KEY, MILVUS_TOKEN, ...) was
+# visible to an agent whose inputs include UNTRUSTED target-repo content.
+# The agent needs none of them: retrieval secrets flow to the MCP *server*
+# via its own config env (see _build_retrieval_mcp_config). What the agent
+# process legitimately needs: shell basics, git identity, claude auth
+# (~/.claude via HOME, or ANTHROPIC_/AWS_/GOOGLE_ vars for API/Bedrock/
+# Vertex routing), and proxy settings.
+#
+# Escape hatches (operator-controlled):
+# - AGENT_ENV_ALLOWLIST="VAR1,VAR2"  — extend with specific extra vars
+# - AGENT_ENV_PASSTHROUGH_ALL=1      — restore full inheritance (emergency
+#   rollback without a redeploy; logged via the spawn event)
+
+_ENV_EXACT = {
+    "HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM", "LANG",
+    "TZ", "COLUMNS", "NODE_OPTIONS",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+}
+_ENV_PREFIXES = (
+    "CLAUDE_", "ANTHROPIC_", "AWS_", "GOOGLE_", "VERTEX_", "GIT_",
+    "LC_", "XDG_", "SSL_",
+)
+
+
+def _agent_env() -> dict[str, str]:
+    """Build the agent subprocess environment (A52 allowlist)."""
+    if os.environ.get("AGENT_ENV_PASSTHROUGH_ALL") == "1":
+        return dict(os.environ)
+    extra = {v.strip() for v in os.environ.get("AGENT_ENV_ALLOWLIST", "").split(",")
+             if v.strip()}
+    env: dict[str, str] = {}
+    for k, v in os.environ.items():
+        if k in _ENV_EXACT or k in extra or k.startswith(_ENV_PREFIXES):
+            env[k] = v
+    return env
+
+
 def _agent_model() -> str | None:
     """A56 (Batch 2-4): explicit model pin for agent spawns. Without it the
     crew's behavior (and every rubric calibration) silently changes with
@@ -323,8 +365,10 @@ async def stream_agent_task(
         trace.set_prompt(prompt)
         trace.set_cmd(cmd)
 
+    # A52 (Batch 7-3): allowlisted env — retrieval secrets never reach the
+    # agent process (they flow to the MCP server via its own config env).
     env = {
-        **os.environ,
+        **_agent_env(),
         "GIT_AUTHOR_NAME": os.environ.get("GIT_AUTHOR_NAME", "Claude Agent"),
         "GIT_AUTHOR_EMAIL": os.environ.get("GIT_AUTHOR_EMAIL", "agent@webapp.local"),
         "GIT_COMMITTER_NAME": os.environ.get("GIT_COMMITTER_NAME", "Claude Agent"),

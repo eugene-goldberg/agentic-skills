@@ -85,9 +85,9 @@
 | 5-4 | `max_sprint_usd` cap | done — checked between BLs; over-cap → `deferred_budget` + `budget_exhausted` event + worst-wins label |
 | 6-1 | `LESSONS.jsonl` + prompt injection block | done — resolved doctrine/gate retries append (engineer + qa/scorer sites); last 10 injected into engineer/QA task sections; empty file = zero prompt noise |
 | 6-2 | Sprint-close lesson export | done — `sprint_complete` carries lessons_count/path; LESSONS.jsonl copied into `traces_archive/<run_id>/`; doctrine-meta prompt points at it when present |
-| 7-1 | Checkout preflight + checked PO commit (A51) | pending |
-| 7-2 | Indexer health check + mid-sprint Milvus restart (A53) | pending |
-| 7-3 | Agent env allowlist (A52) | pending |
+| 7-1 | Checkout preflight + checked PO commit (A51) | done — PF-6 in code (wrong branch/dirty tracked → abort pre-spawn; lenient when agent_branch ref absent); PO commit verified via post-commit status of artifact paths; hook-blocked commit → structured `po_commit ok=false` + abort with honest reason |
+| 7-2 | Indexer health check + mid-sprint Milvus restart (A53) | done — `_run_indexers_checked` (explicit ok=False fails; one `docker start milvus-standalone` + retry); initial-index failure aborts pre-spawn; mid-sprint reindex failure → loud `indexing_degraded` (+abort under stop_on_failure) |
+| 7-3 | Agent env allowlist (A52) | done — `_agent_env()`: shell basics + git identity + claude auth (CLAUDE_/ANTHROPIC_/AWS_/GOOGLE_/VERTEX_) + proxies; AZURE_OPENAI_*/OPENAI_*/MILVUS_* excluded (MCP server config env unaffected); `AGENT_ENV_ALLOWLIST` extension + `AGENT_ENV_PASSTHROUGH_ALL=1` escape hatch; HARNESS.md §11 trust model |
 
 ---
 
@@ -104,9 +104,11 @@
 
 ## Sign-off
 
-- [ ] Batch 0 — architect note: 0-1/0-2/0-5 done; 0-3/0-4 operator-blocked items listed above
-- [ ] Batch 1 —
-- [ ] Batch 2 —
-- [ ] Batch 3 —
-- [ ] Batch 4 —
-- [ ] Batches 5–7 —
+- [x] Batch 0 — architect (Fable 5), 2026-08-15: 0-1/0-2/0-5 done; 0-3/0-4 operator-blocked items listed above
+- [x] Batch 1 — architect, 2026-08-15: `f333e20`; suite 223/223
+- [x] Batch 2 — architect, 2026-08-15: `1868229`; suite 246/246
+- [x] Batch 3 — architect, 2026-08-15: `9728f0a`; suite 258/258
+- [x] Batch 4 — architect, 2026-08-15: `f2ab112`; suite 266/266
+- [x] Batches 5–7 — architect, 2026-08-16: `f5ab92c` (5), `9e33cfc` (6), + this commit (7); suite 291/291. 5-1 remains blocked on target restore.
+- [ ] Live smokes + calibration sprints — **operator-blocked on 0-3/0-4 environment restore**
+- [ ] Merge-back to `architect-prereqs` (or main) — operator's call after review
