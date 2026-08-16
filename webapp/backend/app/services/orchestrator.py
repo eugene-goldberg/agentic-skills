@@ -267,6 +267,83 @@ async def _run_indexers(repo_dir: Path, label: str) -> AsyncIterator[dict]:
     )
 
 
+# ─── Batch 6 (M1): within-sprint lesson memory ──────────────────────────────
+#
+# Before this, each agent spawn was amnesiac: BL-0001's three gate retries
+# teaching "migrations here use snake_case" left ZERO artifact that
+# BL-0004's engineer saw — the same lesson was re-purchased at full gate
+# price per BL. Now: whenever a retry RESOLVES (doctrine fail→pass, gate
+# fail→green), the orchestrator appends the failure signature to
+# ``_brownfield/features/<slug>/LESSONS.jsonl``, and subsequent
+# engineer/QA prompts carry the last N as a "lessons already paid for"
+# block. Facts only — the failure that occurred and that it was fixable —
+# no model-generated lore (ABL-0007 cross-sprint memory stays separate).
+
+_LESSONS_MAX_INJECTED = 10
+_LESSON_FIELD_CAP = 200
+
+
+def _lessons_path(repo_dir: Path, feature_slug: str | None) -> Path:
+    art = feature_artifact_dir(repo_dir, feature_slug)
+    return repo_dir / art / "LESSONS.jsonl"
+
+
+def _append_lesson(repo_dir: Path, feature_slug: str | None, *,
+                   bl_id: str, role: str, phase: str,
+                   failure: str, resolved_on_attempt: int) -> None:
+    """Best-effort append of a resolved-failure record. Never raises —
+    lessons are an accelerant, not a dependency."""
+    try:
+        p = _lessons_path(repo_dir, feature_slug)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        rec = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "bl_id": bl_id,
+            "role": role,
+            "phase": phase,  # "doctrine" | "gate"
+            "failure": (failure or "")[:_LESSON_FIELD_CAP],
+            "resolved_on_attempt": resolved_on_attempt,
+        }
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, default=str) + "\n")
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def _lessons_block(repo_dir: Path, feature_slug: str | None,
+                   *, n: int = _LESSONS_MAX_INJECTED) -> str:
+    """Render the last N lessons as a prompt block. Empty string when no
+    lessons exist (zero prompt noise on clean sprints)."""
+    p = _lessons_path(repo_dir, feature_slug)
+    if not p.exists():
+        return ""
+    try:
+        lines = p.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    recs = []
+    for line in lines[-n:]:
+        try:
+            recs.append(json.loads(line))
+        except ValueError:
+            continue
+    if not recs:
+        return ""
+    bullets = "\n".join(
+        f"- [{r.get('bl_id')}/{r.get('role')}/{r.get('phase')}] "
+        f"{str(r.get('failure'))[:_LESSON_FIELD_CAP]} "
+        f"(resolved on retry {r.get('resolved_on_attempt')})"
+        for r in recs
+    )
+    return (
+        "\n\n## Lessons already paid for in this sprint\n\n"
+        "Earlier BLs in THIS sprint failed and recovered from the following. "
+        "Each cost a full retry cycle. Do not repeat them — check your work "
+        "against this list before committing:\n\n"
+        f"{bullets}\n"
+    )
+
+
 # ─── Batch 2-2 (A44 follow-up): API errors are infra, not incompetence ─────
 #
 # stream_agent_task emits `_meta phase=api_error` when the claude CLI's
@@ -490,6 +567,8 @@ async def _engineer_flow(
         yield {"_orchestrator_outcome": True, "role": "engineer", "bl_id": bl_id,
                "merged": False, "no_op": False, "section_missing": True}
         return
+    # Batch 6 (M1): earlier BLs' resolved failures ride along in the task.
+    section = section + _lessons_block(repo_dir, feature_slug)
     prompt = prompts_svc.build_engineer(family, bl_id, section, repo_dir, feature_slug=feature_slug)
 
     wt: Worktree | None = None
@@ -522,7 +601,10 @@ async def _engineer_flow(
             return
         # doctrine retries
         attempt = 0
+        first_doctrine_failure: str | None = None
         while not validation["ok"] and attempt < 2:
+            if first_doctrine_failure is None:
+                first_doctrine_failure = str(validation.get("summary"))
             attempt += 1
             yield _ptag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
                         "attempt": attempt, **validation}, "engineer", bl_id, trace=trace)
@@ -535,6 +617,11 @@ async def _engineer_flow(
         yield _ptag({"type": "_meta", "phase": "doctrine_check",
                     "kind": "complete" if validation["ok"] else "give_up",
                     "attempts": attempt, "summary": validation["summary"]}, "engineer", bl_id, trace=trace)
+        # Batch 6 (M1): a resolved doctrine retry is a paid-for lesson.
+        if validation["ok"] and attempt > 0 and first_doctrine_failure:
+            _append_lesson(repo_dir, feature_slug, bl_id=bl_id, role="engineer",
+                           phase="doctrine", failure=first_doctrine_failure,
+                           resolved_on_attempt=attempt)
 
         new_commits = await has_new_commits(wt)  # A54: counts from wt.base_sha
         if validation["ok"] and new_commits > 0:
@@ -544,6 +631,7 @@ async def _engineer_flow(
                         **{k: gate.get(k) for k in ("ok", "kind", "regressions", "new_failures", "gate_failure_class", "pre_cache_hit", "reason", "post_tail")}},
                        "engineer", bl_id)
             gate_attempt = 0
+            first_gate_failure: str | None = None
             # A25b: only retry on outcomes the agent can plausibly fix —
             # regressed (code regression) and, since Batch 2-1/A39a,
             # build_fail (compile/lint break with the compiler output in
@@ -551,6 +639,13 @@ async def _engineer_flow(
             # retries cannot help — break out and let awaiting_review
             # surface the operator-actionable reason.
             while not gate.get("ok") and gate.get("kind") in ("regressed", "build_fail") and gate_attempt < 2:
+                if first_gate_failure is None:
+                    _ids = (gate.get("regressions") or []) + (gate.get("new_failures") or [])
+                    first_gate_failure = (
+                        f"{gate.get('kind')}({gate.get('gate_failure_class')}): "
+                        f"{gate.get('reason')}"
+                        + (f"; e.g. {_ids[0]}" if _ids else "")
+                    )
                 gate_attempt += 1
                 fix = doctrine_svc.build_gate_fix_prompt("engineer", gate, bl_id=bl_id,
                                                          attempt=gate_attempt, max_attempts=2)
@@ -569,6 +664,11 @@ async def _engineer_flow(
                             "gate_attempt": gate_attempt,
                             **{k: gate.get(k) for k in ("ok", "kind", "regressions", "new_failures", "gate_failure_class", "pre_cache_hit", "reason", "post_tail")}},
                            "engineer", bl_id)
+            # Batch 6 (M1): a gate that recovered on retry is a paid-for lesson.
+            if gate.get("ok") and gate_attempt > 0 and first_gate_failure:
+                _append_lesson(repo_dir, feature_slug, bl_id=bl_id, role="engineer",
+                               phase="gate", failure=first_gate_failure,
+                               resolved_on_attempt=gate_attempt)
             if validation["ok"] and gate.get("ok"):
                 merge = await fast_forward_target(repo_dir, wt.branch, target_ref=cfg.agent_branch)
                 # If transient (lock race, etc.), one retry with a short sleep
@@ -657,6 +757,8 @@ async def _qa_or_scorer_flow(
                "doctrine_summary": "backlog section missing (A55)",
                "section_missing": True}
         return
+    # Batch 6 (M1): earlier BLs' resolved failures ride along in the task.
+    section = section + _lessons_block(repo_dir, feature_slug)
     if role == "qa":
         prompt = prompts_svc.build_qa(family, bl_id, section, repo_dir, feature_slug=feature_slug)
     else:
@@ -684,7 +786,10 @@ async def _qa_or_scorer_flow(
             validation = doctrine_svc.validate_scorer(wt.path, bl_id, base_ref=cfg.agent_branch,
                                                      retrieval_log=trace.retrieval_path, feature_slug=feature_slug)
         attempt = 0
+        first_doctrine_failure: str | None = None
         while not validation["ok"] and attempt < 2:
+            if first_doctrine_failure is None:
+                first_doctrine_failure = str(validation.get("summary"))
             attempt += 1
             yield _ptag({"type": "_meta", "phase": "doctrine_check", "kind": "incomplete",
                         "attempt": attempt, **validation}, role, bl_id, trace=trace)
@@ -701,6 +806,11 @@ async def _qa_or_scorer_flow(
         yield _ptag({"type": "_meta", "phase": "doctrine_check",
                     "kind": "complete" if validation["ok"] else "give_up",
                     "attempts": attempt, "summary": validation["summary"]}, role, bl_id, trace=trace)
+        # Batch 6 (M1): a resolved doctrine retry is a paid-for lesson.
+        if validation["ok"] and attempt > 0 and first_doctrine_failure:
+            _append_lesson(repo_dir, feature_slug, bl_id=bl_id, role=role,
+                           phase="doctrine", failure=first_doctrine_failure,
+                           resolved_on_attempt=attempt)
 
         new_commits = await has_new_commits(wt)  # A54: counts from wt.base_sha
         if role == "qa" and validation["ok"] and new_commits > 0:
@@ -1916,7 +2026,10 @@ async def _doctrine_meta_flow(
         f"- canonical invariants: `{invariants_doc}`\n"
         f"- existing ledger: `{ledger_doc}`\n"
         f"- proposals output dir: `{proposals_dir}`\n\n"
-        f"Trace dirs under the archive (each holds events.jsonl, retrieval.jsonl, meta.json):\n"
+        + (f"- sprint lesson log: `{archive_dir / 'LESSONS.jsonl'}` — resolved "
+           f"retry failures, pre-distilled; mine it FIRST for recurring patterns\n"
+           if (archive_dir / "LESSONS.jsonl").exists() else "")
+        + f"Trace dirs under the archive (each holds events.jsonl, retrieval.jsonl, meta.json):\n"
         + "\n".join(f"- {n}" for n in trace_subdirs)
         + "\n\n"
         f"Follow the Required Completion Steps in your SKILLS.md. "
@@ -2580,6 +2693,16 @@ async def run_brief(
         # Batch 3-1 (I-5): a sprint with deferrals is never labeled bare
         # success — worst-wins aggregate.
         sprint_label = "complete_with_deferrals" if deferred_bls else "complete"
+        # Batch 6-2 (M1): lessons telemetry + archive export so the
+        # doctrine-meta agent gets pre-distilled failure signal.
+        _lessons_file = _lessons_path(repo_dir, feature_slug)
+        _lessons_count = 0
+        if _lessons_file.exists():
+            try:
+                _lessons_count = sum(1 for _l in _lessons_file.read_text(
+                    encoding="utf-8").splitlines() if _l.strip())
+            except OSError:
+                pass
         yield _evt(
             "sprint_complete",
             summary=summary,
@@ -2588,6 +2711,8 @@ async def run_brief(
             total_cost_usd=round(sprint_cost_usd, 4),
             cost_by_role={k: round(v, 4) for k, v in cost_by_role.items()},
             max_sprint_usd=max_sprint_usd,
+            lessons_count=_lessons_count,
+            lessons_path=str(_lessons_file) if _lessons_count else None,
             coverage_subtype=subtype,
             ui_coverage_ratio=round(coverage["ratio"], 4),
             ui_coverage_threshold=min_ui_coverage_ratio,
@@ -2621,6 +2746,18 @@ async def run_brief(
         if run_doctrine_meta:
             try:
                 _archive_traces_since(repo_name, run_started_at, run_id)
+            except Exception:
+                pass
+            # Batch 6-2: copy LESSONS.jsonl into the archive so the
+            # doctrine-meta agent can mine pre-distilled failure signal
+            # instead of reconstructing it from raw traces.
+            try:
+                if _lessons_count:
+                    from app.services import traces as _traces_mod
+                    _dst = _traces_mod.BACKEND_DIR / "traces_archive" / run_id / "LESSONS.jsonl"
+                    _dst.parent.mkdir(parents=True, exist_ok=True)
+                    _dst.write_text(_lessons_file.read_text(encoding="utf-8"),
+                                    encoding="utf-8")
             except Exception:
                 pass
             try:

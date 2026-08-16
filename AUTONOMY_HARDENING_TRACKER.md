@@ -83,8 +83,8 @@
 | 5-2 | A29 PRE-baseline cache | done — SHA+cmd-keyed, TTL 24h, infra-poisoned baselines never cached, `pre_cache_hit` auditable in gate events; second gate runs POST only |
 | 5-3 | Cost aggregation | done — result-frame `total_cost_usd` → `bl.done cost_usd` + `sprint_complete total_cost_usd`/`cost_by_role` (all 7 passthrough sites) |
 | 5-4 | `max_sprint_usd` cap | done — checked between BLs; over-cap → `deferred_budget` + `budget_exhausted` event + worst-wins label |
-| 6-1 | `LESSONS.jsonl` + prompt injection block | pending |
-| 6-2 | Sprint-close lesson export | pending |
+| 6-1 | `LESSONS.jsonl` + prompt injection block | done — resolved doctrine/gate retries append (engineer + qa/scorer sites); last 10 injected into engineer/QA task sections; empty file = zero prompt noise |
+| 6-2 | Sprint-close lesson export | done — `sprint_complete` carries lessons_count/path; LESSONS.jsonl copied into `traces_archive/<run_id>/`; doctrine-meta prompt points at it when present |
 | 7-1 | Checkout preflight + checked PO commit (A51) | pending |
 | 7-2 | Indexer health check + mid-sprint Milvus restart (A53) | pending |
 | 7-3 | Agent env allowlist (A52) | pending |
