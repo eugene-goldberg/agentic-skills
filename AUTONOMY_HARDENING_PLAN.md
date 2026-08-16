@@ -484,8 +484,10 @@ intervention-removing feature is flag-OFF and live-untested. Each rung
 below produces re-openable artifacts; the 95% claim attaches only after
 C-4.
 
-**Operationalized claim (needs operator sign-off — the thesis §7 metric
-contradiction, ARCHITECT_PLAN §9.5 #1, still stands):**
+**Operationalized claim (OPERATOR-APPROVED 2026-08-16 — this also
+resolves the thesis §7 metric contradiction, ARCHITECT_PLAN §9.5 #1:
+the autonomy claim below is the authoritative definition-of-done for
+the crew's capability; operator-time remains a thermometer):**
 > On configured brownfield targets, a Sprint-1-scale (≥8 BL) feature
 > submitted detached completes or *honestly defers* with **zero
 > mid-sprint operator interventions**, ≥80% of BLs `merged_full`,
